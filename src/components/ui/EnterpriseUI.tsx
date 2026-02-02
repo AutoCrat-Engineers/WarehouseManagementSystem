@@ -10,7 +10,7 @@ interface CardProps {
 
 export function Card({ children, hover = false, className = '', style = {} }: CardProps) {
   const [isHovered, setIsHovered] = React.useState(false);
-  
+
   return (
     <div
       className={className}
@@ -180,7 +180,7 @@ export function Badge({ children, variant = 'neutral', style = {} }: BadgeProps)
 interface InputProps {
   type?: string;
   value: string | number;
-  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
   placeholder?: string;
   required?: boolean;
   disabled?: boolean;

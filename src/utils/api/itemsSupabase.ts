@@ -24,17 +24,24 @@ export interface ItemRow {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  revision: string | null;
+  master_serial_no: string | null;
+  part_number: string | null;
 }
 
 export interface ItemForm {
   itemCode: string;
-  itemName: string;
+  itemName?: string;
+  description?: string;
   uom: string;
   minStock: number;
   maxStock: number;
   safetyStock: number;
-  leadTimeDays: number;
+  leadTimeDays: number | string;
   status: 'active' | 'inactive';
+  revision?: string;
+  masterSerialNo?: string;
+  partNumber?: string;
 }
 
 function rowToForm(row: ItemRow): ItemForm & { id: string; createdAt: string } {
@@ -42,6 +49,7 @@ function rowToForm(row: ItemRow): ItemForm & { id: string; createdAt: string } {
     id: row.id,
     itemCode: row.item_code,
     itemName: row.item_name,
+    description: row.description || row.item_name,
     uom: row.uom ?? 'PCS',
     minStock: row.min_stock_level ?? 0,
     maxStock: row.max_stock_level ?? 0,
@@ -49,31 +57,42 @@ function rowToForm(row: ItemRow): ItemForm & { id: string; createdAt: string } {
     leadTimeDays: row.lead_time_days ?? 0,
     status: row.is_active ? 'active' : 'inactive',
     createdAt: row.created_at ?? '',
+    revision: row.revision || '',
+    masterSerialNo: row.master_serial_no || '',
+    partNumber: row.part_number || '',
   };
 }
 
 function formToInsert(form: ItemForm): Record<string, unknown> {
   return {
     item_code: form.itemCode,
-    item_name: form.itemName,
+    item_name: form.description || form.itemName,
+    description: form.description,
     uom: form.uom,
     min_stock_level: form.minStock,
     max_stock_level: form.maxStock,
     safety_stock: form.safetyStock,
-    lead_time_days: form.leadTimeDays,
+    lead_time_days: Number(form.leadTimeDays) || 0,
     is_active: form.status === 'active',
+    revision: form.revision || null,
+    master_serial_no: form.masterSerialNo || null,
+    part_number: form.partNumber || null,
   };
 }
 
 function formToUpdate(form: ItemForm): Record<string, unknown> {
   return {
-    item_name: form.itemName,
+    item_name: form.description || form.itemName,
+    description: form.description,
     uom: form.uom,
     min_stock_level: form.minStock,
     max_stock_level: form.maxStock,
     safety_stock: form.safetyStock,
-    lead_time_days: form.leadTimeDays,
+    lead_time_days: Number(form.leadTimeDays) || 0,
     is_active: form.status === 'active',
+    revision: form.revision || null,
+    master_serial_no: form.masterSerialNo || null,
+    part_number: form.partNumber || null,
     updated_at: new Date().toISOString(),
   };
 }
