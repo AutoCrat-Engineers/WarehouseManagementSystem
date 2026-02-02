@@ -272,7 +272,7 @@ export function ItemMasterSupabase() {
         </Card>
       </div>
 
-      <div
+      {/* <div
         style={{
           backgroundColor: 'var(--enterprise-info-bg)',
           border: '1px solid var(--enterprise-info)',
@@ -298,7 +298,7 @@ export function ItemMasterSupabase() {
             Min ≤ Safety ≤ Max stock levels • Data from public.items (direct Supabase)
           </p>
         </div>
-      </div>
+      </div> */}
 
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         {filteredItems.length === 0 ? (
@@ -391,7 +391,7 @@ export function ItemMasterSupabase() {
         maxWidth="700px"
       >
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
             <div>
               <Label required>Item Code</Label>
               <Input
@@ -402,6 +402,18 @@ export function ItemMasterSupabase() {
                 disabled={!!editingItem}
               />
             </div>
+            <div>
+              <Label required>Revision</Label>
+              <Input
+                value={formData.revision}
+                onChange={(e) =>
+                  setFormData({ ...formData, revision: e.target.value })
+                }
+                placeholder="A / AB / 1A"
+                required
+              />
+            </div>
+
             <div>
               <Label required>Unit of Measure</Label>
               <Select
@@ -417,6 +429,32 @@ export function ItemMasterSupabase() {
               </Select>
             </div>
           </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+            <div>
+              <Label required>Master Serial No</Label>
+              <Input
+                value={formData.masterSerialNo}
+                onChange={(e) =>
+                  setFormData({ ...formData, masterSerialNo: e.target.value })
+                }
+                placeholder="MSN-001"
+                required
+              />
+            </div>
+
+            <div>
+              <Label required>Part Number</Label>
+              <Input
+                value={formData.partNumber}
+                onChange={(e) =>
+                  setFormData({ ...formData, partNumber: e.target.value })
+                }
+                placeholder="FR-REF-123"
+                required
+              />
+            </div>
+          </div>
+
           <div>
             <Label required>Item Name</Label>
             <Input
@@ -426,7 +464,7 @@ export function ItemMasterSupabase() {
               required
             />
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+          {/* <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
             <div>
               <Label required>Min Stock</Label>
               <Input
@@ -457,9 +495,9 @@ export function ItemMasterSupabase() {
                 required
               />
             </div>
-          </div>
+          </div> */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-            <div>
+            {/* <div>
               <Label required>Lead Time (Days)</Label>
               <Input
                 type="number"
@@ -470,6 +508,21 @@ export function ItemMasterSupabase() {
                 min={0}
                 required
               />
+            </div> */}
+            <div>
+              <Label required>Lead Time (Days)</Label>
+              <Input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={formData.leadTimeDays}
+              onChange={(e) =>
+                setFormData({ ...formData, leadTimeDays: e.target.value })
+              }
+              placeholder="Enter days"
+              required
+            />
+
             </div>
             <div>
               <Label>Status</Label>
