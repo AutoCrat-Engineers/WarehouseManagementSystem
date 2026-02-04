@@ -27,6 +27,27 @@ export interface ItemRow {
   revision: string | null;
   master_serial_no: string | null;
   part_number: string | null;
+  packaging: PackagingData | null;
+}
+
+export interface PackagingLevel {
+  label: string;
+  quantity: number;
+}
+
+export interface PackagingConfig {
+  name: string;
+  type: 'SIMPLE' | 'NESTED';
+  isDefault: boolean;
+  levels: PackagingLevel[];
+  allowInnerDispatch: boolean;
+  allowLooseDispatch: boolean;
+  minDispatchQty: number;
+}
+
+export interface PackagingData {
+  enabled: boolean;
+  configs: PackagingConfig[];
 }
 
 export interface ItemForm {
@@ -42,9 +63,24 @@ export interface ItemForm {
   revision?: string;
   masterSerialNo?: string;
   partNumber?: string;
+  packaging?: PackagingData;
 }
 
 function rowToForm(row: ItemRow): ItemForm & { id: string; createdAt: string } {
+  // Parse packaging data - handle both string and object forms
+  let packagingData: PackagingData = { enabled: false, configs: [] };
+  if (row.packaging) {
+    if (typeof row.packaging === 'string') {
+      try {
+        packagingData = JSON.parse(row.packaging);
+      } catch (e) {
+        console.error('Failed to parse packaging JSON:', e);
+      }
+    } else {
+      packagingData = row.packaging as PackagingData;
+    }
+  }
+
   return {
     id: row.id,
     itemCode: row.item_code,
@@ -60,6 +96,7 @@ function rowToForm(row: ItemRow): ItemForm & { id: string; createdAt: string } {
     revision: row.revision || '',
     masterSerialNo: row.master_serial_no || '',
     partNumber: row.part_number || '',
+    packaging: packagingData,
   };
 }
 
@@ -77,6 +114,7 @@ function formToInsert(form: ItemForm): Record<string, unknown> {
     revision: form.revision || null,
     master_serial_no: form.masterSerialNo || null,
     part_number: form.partNumber || null,
+    packaging: form.packaging ? JSON.stringify(form.packaging) : null,
   };
 }
 
@@ -93,6 +131,7 @@ function formToUpdate(form: ItemForm): Record<string, unknown> {
     revision: form.revision || null,
     master_serial_no: form.masterSerialNo || null,
     part_number: form.partNumber || null,
+    packaging: form.packaging ? JSON.stringify(form.packaging) : null,
     updated_at: new Date().toISOString(),
   };
 }
