@@ -9,24 +9,22 @@ import {
     X,
     Loader2,
     Trash2,
-    Key,
     Power,
     UserCheck,
     UserX,
     MoreVertical,
-    Briefcase,
-    Clock,
+    Edit,
     User as UserIcon
 } from 'lucide-react';
 import {
     getAllUsers,
     createUser,
-    updateUserRole,
+    updateUser,
     updateUserStatus,
-    resetUserPassword,
     deleteUser,
     type UserListItem,
     type CreateUserRequest,
+    type UpdateUserRequest,
 } from '../services/userService';
 import { ROLE_CONFIG, type UserRole } from '../services/authService';
 import { RoleBadge } from '../components/RoleBadge';
@@ -46,6 +44,9 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
 
     // Modal states
     const [showCreateModal, setShowCreateModal] = useState(false);
+    const [showEditModal, setShowEditModal] = useState(false);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [selectedUser, setSelectedUser] = useState<UserListItem | null>(null);
     const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
     const dropdownRef = useRef<HTMLDivElement | null>(null);
 
@@ -60,6 +61,16 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
         shift: 'DAY',
     });
     const [createLoading, setCreateLoading] = useState(false);
+
+    // Edit user form state
+    const [editForm, setEditForm] = useState<UpdateUserRequest>({
+        full_name: '',
+        role: 'L1',
+        employee_id: '',
+        department: '',
+        shift: '',
+    });
+    const [editLoading, setEditLoading] = useState(false);
 
     useEffect(() => {
         fetchUsers();
@@ -116,6 +127,40 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
         setCreateLoading(false);
     };
 
+    const handleEditUser = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!selectedUser) return;
+
+        setEditLoading(true);
+        setError(null);
+
+        const result = await updateUser(selectedUser.id, editForm);
+
+        if (result.success) {
+            setSuccess('User updated successfully');
+            setShowEditModal(false);
+            setSelectedUser(null);
+            fetchUsers();
+        } else {
+            setError(result.error || 'Failed to update user');
+        }
+
+        setEditLoading(false);
+    };
+
+    const openEditModal = (user: UserListItem) => {
+        setSelectedUser(user);
+        setEditForm({
+            full_name: user.full_name,
+            role: user.role,
+            employee_id: user.employee_id || '',
+            department: user.department || '',
+            shift: user.shift || '',
+        });
+        setShowEditModal(true);
+        setActiveDropdown(null);
+    };
+
     const handleStatusChange = async (userId: string, isActive: boolean) => {
         const result = await updateUserStatus(userId, isActive);
         if (result.success) {
@@ -127,24 +172,21 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
         }
     };
 
-    const handleResetPassword = async (user: UserListItem) => {
-        const result = await resetUserPassword(user.id, ''); // Password ignored in email-based reset
-        if (result.success) {
-            setSuccess(result.error || 'Password reset email sent');
-            setActiveDropdown(null);
-        } else {
-            setError(result.error || 'Failed to send reset email');
-        }
+    const openDeleteConfirm = (user: UserListItem) => {
+        setSelectedUser(user);
+        setShowDeleteConfirm(true);
+        setActiveDropdown(null);
     };
 
-    const handleDeleteUser = async (user: UserListItem) => {
-        if (!window.confirm(`Are you sure you want to delete ${user.full_name}?`)) return;
+    const handleDeleteUser = async () => {
+        if (!selectedUser) return;
 
-        const result = await deleteUser(user.id);
+        const result = await deleteUser(selectedUser.id);
         if (result.success) {
             setSuccess('User deleted successfully');
+            setShowDeleteConfirm(false);
+            setSelectedUser(null);
             fetchUsers();
-            setActiveDropdown(null);
         } else {
             setError(result.error || 'Failed to delete user');
         }
@@ -361,7 +403,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                                                         style={{
                                                             position: 'absolute',
                                                             right: '60px',
-                                                            bottom: '0', // Positions menu above the row effectively
+                                                            top: '10px',
                                                             zIndex: 50,
                                                             width: '180px',
                                                             backgroundColor: 'white',
@@ -371,17 +413,23 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                                                             overflow: 'hidden',
                                                         }}
                                                     >
-                                                        <button onClick={() => {/* Edit logic */ }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}>
-                                                            <UserIcon size={16} /> Edit Details
+                                                        <button
+                                                            onClick={() => openEditModal(user)}
+                                                            style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
+                                                        >
+                                                            <Edit size={16} /> Edit User
                                                         </button>
-                                                        <button onClick={() => handleStatusChange(user.id, !user.is_active)} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: user.is_active ? '#f59e0b' : '#10b981' }}>
+                                                        <button
+                                                            onClick={() => handleStatusChange(user.id, !user.is_active)}
+                                                            style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: user.is_active ? '#f59e0b' : '#10b981' }}
+                                                        >
                                                             <Power size={16} /> {user.is_active ? 'Deactivate' : 'Activate'}
                                                         </button>
-                                                        <button onClick={() => handleResetPassword(user)} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#4b5563' }}>
-                                                            <Key size={16} /> Reset Password
-                                                        </button>
                                                         <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
-                                                        <button onClick={() => handleDeleteUser(user)} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}>
+                                                        <button
+                                                            onClick={() => openDeleteConfirm(user)}
+                                                            style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
+                                                        >
                                                             <Trash2 size={16} /> Delete User
                                                         </button>
                                                     </div>
@@ -462,6 +510,106 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Edit User Modal */}
+            {showEditModal && selectedUser && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+                    <div style={{ backgroundColor: 'white', padding: '32px', borderRadius: '20px', width: '100%', maxWidth: '600px', maxHeight: '90vh', overflowY: 'auto' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                            <h2 style={{ fontSize: '24px', fontWeight: '800', margin: 0 }}>Edit User</h2>
+                            <button onClick={() => { setShowEditModal(false); setSelectedUser(null); }} style={{ border: 'none', backgroundColor: 'transparent', cursor: 'pointer', color: '#6b7280' }}><X size={24} /></button>
+                        </div>
+
+                        {/* User Info Banner */}
+                        <div style={{ backgroundColor: '#f0f9ff', padding: '16px', borderRadius: '12px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '16px' }}>
+                            <div style={{ width: '48px', height: '48px', borderRadius: '50%', backgroundColor: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '20px', fontWeight: '700' }}>
+                                {selectedUser.full_name.charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                                <div style={{ fontSize: '16px', fontWeight: '600', color: '#111827' }}>{selectedUser.email}</div>
+                                <div style={{ fontSize: '13px', color: '#6b7280' }}>User ID: {selectedUser.id.slice(0, 8)}...</div>
+                            </div>
+                        </div>
+
+                        <form onSubmit={handleEditUser}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+                                <div>
+                                    <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Full Name</label>
+                                    <input type="text" required value={editForm.full_name} onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })} style={{ width: '100%', padding: '12px', border: '1px solid #e5e7eb', borderRadius: '10px', boxSizing: 'border-box' }} />
+                                </div>
+                                <div>
+                                    <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Employee ID</label>
+                                    <input type="text" placeholder="EMP000" value={editForm.employee_id} onChange={(e) => setEditForm({ ...editForm, employee_id: e.target.value })} style={{ width: '100%', padding: '12px', border: '1px solid #e5e7eb', borderRadius: '10px', boxSizing: 'border-box' }} />
+                                </div>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+                                <div>
+                                    <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Department</label>
+                                    <select value={editForm.department} onChange={(e) => setEditForm({ ...editForm, department: e.target.value })} style={{ width: '100%', padding: '12px', border: '1px solid #e5e7eb', borderRadius: '10px', boxSizing: 'border-box' }}>
+                                        <option value="">Select Department</option>
+                                        <option value="Cutting">Cutting</option>
+                                        <option value="Production">Production</option>
+                                        <option value="Quality">Quality</option>
+                                        <option value="Dispatch">Dispatch</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Shift</label>
+                                    <select value={editForm.shift} onChange={(e) => setEditForm({ ...editForm, shift: e.target.value })} style={{ width: '100%', padding: '12px', border: '1px solid #e5e7eb', borderRadius: '10px', boxSizing: 'border-box' }}>
+                                        <option value="DAY">Day Shift</option>
+                                        <option value="NIGHT">Night Shift</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div style={{ marginBottom: '24px' }}>
+                                <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>System Role</label>
+                                <select value={editForm.role} onChange={(e) => setEditForm({ ...editForm, role: e.target.value as UserRole })} style={{ width: '100%', padding: '12px', border: '1px solid #e5e7eb', borderRadius: '10px', boxSizing: 'border-box' }}>
+                                    <option value="L1">Operator (L1)</option>
+                                    <option value="L2">Supervisor (L2)</option>
+                                    <option value="L3">Manager (L3)</option>
+                                </select>
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button type="button" onClick={() => { setShowEditModal(false); setSelectedUser(null); }} style={{ flex: 1, padding: '14px', border: 'none', borderRadius: '12px', backgroundColor: '#f3f4f6', color: '#4b5563', fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
+                                <button type="submit" disabled={editLoading} style={{ flex: 2, padding: '14px', border: 'none', borderRadius: '12px', backgroundColor: '#2563eb', color: 'white', fontWeight: '600', cursor: editLoading ? 'not-allowed' : 'pointer', opacity: editLoading ? 0.7 : 1 }}>
+                                    {editLoading ? 'Saving...' : 'Save Changes'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Delete Confirmation Modal */}
+            {showDeleteConfirm && selectedUser && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+                    <div style={{ backgroundColor: 'white', padding: '32px', borderRadius: '20px', width: '100%', maxWidth: '450px' }}>
+                        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+                            <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: '#fef2f2', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+                                <Trash2 size={32} style={{ color: '#ef4444' }} />
+                            </div>
+                            <h3 style={{ fontSize: '20px', fontWeight: '700', color: '#111827', margin: '0 0 8px' }}>Delete User</h3>
+                            <p style={{ color: '#6b7280', fontSize: '14px', margin: 0 }}>
+                                Are you sure you want to delete <strong>{selectedUser.full_name}</strong>? This action cannot be undone.
+                            </p>
+                        </div>
+                        <div style={{ display: 'flex', gap: '12px' }}>
+                            <button
+                                onClick={() => { setShowDeleteConfirm(false); setSelectedUser(null); }}
+                                style={{ flex: 1, padding: '14px', border: 'none', borderRadius: '12px', backgroundColor: '#f3f4f6', color: '#4b5563', fontWeight: '600', cursor: 'pointer' }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleDeleteUser}
+                                style={{ flex: 1, padding: '14px', border: 'none', borderRadius: '12px', backgroundColor: '#ef4444', color: 'white', fontWeight: '600', cursor: 'pointer' }}
+                            >
+                                Delete User
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

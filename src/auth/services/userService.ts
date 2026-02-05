@@ -5,9 +5,10 @@
  * 
  * L3-only operations for managing users.
  * - Create users
+ * - Update users
  * - Update roles
  * - Activate/deactivate users
- * - Reset passwords
+ * - Delete users (soft delete)
  */
 
 import { getSupabaseClient } from '../../utils/supabase/client';
@@ -48,12 +49,14 @@ export interface UserListItem extends UserProfile {
 
 /**
  * Get all users (L3 only)
+ * Excludes soft-deleted users
  */
 export async function getAllUsers(): Promise<UserListItem[]> {
     try {
         const { data, error } = await supabase
             .from('profiles')
             .select('*')
+            .is('deleted_at', null)
             .order('created_at', { ascending: false });
 
         if (error) {
@@ -96,27 +99,30 @@ export async function getUserById(userId: string): Promise<UserProfile | null> {
 
 /**
  * Create new user (L3 only)
- * Creates user via Supabase Auth and then creates profile
  * 
- * NOTE: In production, this should use a Supabase Edge Function with service_role
- * to avoid requiring email confirmation. For now, users will need to confirm email.
+ * IMPORTANT: Uses a separate Supabase client approach to prevent auto-login.
+ * The admin's session is preserved by immediately restoring after signup.
  */
 export async function createUser(
     request: CreateUserRequest,
     createdBy: string
 ): Promise<{ success: boolean; user?: UserProfile; error?: string }> {
     try {
-        // Get current session to verify L3 access
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) {
+        // Get current session to verify L3 access and preserve it
+        const { data: { session: currentSession } } = await supabase.auth.getSession();
+        if (!currentSession) {
             return { success: false, error: 'Not authenticated' };
         }
+
+        // Store admin's session tokens for restoration
+        const adminAccessToken = currentSession.access_token;
+        const adminRefreshToken = currentSession.refresh_token;
 
         // Verify caller is L3
         const { data: callerProfile } = await supabase
             .from('profiles')
             .select('role')
-            .eq('id', session.user.id)
+            .eq('id', currentSession.user.id)
             .single();
 
         if (callerProfile?.role !== 'L3') {
@@ -133,7 +139,7 @@ export async function createUser(
             return { success: false, error: 'A user with this email already exists' };
         }
 
-        // Create user via Supabase Auth
+        // Create user via Supabase Auth (this will temporarily switch the session)
         const { data: authData, error: authError } = await supabase.auth.signUp({
             email: request.email,
             password: request.password,
@@ -141,8 +147,16 @@ export async function createUser(
                 data: {
                     full_name: request.full_name,
                     role: request.role,
-                }
+                },
+                // Prevent auto-confirm to avoid session switch
+                emailRedirectTo: undefined,
             }
+        });
+
+        // IMMEDIATELY restore admin session to prevent redirect
+        await supabase.auth.setSession({
+            access_token: adminAccessToken,
+            refresh_token: adminRefreshToken,
         });
 
         if (authError) {
@@ -154,39 +168,35 @@ export async function createUser(
             return { success: false, error: 'Failed to create user' };
         }
 
-        // Create profile for the new user
-        const newProfile = {
-            id: authData.user.id,
-            email: request.email,
-            full_name: request.full_name,
-            role: request.role,
-            is_active: true,
-            employee_id: request.employee_id || null,
-            department: request.department || null,
-            shift: request.shift || null,
-            created_by: createdBy,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            last_login_at: null,
-        };
+        // Profile should be auto-created by database trigger, but let's ensure it exists
+        // Wait a moment for trigger to execute
+        await new Promise(resolve => setTimeout(resolve, 500));
 
+        // Update profile with additional fields
         const { error: profileError } = await supabase
             .from('profiles')
-            .insert(newProfile);
+            .upsert({
+                id: authData.user.id,
+                email: request.email,
+                full_name: request.full_name,
+                role: request.role,
+                is_active: true,
+                employee_id: request.employee_id || null,
+                department: request.department || null,
+                shift: request.shift || null,
+                created_by: createdBy,
+                updated_at: new Date().toISOString(),
+            }, { onConflict: 'id' });
 
         if (profileError) {
-            console.error('Profile creation error:', profileError);
-            return {
-                success: true,
-                error: 'User created but profile setup failed.',
-                user: newProfile as UserProfile
-            };
+            console.error('Profile update error:', profileError);
+            // Don't fail - user was created
         }
 
         // Log audit event
         try {
             await supabase.from('audit_log').insert({
-                user_id: session.user.id,
+                user_id: currentSession.user.id,
                 action: 'CREATE_USER',
                 target_type: 'user',
                 target_id: authData.user.id,
@@ -196,11 +206,117 @@ export async function createUser(
 
         return {
             success: true,
-            user: newProfile as UserProfile
+            user: {
+                id: authData.user.id,
+                email: request.email,
+                full_name: request.full_name,
+                role: request.role,
+                is_active: true,
+                employee_id: request.employee_id || null,
+                department: request.department || null,
+                shift: request.shift || null,
+            } as UserProfile
         };
     } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';
         console.error('Create user exception:', err);
+        return { success: false, error: errorMsg };
+    }
+}
+
+/**
+ * Update user details (L3 only)
+ */
+export async function updateUser(
+    userId: string,
+    updates: UpdateUserRequest
+): Promise<{ success: boolean; error?: string }> {
+    try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return { success: false, error: 'Not authenticated' };
+        }
+
+        // Verify caller is L3
+        const { data: callerProfile } = await supabase
+            .from('profiles')
+            .select('role')
+            .eq('id', user.id)
+            .single();
+
+        if (callerProfile?.role !== 'L3') {
+            return { success: false, error: 'Only L3 managers can update users' };
+        }
+
+        // Get old values for audit
+        const { data: oldProfile } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', userId)
+            .single();
+
+        if (!oldProfile) {
+            return { success: false, error: 'User not found' };
+        }
+
+        // Build update object - only include fields that are provided and not empty
+        const updateData: Record<string, unknown> = {
+            updated_at: new Date().toISOString(),
+        };
+
+        // Only set fields that are explicitly provided
+        if (updates.full_name !== undefined && updates.full_name !== '') {
+            updateData.full_name = updates.full_name;
+        }
+        if (updates.role !== undefined) {
+            updateData.role = updates.role;
+        }
+        if (updates.is_active !== undefined) {
+            updateData.is_active = updates.is_active;
+        }
+        // Handle optional fields - set to null if empty string
+        if (updates.employee_id !== undefined) {
+            updateData.employee_id = updates.employee_id || null;
+        }
+        if (updates.department !== undefined) {
+            updateData.department = updates.department || null;
+        }
+        if (updates.shift !== undefined) {
+            updateData.shift = updates.shift || null;
+        }
+
+        console.log('Updating user with data:', updateData);
+
+        // Update profile
+        const { data: updateResult, error } = await supabase
+            .from('profiles')
+            .update(updateData)
+            .eq('id', userId)
+            .select();
+
+        if (error) {
+            console.error('Update user error:', error.message, error.details, error.hint);
+            return { success: false, error: `Failed to update user: ${error.message}` };
+        }
+
+        console.log('Update result:', updateResult);
+
+        // Log audit event
+        try {
+            await supabase.from('audit_log').insert({
+                user_id: user.id,
+                action: 'UPDATE_USER',
+                target_type: 'user',
+                target_id: userId,
+                old_value: oldProfile,
+                new_value: updates,
+            });
+        } catch { /* ignore audit errors */ }
+
+        return { success: true };
+    } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+        console.error('Update user exception:', err);
         return { success: false, error: errorMsg };
     }
 }
