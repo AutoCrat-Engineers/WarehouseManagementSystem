@@ -48,9 +48,10 @@ export {
     getAllUsers,
     getUserById,
     createUser,
+    updateUser,
     updateUserRole,
     updateUserStatus,
-    resetUserPassword,
+    deleteUser,
     getAuditLog,
 } from './services/userService';
 

@@ -117,8 +117,8 @@ export async function signIn(
       return { success: false, error: 'User profile not found' };
     }
 
-    // Check if user is active
-    if (!profile.is_active) {
+    // Check if user is active and not deleted
+    if (!profile.is_active || profile.deleted_at) {
       await supabase.auth.signOut();
       return { success: false, error: 'Your account has been deactivated. Contact your administrator.' };
     }
@@ -194,7 +194,7 @@ export async function getCurrentSession(): Promise<AuthSession | null> {
       .eq('id', session.user.id)
       .single();
 
-    if (profileError || !profile || !profile.is_active) {
+    if (profileError || !profile || !profile.is_active || profile.deleted_at) {
       return null;
     }
 
@@ -352,13 +352,15 @@ export function onAuthStateChange(
           .eq('id', session.user.id)
           .single();
 
-        if (profile && profile.is_active) {
+        if (profile && profile.is_active && !profile.deleted_at) {
           callback({
             user: profile as UserProfile,
             accessToken: session.access_token,
             expiresAt: session.expires_at || 0,
           });
         } else {
+          // User is deleted or deactivated - sign them out
+          await supabase.auth.signOut();
           callback(null);
         }
       } else {
