@@ -23,7 +23,7 @@ import {
   BarChart3,
   LogOut,
   Menu,
-  X,
+  ChevronLeft,
   ArrowRightLeft,
   ChevronRight,
   AlertCircle,
@@ -426,7 +426,7 @@ export default function App() {
                 letterSpacing: '0.3px',
                 textAlign: 'center',
               }}>
-                Inventory Planning & Forecasting
+                Warehouse Management System
               </p>
             </div>
           </div>
@@ -603,7 +603,7 @@ export default function App() {
                   e.currentTarget.style.backgroundColor = 'transparent';
                 }}
               >
-                {isSidebarOpen ? <X size={20} /> : <Menu size={20} />}
+                {isSidebarOpen ? <ChevronLeft size={20} /> : <Menu size={20} />}
               </button>
 
               {currentMenuItem && (

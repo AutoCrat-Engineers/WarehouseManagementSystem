@@ -8,7 +8,8 @@
  */
 
 import React, { useState } from 'react';
-import { Mail, Lock, Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, AlertCircle, Loader2, LogIn } from 'lucide-react';
+import { RotatingQuote } from '../../components/ui/RotatingQuote';
 
 interface LoginPageProps {
     onLogin: (email: string, password: string) => Promise<boolean>;
@@ -158,19 +159,19 @@ export function LoginPage({ onLogin, isLoading = false, error: propError }: Logi
                 zIndex: 1,
                 boxShadow: '-20px 0 60px rgba(0, 0, 0, 0.3)',
             }}>
-                {/* Logo Header */}
+                {/* Logo Header - Reduced padding */}
                 <div style={{
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'center',
-                    padding: '48px 60px 32px',
+                    padding: '40px 60px 24px',
                     borderBottom: '1px solid #f1f5f9',
                 }}>
                     <img
                         src="/logo.png"
                         alt="Autocrat Engineers"
                         style={{
-                            width: '260px',
+                            width: '240px',
                             height: 'auto',
                             objectFit: 'contain',
                             userSelect: 'none',
@@ -180,56 +181,81 @@ export function LoginPage({ onLogin, isLoading = false, error: propError }: Logi
                     />
                 </div>
 
-                {/* Form Container */}
+                {/* Form Container - Tightened spacing */}
                 <div style={{
                     flex: 1,
                     display: 'flex',
                     flexDirection: 'column',
-                    justifyContent: 'center',
-                    padding: '40px 60px 60px',
+                    justifyContent: 'flex-start',
+                    padding: '32px 60px 48px',
                 }}>
-                    {/* Welcome Text */}
-                    <div style={{ marginBottom: '36px' }}>
+                    {/* System Title Block - No duplicate company name */}
+                    <div style={{
+                        marginBottom: '24px',
+                        textAlign: 'center',
+                    }}>
+                        {/* Primary Title */}
                         <h2 style={{
-                            fontSize: '32px',
-                            fontWeight: '700',
-                            color: '#0f172a',
+                            fontSize: '20px',
+                            fontWeight: '600',
+                            color: '#1e293b',
                             marginBottom: '8px',
-                            letterSpacing: '-1px',
+                            letterSpacing: '-0.3px',
                             fontFamily: '"Poppins", sans-serif',
                         }}>
-                            Sign In
+                            Warehouse Management System
                         </h2>
+                        {/* Secondary Supporting Line */}
                         <p style={{
-                            fontSize: '15px',
-                            color: '#64748b',
-                            fontWeight: '400',
+                            fontSize: '13px',
+                            color: '#dc2626',
+                            fontWeight: '500',
+                            lineHeight: 1.5,
                         }}>
-                            Enter your credentials to access the system
+                            Your Leading Partner in Precision Manufacturing Excellence
                         </p>
                     </div>
+
+                    {/* Rotating Quote Display - fills vertical space with polish */}
+                    <RotatingQuote
+                        dataSource="/data/quotes.json"
+                        intervalMs={30000}
+                        height="56px"
+                    />
+                    <br></br>
+                    <br></br>
+                    {/* Instructional Text - Left aligned with form */}
+                    <p style={{
+                        fontSize: '13px',
+                        color: '#94a3b8',
+                        fontWeight: '400',
+                        marginBottom: '20px',
+                        textAlign: 'left',
+                    }}>
+                        Enter your login credentials to access the System
+                    </p>
 
                     {/* Error Message */}
                     {displayError && (
                         <div style={{
-                            padding: '14px 16px',
-                            marginBottom: '24px',
-                            background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)',
+                            padding: '12px 14px',
+                            marginBottom: '20px',
+                            background: '#fef2f2',
                             border: '1px solid #fecaca',
-                            borderRadius: '10px',
+                            borderRadius: '8px',
                             color: '#dc2626',
                             display: 'flex',
-                            gap: '12px',
+                            gap: '10px',
                             alignItems: 'flex-start',
-                            fontSize: '14px',
+                            fontSize: '13px',
                         }}>
-                            <AlertCircle size={18} style={{ flexShrink: 0, marginTop: '1px' }} />
+                            <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
                             <div style={{ fontWeight: '500' }}>{displayError}</div>
                         </div>
                     )}
 
                     {/* Login Form */}
-                    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                         {/* Email Field */}
                         <div>
                             <label style={{
@@ -349,13 +375,12 @@ export function LoginPage({ onLogin, isLoading = false, error: propError }: Logi
                             </div>
                         </div>
 
-                        {/* Submit Button */}
                         <button
                             type="submit"
                             disabled={isLoading}
                             style={{
                                 padding: '16px 24px',
-                                background: isLoading ? '#94a3b8' : 'linear-gradient(135deg, #1e40af 0%, #3b82f6 100%)',
+                                background: isLoading ? '#94a3b8' : 'linear-gradient(135deg, #b91c1c 0%, #dc2626 100%)',
                                 color: 'white',
                                 border: 'none',
                                 borderRadius: '10px',
@@ -365,7 +390,7 @@ export function LoginPage({ onLogin, isLoading = false, error: propError }: Logi
                                 transition: 'all 0.3s ease',
                                 marginTop: '8px',
                                 fontFamily: 'inherit',
-                                boxShadow: isLoading ? 'none' : '0 8px 24px rgba(30, 64, 175, 0.35)',
+                                boxShadow: isLoading ? 'none' : '0 8px 24px rgba(185, 28, 28, 0.35)',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
@@ -378,8 +403,12 @@ export function LoginPage({ onLogin, isLoading = false, error: propError }: Logi
                                     Signing in...
                                 </>
                             ) : (
-                                'Sign In'
+                                <>
+                                    <LogIn size={20} />
+                                    Login to System
+                                </>
                             )}
+
                         </button>
                     </form>
 
