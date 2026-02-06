@@ -5,7 +5,6 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { LoginPage } from './components/LoginPage';
 import { DashboardNew } from './components/DashboardNew';
 import { ItemMasterSupabase } from './components/ItemMasterSupabase';
-import { InventoryManagement } from './components/InventoryManagement';
 import { InventoryGrid } from './components/InventoryGrid';
 import { BlanketOrders } from './components/BlanketOrders';
 import { BlanketReleases } from './components/BlanketReleases';
@@ -16,7 +15,6 @@ import { UserManagement } from './auth/users/UserManagement';
 import {
   LayoutDashboard,
   Package,
-  Warehouse,
   FileText,
   TrendingUp,
   Calendar,
@@ -38,7 +36,7 @@ const logoImage = '/logo.png';
 // User role type for RBAC
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
-type View = 'dashboard' | 'items' | 'inventory' | 'inventory-new' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'users';
+type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'users';
 
 interface MenuItem {
   id: View;
@@ -50,8 +48,7 @@ interface MenuItem {
 const menuItems: MenuItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, description: 'Overview & KPIs' },
   { id: 'items', label: 'Item Master', icon: Package, description: 'FG Catalog' },
-  { id: 'inventory', label: 'Inventory', icon: Warehouse, description: 'Stock Levels' },
-  { id: 'inventory-new', label: 'Multi-WH Inventory', icon: Boxes, description: 'Enterprise Stock View' },
+  { id: 'inventory', label: 'Inventory', icon: Boxes, description: 'Multi-Warehouse Stock' },
   { id: 'stock-movements', label: 'Stock Movements', icon: ArrowRightLeft, description: 'Audit Trail' },
   { id: 'orders', label: 'Blanket Orders', icon: FileText, description: 'Customer Orders' },
   { id: 'releases', label: 'Blanket Releases', icon: Calendar, description: 'Delivery Schedule' },
@@ -310,8 +307,6 @@ export default function App() {
       case 'items':
         return <ItemMasterSupabase />;
       case 'inventory':
-        return <InventoryManagement accessToken={accessToken} />;
-      case 'inventory-new':
         return <InventoryGrid />;
       case 'stock-movements':
         return <StockMovement accessToken={accessToken} />;

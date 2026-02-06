@@ -84,7 +84,12 @@ export interface Warehouse {
 export interface ItemStockDashboard {
     itemCode: string;
     itemName: string;
+    partNumber?: string;
+    masterSerialNo?: string;
+    revision?: string;
     uom: string;
+    unitPrice?: number;
+    standardCost?: number;
 
     // Warehouse Card
     warehouseAvailable: number;
@@ -124,7 +129,12 @@ export interface ItemStockDashboard {
 export interface ItemStockDistribution {
     itemCode: string;
     itemName: string;
+    partNumber?: string;
+    masterSerialNo?: string;
+    revision?: string;
     uom: string;
+    unitPrice?: number;
+    standardCost?: number;
 
     // Production Warehouse
     productionOnHand: number;
@@ -177,7 +187,12 @@ export interface ItemStockDistribution {
 export interface ItemWarehouseDetail {
     itemCode: string;
     itemName: string;
+    partNumber?: string;
+    masterSerialNo?: string;
+    revision?: string;
     uom: string;
+    unitPrice?: number;
+    standardCost?: number;
     warehouseCode: string;
     warehouseName: string;
     warehouseTypeCode: string;
@@ -208,7 +223,12 @@ export interface ItemWarehouseDetail {
 export interface ItemStockSummary {
     itemCode: string;
     itemName: string;
+    partNumber?: string;
+    masterSerialNo?: string;
+    revision?: string;
     uom: string;
+    unitPrice?: number;
+    standardCost?: number;
     productionStock: number;
     inTransitStock: number;
     warehouseStock: number;
