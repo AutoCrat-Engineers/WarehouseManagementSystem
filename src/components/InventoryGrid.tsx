@@ -262,7 +262,9 @@ export function InventoryGrid() {
             const searchLower = searchTerm.toLowerCase();
             result = result.filter(item =>
                 item.itemCode.toLowerCase().includes(searchLower) ||
-                item.itemName?.toLowerCase().includes(searchLower)
+                item.itemName?.toLowerCase().includes(searchLower) ||
+                item.partNumber?.toLowerCase().includes(searchLower) ||
+                item.masterSerialNo?.toLowerCase().includes(searchLower)
             );
         }
 
@@ -421,6 +423,12 @@ export function InventoryGrid() {
                                             Item Code <SortIndicator field="itemCode" />
                                         </span>
                                     </th>
+                                    <th style={{ ...thStyle, minWidth: '120px', cursor: 'default' }}>
+                                        Part Number
+                                    </th>
+                                    <th style={{ ...thStyle, minWidth: '120px', cursor: 'default' }}>
+                                        Master S/N
+                                    </th>
                                     <th style={{ ...thStyle, minWidth: '200px', cursor: 'default' }}>
                                         Description
                                     </th>
@@ -489,6 +497,12 @@ export function InventoryGrid() {
                                             color: 'var(--enterprise-primary)'
                                         }}>
                                             {item.itemCode}
+                                        </td>
+                                        <td style={{ ...tdStyle, color: 'var(--enterprise-gray-600)' }}>
+                                            {item.partNumber || '-'}
+                                        </td>
+                                        <td style={{ ...tdStyle, color: 'var(--enterprise-gray-600)' }}>
+                                            {item.masterSerialNo || '-'}
                                         </td>
                                         <td style={tdStyle}>
                                             {item.itemName || '-'}
