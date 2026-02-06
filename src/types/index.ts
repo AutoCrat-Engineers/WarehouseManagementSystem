@@ -2,6 +2,9 @@
 // DOMAIN TYPES
 // ============================================================================
 
+// Re-export inventory types for convenience
+export * from './inventory';
+
 export interface Item {
   id: string;
   itemCode: string;
