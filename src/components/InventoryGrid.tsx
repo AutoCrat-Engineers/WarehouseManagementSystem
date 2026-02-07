@@ -409,9 +409,9 @@ function StockDetailModal({ isOpen, onClose, item }: StockDetailModalProps) {
                         <span><strong>Code:</strong> {item.itemCode}</span>
                         <span><strong>Part No:</strong> {item.partNumber || '-'}</span>
                         <span><strong>UOM:</strong> {item.uom}</span>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <strong>Status:</strong>
-                            <Badge variant={getStatusVariant(item.stockStatus)}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', verticalAlign: 'middle' }}>
+                            <strong style={{ lineHeight: '1' }}>Status:</strong>
+                            <Badge variant={getStatusVariant(item.stockStatus)} style={{ verticalAlign: 'middle' }}>
                                 {item.stockStatus}
                             </Badge>
                         </span>
@@ -453,16 +453,10 @@ function StockDetailModal({ isOpen, onClose, item }: StockDetailModalProps) {
                                     <Package size={16} style={{ color: 'var(--enterprise-primary)' }} />
                                     Production Warehouse
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '13px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
                                     <span style={{ color: 'var(--enterprise-gray-500)' }}>Available</span>
                                     <span style={{ fontWeight: 600, color: 'var(--enterprise-success)' }}>
                                         {(distribution as any)?.productionAvailable ?? item.productionFinishedStock ?? 0}
-                                    </span>
-                                </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
-                                    <span style={{ color: 'var(--enterprise-gray-500)' }}>Reserved (Next Month)</span>
-                                    <span style={{ fontWeight: 600, color: 'var(--enterprise-warning)' }}>
-                                        {(distribution as any)?.blanketNextMonthReserved ?? item.reservedNextMonth ?? 0}
                                     </span>
                                 </div>
                             </div>
@@ -547,10 +541,16 @@ function StockDetailModal({ isOpen, onClose, item }: StockDetailModalProps) {
                                     <Package size={16} style={{ color: '#6366f1' }} />
                                     US Warehouse
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '13px' }}>
                                     <span style={{ color: 'var(--enterprise-gray-500)' }}>On Hand</span>
                                     <span style={{ fontWeight: 600, color: '#6366f1' }}>
                                         {(distribution as any)?.usTransitOnHand ?? item.usTransitStock ?? 0}
+                                    </span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+                                    <span style={{ color: 'var(--enterprise-gray-500)' }}>Reserved (Next Month)</span>
+                                    <span style={{ fontWeight: 600, color: 'var(--enterprise-warning)' }}>
+                                        {(distribution as any)?.blanketNextMonthReserved ?? item.reservedNextMonth ?? 0}
                                     </span>
                                 </div>
                             </div>
@@ -991,7 +991,7 @@ export function InventoryGrid() {
                                             fontWeight: 600,
                                             color: getStatusColor(item.stockStatus),
                                         }}>
-                                            {item.netAvailableForCustomer}
+                                            {(item.snvStock ?? 0) + (item.usTransitStock ?? 0)}
                                         </td>
                                         <td style={{ ...tdStyle, textAlign: 'center' }}>
                                             <Badge variant={getStatusVariant(item.stockStatus)}>
