@@ -208,7 +208,7 @@ export function LoginPage({ onLogin, isLoading = false, error: propError }: Logi
                         {/* Secondary Supporting Line */}
                         <p style={{
                             fontSize: '13px',
-                            color: '#dc2626',
+                            color: '#475569',
                             fontWeight: '500',
                             lineHeight: 1.5,
                         }}>
@@ -220,7 +220,7 @@ export function LoginPage({ onLogin, isLoading = false, error: propError }: Logi
                     <RotatingQuote
                         dataSource="/data/quotes.json"
                         intervalMs={30000}
-                        height="56px"
+                        height="72px"
                     />
                     <br></br>
                     <br></br>
