@@ -1,36 +1,42 @@
 import React, { useState, useEffect } from 'react';
 import { getSupabaseClient } from './utils/supabase/client';
-import { getAuthToken, signInWithEmail, signUpWithEmail, signOut } from './utils/supabase/auth';
+import { signInWithEmail, signOut } from './utils/supabase/auth';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LoginPage } from './components/LoginPage';
 import { DashboardNew } from './components/DashboardNew';
 import { ItemMasterSupabase } from './components/ItemMasterSupabase';
-import { InventoryManagement } from './components/InventoryManagement';
+import { InventoryGrid } from './components/InventoryGrid';
 import { BlanketOrders } from './components/BlanketOrders';
 import { BlanketReleases } from './components/BlanketReleases';
 import { ForecastingModule } from './components/ForecastingModule';
 import { PlanningModule } from './components/PlanningModule';
 import { StockMovement } from './components/StockMovement';
-import { 
-  LayoutDashboard, 
-  Package, 
-  Warehouse, 
-  FileText, 
-  TrendingUp, 
+import { UserManagement } from './auth/users/UserManagement';
+import {
+  LayoutDashboard,
+  Package,
+  FileText,
+  TrendingUp,
   Calendar,
   BarChart3,
   LogOut,
   Menu,
-  X,
+  ChevronLeft,
   ArrowRightLeft,
   ChevronRight,
-  AlertCircle
+  AlertCircle,
+  Users,
+  Shield,
+  Boxes
 } from 'lucide-react';
 
 const supabase = getSupabaseClient();
 const logoImage = '/logo.png';
 
-type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements';
+// User role type for RBAC
+type UserRole = 'L1' | 'L2' | 'L3' | null;
+
+type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'users';
 
 interface MenuItem {
   id: View;
@@ -42,7 +48,7 @@ interface MenuItem {
 const menuItems: MenuItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, description: 'Overview & KPIs' },
   { id: 'items', label: 'Item Master', icon: Package, description: 'FG Catalog' },
-  { id: 'inventory', label: 'Inventory', icon: Warehouse, description: 'Stock Levels' },
+  { id: 'inventory', label: 'Inventory', icon: Boxes, description: 'Multi-Warehouse Stock' },
   { id: 'stock-movements', label: 'Stock Movements', icon: ArrowRightLeft, description: 'Audit Trail' },
   { id: 'orders', label: 'Blanket Orders', icon: FileText, description: 'Customer Orders' },
   { id: 'releases', label: 'Blanket Releases', icon: Calendar, description: 'Delivery Schedule' },
@@ -54,6 +60,7 @@ export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [user, setUser] = useState<any>(null);
+  const [userRole, setUserRole] = useState<UserRole>(null);
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
@@ -65,20 +72,23 @@ export default function App() {
 
   useEffect(() => {
     initializeAuth();
-    
+
     // Listen for auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         console.log('Auth state changed:', event);
-        
-        if (session?.access_token) {
+
+        if (session?.access_token && session.user) {
           setAccessToken(session.access_token);
           setUser(session.user);
           setIsAuthenticated(true);
           setError(null);
+          // Fetch user role on auth state change
+          fetchUserRole(session.user.id);
         } else {
           setAccessToken(null);
           setUser(null);
+          setUserRole(null);
           setIsAuthenticated(false);
         }
       }
@@ -93,19 +103,21 @@ export default function App() {
     try {
       setIsLoading(true);
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-      
+
       if (sessionError) {
         console.error('Session check error:', sessionError);
         setIsLoading(false);
         return;
       }
-      
-      if (session?.access_token) {
+
+      if (session?.access_token && session.user) {
         console.log('✓ Session found, setting access token');
         setAccessToken(session.access_token);
         setUser(session.user);
         setIsAuthenticated(true);
         setError(null);
+        // Fetch user role on init
+        await fetchUserRole(session.user.id);
       } else {
         console.log('No active session');
         setIsAuthenticated(false);
@@ -129,7 +141,7 @@ export default function App() {
       setIsLoading(true);
 
       const result = await signInWithEmail(email, password);
-      
+
       if (result.error) {
         setError(result.error);
         return false;
@@ -155,27 +167,43 @@ export default function App() {
     }
   };
 
-  const handleSignUp = async (email: string, password: string, name: string) => {
+  // Fetch user role from profiles table
+  const fetchUserRole = async (userId: string) => {
+    console.log('🔍 Fetching role for user:', userId);
     try {
-      setError(null);
-      setIsLoading(true);
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('role, is_active, email, full_name')
+        .eq('id', userId)
+        .single();
 
-      const result = await signUpWithEmail(email, password, name);
-      
-      if (result.error) {
-        setError(result.error);
-        return false;
+      console.log('📋 Profile query result:', { data, error });
+
+      if (error) {
+        console.error('❌ Could not fetch user role:', error);
+        console.error('Error code:', error.code, 'Message:', error.message);
+        // Default to L1 if role fetch fails
+        setUserRole('L1');
+        return;
       }
 
-      setError('Account created! Please check your email to confirm, then sign in.');
-      return false; // Don't auto-login, require email confirmation
+      if (data && data.is_active) {
+        console.log('✅ User role set to:', data.role);
+        setUserRole(data.role as UserRole);
+      } else if (data && !data.is_active) {
+        // User is inactive
+        console.warn('⚠️ User account is inactive');
+        setUserRole(null);
+        setError('Account is inactive. Please contact your administrator.');
+        await signOut();
+        setIsAuthenticated(false);
+      } else {
+        console.warn('⚠️ No profile data found, defaulting to L1');
+        setUserRole('L1');
+      }
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Sign up failed';
-      console.error('Sign up error:', err);
-      setError(errorMsg);
-      return false;
-    } finally {
-      setIsLoading(false);
+      console.error('💥 Error fetching user role:', err);
+      setUserRole('L1'); // Default fallback
     }
   };
 
@@ -185,6 +213,7 @@ export default function App() {
       await signOut();
       setAccessToken(null);
       setUser(null);
+      setUserRole(null);
       setIsAuthenticated(false);
       setCurrentView('dashboard');
       setError(null);
@@ -239,9 +268,8 @@ export default function App() {
 
   if (!isAuthenticated) {
     return (
-      <LoginPage 
+      <LoginPage
         onLogin={handleLogin}
-        onSignUp={handleSignUp}
         isLoading={isLoading}
         error={error}
       />
@@ -279,7 +307,7 @@ export default function App() {
       case 'items':
         return <ItemMasterSupabase />;
       case 'inventory':
-        return <InventoryManagement accessToken={accessToken} />;
+        return <InventoryGrid />;
       case 'stock-movements':
         return <StockMovement accessToken={accessToken} />;
       case 'orders':
@@ -290,12 +318,51 @@ export default function App() {
         return <ForecastingModule accessToken={accessToken} />;
       case 'planning':
         return <PlanningModule accessToken={accessToken} />;
+      case 'users':
+        // Only L3 can access user management
+        if (userRole !== 'L3') {
+          return (
+            <div style={{
+              padding: '32px',
+              backgroundColor: '#fef3c7',
+              borderRadius: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              color: '#92400e',
+            }}>
+              <Shield size={24} />
+              <div>
+                <strong>Access Denied:</strong> Only L3 Managers can access User Management.
+              </div>
+            </div>
+          );
+        }
+        return <UserManagement currentUserId={user?.id || ''} />;
       default:
         return <DashboardNew accessToken={accessToken} />;
     }
   };
 
-  const currentMenuItem = menuItems.find(item => item.id === currentView);
+  // Build menu items dynamically based on user role
+  const getMenuItems = () => {
+    const baseItems = menuItems;
+    console.log('🎯 getMenuItems called, userRole:', userRole);
+    // Add User Management for L3 users
+    if (userRole === 'L3') {
+      console.log('✅ Adding User Management menu for L3');
+      return [
+        ...baseItems,
+        { id: 'users' as View, label: 'User Management', icon: Users, description: 'Manage Users & Roles' }
+      ];
+    }
+    return baseItems;
+  };
+
+  // Log current role for debugging
+  console.log('🔄 Current userRole state:', userRole);
+
+  const currentMenuItem = getMenuItems().find(item => item.id === currentView);
 
   return (
     <ErrorBoundary>
@@ -333,9 +400,9 @@ export default function App() {
                 borderRadius: '12px',
                 boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
               }}>
-                <img 
-                  src={logoImage} 
-                  alt="Autocrat Engineers" 
+                <img
+                  src={logoImage}
+                  alt="Autocrat Engineers"
                   style={{
                     width: '100%',
                     height: 'auto',
@@ -354,7 +421,7 @@ export default function App() {
                 letterSpacing: '0.3px',
                 textAlign: 'center',
               }}>
-                Inventory Planning & Forecasting
+                Warehouse Management System
               </p>
             </div>
           </div>
@@ -365,10 +432,10 @@ export default function App() {
             overflowY: 'auto',
             padding: '16px 0',
           }}>
-            {menuItems.map((item) => {
+            {getMenuItems().map((item) => {
               const Icon = item.icon;
               const isActive = currentView === item.id;
-              
+
               return (
                 <button
                   key={item.id}
@@ -456,9 +523,10 @@ export default function App() {
                 </div>
                 <div style={{
                   fontSize: '11px',
-                  color: 'var(--enterprise-gray-500)',
+                  color: userRole === 'L3' ? '#1e40af' : userRole === 'L2' ? '#ca8a04' : '#6b7280',
+                  fontWeight: '600',
                 }}>
-                  Administrator
+                  {userRole === 'L3' ? 'Manager (Admin)' : userRole === 'L2' ? 'Supervisor' : 'Operator'}
                 </div>
               </div>
             </div>
@@ -530,9 +598,9 @@ export default function App() {
                   e.currentTarget.style.backgroundColor = 'transparent';
                 }}
               >
-                {isSidebarOpen ? <X size={20} /> : <Menu size={20} />}
+                {isSidebarOpen ? <ChevronLeft size={20} /> : <Menu size={20} />}
               </button>
-              
+
               {currentMenuItem && (
                 <div>
                   <h1 style={{
