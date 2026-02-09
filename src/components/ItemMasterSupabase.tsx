@@ -9,7 +9,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Plus, Edit2, Trash2, Search, Package, Eye, ChevronDown, ChevronRight, AlertTriangle, Clock, Calendar, Download, X, CheckCircle } from 'lucide-react';
+import { Plus, Edit2, Trash2, Search, Package, Eye, ChevronDown, ChevronRight, AlertTriangle, Clock, Calendar, Download, X, XCircle, CheckCircle } from 'lucide-react';
 import { Card, Button, Badge, Input, Select, Label, Modal, LoadingSpinner, EmptyState, Textarea } from './ui/EnterpriseUI';
 import * as itemsApi from '../utils/api/itemsSupabase';
 import { getSupabaseClient } from '../utils/supabase/client';
@@ -315,8 +315,8 @@ function FilterBar({
               whiteSpace: 'nowrap',
             }}
           >
-            <X size={14} />
-            Clear
+            <XCircle size={16} />
+            Clear Filters
           </button>
         )}
 
@@ -1301,17 +1301,16 @@ export function ItemMasterSupabase() {
     return result;
   }, [items, cardFilter, searchTerm]);
 
-  // Check if any filters are active
-  const hasActiveFilters = searchTerm.trim() !== '' || cardFilter !== 'ALL';
+  // Check if any CARD filters are active (not search - search has its own X button)
+  const hasActiveFilters = cardFilter !== 'ALL';
 
   // Handle card click - toggle filter
   const handleCardClick = (filter: CardFilter) => {
     setCardFilter(prev => prev === filter ? 'ALL' : filter);
   };
 
-  // Handle clear filters
+  // Handle clear filters (cards only - search has its own X button)
   const handleClearFilters = () => {
-    setSearchTerm('');
     setCardFilter('ALL');
   };
 

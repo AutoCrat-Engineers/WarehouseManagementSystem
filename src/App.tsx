@@ -11,6 +11,7 @@ import { BlanketReleases } from './components/BlanketReleases';
 import { ForecastingModule } from './components/ForecastingModule';
 import { PlanningModule } from './components/PlanningModule';
 import { StockMovement } from './components/StockMovement';
+import { LoadingPage } from './components/LoadingPage';
 import { UserManagement } from './auth/users/UserManagement';
 import {
   LayoutDashboard,
@@ -230,36 +231,7 @@ export default function App() {
   // ============================================================================
 
   if (isLoading && !isAuthenticated) {
-    return (
-      <div style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      }}>
-        <div style={{
-          textAlign: 'center',
-          color: 'white',
-        }}>
-          <div style={{
-            width: '60px',
-            height: '60px',
-            borderRadius: '50%',
-            border: '4px solid rgba(255, 255, 255, 0.3)',
-            borderTopColor: 'white',
-            animation: 'spin 1s linear infinite',
-            margin: '0 auto 24px',
-          }} />
-          <p style={{ fontSize: '18px', fontWeight: '500' }}>Initializing System...</p>
-          <style>{`
-            @keyframes spin {
-              to { transform: rotate(360deg); }
-            }
-          `}</style>
-        </div>
-      </div>
-    );
+    return <LoadingPage message="Initializing System..." />;
   }
 
   // ============================================================================
