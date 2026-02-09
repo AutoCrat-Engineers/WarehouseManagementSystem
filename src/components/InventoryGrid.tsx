@@ -14,7 +14,7 @@
  * - View Screen: vw_item_stock_distribution
  */
 
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
     Package,
     RefreshCw,
@@ -672,6 +672,10 @@ export function InventoryGrid() {
     const [selectedItem, setSelectedItem] = useState<ItemStockDashboard | null>(null);
     const [showDetailModal, setShowDetailModal] = useState(false);
 
+    // Pagination state - show 20 items at a time
+    const [displayCount, setDisplayCount] = useState(20);
+    const ITEMS_PER_PAGE = 20;
+
     // Handle refresh
     const handleRefresh = async () => {
         setRefreshing(true);
@@ -761,6 +765,24 @@ export function InventoryGrid() {
 
         return result;
     }, [items, searchTerm, statusFilter, activeStatusFilter, sortField, sortDirection]);
+
+    // Paginated items - only show displayCount items
+    const displayedItems = useMemo(() => {
+        return filteredItems.slice(0, displayCount);
+    }, [filteredItems, displayCount]);
+
+    // Check if there are more items to load
+    const hasMoreItems = displayCount < filteredItems.length;
+
+    // Reset display count when filters change
+    useEffect(() => {
+        setDisplayCount(ITEMS_PER_PAGE);
+    }, [searchTerm, statusFilter, activeStatusFilter, cardFilter]);
+
+    // Handle load more
+    const handleLoadMore = () => {
+        setDisplayCount(prev => prev + ITEMS_PER_PAGE);
+    };
 
     // Handle export
     const handleExport = useCallback(() => {
@@ -895,127 +917,174 @@ export function InventoryGrid() {
                         }
                     />
                 ) : (
-                    <div style={{ overflowX: 'auto' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                            <thead>
-                                <tr style={{
-                                    backgroundColor: 'var(--table-header-bg)',
-                                    borderBottom: '2px solid var(--table-border)',
-                                }}>
-                                    <th
-                                        style={{ ...thStyle, minWidth: '100px' }}
-                                        onClick={() => handleSort('itemCode')}
-                                    >
-                                        <span style={{ display: 'flex', alignItems: 'center' }}>
-                                            Item Code <SortIndicator field="itemCode" />
-                                        </span>
-                                    </th>
-                                    <th style={{ ...thStyle, minWidth: '180px', cursor: 'default' }}>
-                                        Description
-                                    </th>
-                                    <th
-                                        style={{ ...thStyle, minWidth: '100px' }}
-                                        onClick={() => handleSort('masterSerialNo')}
-                                    >
-                                        <span style={{ display: 'flex', alignItems: 'center' }}>
-                                            MSN <SortIndicator field="masterSerialNo" />
-                                        </span>
-                                    </th>
-                                    <th
-                                        style={{ ...thStyle, minWidth: '100px' }}
-                                        onClick={() => handleSort('partNumber')}
-                                    >
-                                        <span style={{ display: 'flex', alignItems: 'center' }}>
-                                            Part Number <SortIndicator field="partNumber" />
-                                        </span>
-                                    </th>
-                                    <th
-                                        style={{ ...thStyle, textAlign: 'right', minWidth: '110px' }}
-                                        onClick={() => handleSort('netAvailableForCustomer')}
-                                    >
-                                        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
-                                            Net Available <SortIndicator field="netAvailableForCustomer" />
-                                        </span>
-                                    </th>
-                                    <th
-                                        style={{ ...thStyle, textAlign: 'center', minWidth: '90px' }}
-                                        onClick={() => handleSort('stockStatus')}
-                                    >
-                                        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                            Status <SortIndicator field="stockStatus" />
-                                        </span>
-                                    </th>
-                                    <th style={{ ...thStyle, textAlign: 'center', minWidth: '70px', cursor: 'default' }}>
-                                        Action
-                                    </th>
-                                    <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px', cursor: 'default' }}>
-                                        Active
-                                    </th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {filteredItems.map((item, index) => (
-                                    <tr
-                                        key={item.itemCode}
-                                        style={{
-                                            backgroundColor: index % 2 === 0 ? 'white' : 'var(--table-stripe)',
-                                            borderBottom: '1px solid var(--table-border)',
-                                            transition: 'background-color 0.15s ease',
-                                        }}
-                                        onMouseEnter={(e) => {
-                                            e.currentTarget.style.backgroundColor = 'var(--table-hover)';
-                                        }}
-                                        onMouseLeave={(e) => {
-                                            e.currentTarget.style.backgroundColor = index % 2 === 0 ? 'white' : 'var(--table-stripe)';
-                                        }}
-                                    >
-                                        <td style={{
-                                            ...tdStyle,
-                                            fontWeight: 600,
-                                            color: 'var(--enterprise-primary)'
-                                        }}>
-                                            {item.itemCode}
-                                        </td>
-                                        <td style={tdStyle}>
-                                            {item.itemName || '-'}
-                                        </td>
-                                        <td style={{ ...tdStyle, color: 'var(--enterprise-gray-600)' }}>
-                                            {item.masterSerialNo || '-'}
-                                        </td>
-                                        <td style={{ ...tdStyle, color: 'var(--enterprise-gray-600)' }}>
-                                            {item.partNumber || '-'}
-                                        </td>
-                                        <td style={{
-                                            ...tdStyle,
-                                            textAlign: 'right',
-                                            fontWeight: 600,
-                                            color: getStatusColor(item.stockStatus),
-                                        }}>
-                                            {(item.snvStock ?? 0) + (item.usTransitStock ?? 0)}
-                                        </td>
-                                        <td style={{ ...tdStyle, textAlign: 'center' }}>
-                                            <Badge variant={getStatusVariant(item.stockStatus)}>
-                                                {item.stockStatus}
-                                            </Badge>
-                                        </td>
-                                        <td style={{ ...tdStyle, textAlign: 'center' }}>
-                                            <Button
-                                                variant="tertiary"
-                                                size="sm"
-                                                icon={<Eye size={14} />}
-                                                onClick={() => handleViewDetails(item)}
-                                            >
-                                                View
-                                            </Button>
-                                        </td>
-                                        <td style={{ ...tdStyle, textAlign: 'center' }}>
-                                            <ActiveStatusDot isActive={(item as ItemStockDashboardExtended).isActive !== false} />
-                                        </td>
+                    <>
+                        <div style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                <thead>
+                                    <tr style={{
+                                        backgroundColor: 'var(--table-header-bg)',
+                                        borderBottom: '2px solid var(--table-border)',
+                                    }}>
+                                        <th
+                                            style={{ ...thStyle, minWidth: '100px' }}
+                                            onClick={() => handleSort('itemCode')}
+                                        >
+                                            <span style={{ display: 'flex', alignItems: 'center' }}>
+                                                Item Code <SortIndicator field="itemCode" />
+                                            </span>
+                                        </th>
+                                        <th style={{ ...thStyle, minWidth: '180px', cursor: 'default' }}>
+                                            Description
+                                        </th>
+                                        <th
+                                            style={{ ...thStyle, minWidth: '100px' }}
+                                            onClick={() => handleSort('masterSerialNo')}
+                                        >
+                                            <span style={{ display: 'flex', alignItems: 'center' }}>
+                                                MSN <SortIndicator field="masterSerialNo" />
+                                            </span>
+                                        </th>
+                                        <th
+                                            style={{ ...thStyle, minWidth: '100px' }}
+                                            onClick={() => handleSort('partNumber')}
+                                        >
+                                            <span style={{ display: 'flex', alignItems: 'center' }}>
+                                                Part Number <SortIndicator field="partNumber" />
+                                            </span>
+                                        </th>
+                                        <th
+                                            style={{ ...thStyle, textAlign: 'right', minWidth: '110px' }}
+                                            onClick={() => handleSort('netAvailableForCustomer')}
+                                        >
+                                            <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                                                Net Available <SortIndicator field="netAvailableForCustomer" />
+                                            </span>
+                                        </th>
+                                        <th
+                                            style={{ ...thStyle, textAlign: 'center', minWidth: '90px' }}
+                                            onClick={() => handleSort('stockStatus')}
+                                        >
+                                            <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                Status <SortIndicator field="stockStatus" />
+                                            </span>
+                                        </th>
+                                        <th style={{ ...thStyle, textAlign: 'center', minWidth: '70px', cursor: 'default' }}>
+                                            Action
+                                        </th>
+                                        <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px', cursor: 'default' }}>
+                                            Active
+                                        </th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+                                </thead>
+                                <tbody>
+                                    {displayedItems.map((item, index) => (
+                                        <tr
+                                            key={item.itemCode}
+                                            style={{
+                                                backgroundColor: index % 2 === 0 ? 'white' : 'var(--table-stripe)',
+                                                borderBottom: '1px solid var(--table-border)',
+                                                transition: 'background-color 0.15s ease',
+                                            }}
+                                            onMouseEnter={(e) => {
+                                                e.currentTarget.style.backgroundColor = 'var(--table-hover)';
+                                            }}
+                                            onMouseLeave={(e) => {
+                                                e.currentTarget.style.backgroundColor = index % 2 === 0 ? 'white' : 'var(--table-stripe)';
+                                            }}
+                                        >
+                                            <td style={{
+                                                ...tdStyle,
+                                                fontWeight: 600,
+                                                color: 'var(--enterprise-primary)'
+                                            }}>
+                                                {item.itemCode}
+                                            </td>
+                                            <td style={tdStyle}>
+                                                {item.itemName || '-'}
+                                            </td>
+                                            <td style={{ ...tdStyle, color: 'var(--enterprise-gray-600)' }}>
+                                                {item.masterSerialNo || '-'}
+                                            </td>
+                                            <td style={{ ...tdStyle, color: 'var(--enterprise-gray-600)' }}>
+                                                {item.partNumber || '-'}
+                                            </td>
+                                            <td style={{
+                                                ...tdStyle,
+                                                textAlign: 'right',
+                                                fontWeight: 600,
+                                                color: getStatusColor(item.stockStatus),
+                                            }}>
+                                                {(item.snvStock ?? 0) + (item.usTransitStock ?? 0)}
+                                            </td>
+                                            <td style={{ ...tdStyle, textAlign: 'center' }}>
+                                                <Badge variant={getStatusVariant(item.stockStatus)}>
+                                                    {item.stockStatus}
+                                                </Badge>
+                                            </td>
+                                            <td style={{ ...tdStyle, textAlign: 'center' }}>
+                                                <Button
+                                                    variant="tertiary"
+                                                    size="sm"
+                                                    icon={<Eye size={14} />}
+                                                    onClick={() => handleViewDetails(item)}
+                                                >
+                                                    View
+                                                </Button>
+                                            </td>
+                                            <td style={{ ...tdStyle, textAlign: 'center' }}>
+                                                <ActiveStatusDot isActive={(item as ItemStockDashboardExtended).isActive !== false} />
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {/* Load More Button - Outside scrollable area */}
+                        {hasMoreItems && (
+                            <div style={{
+                                padding: '20px',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'center',
+                                gap: '12px',
+                                borderTop: '1px solid var(--table-border)',
+                                position: 'relative',
+                                zIndex: 10,
+                                backgroundColor: 'white',
+                            }}>
+                                <p style={{
+                                    fontSize: '13px',
+                                    color: 'var(--enterprise-gray-500)',
+                                    margin: 0,
+                                }}>
+                                    Showing {displayedItems.length} of {filteredItems.length} items
+                                </p>
+                                <Button
+                                    variant="primary"
+                                    onClick={handleLoadMore}
+                                >
+                                    Load More ({Math.min(ITEMS_PER_PAGE, filteredItems.length - displayedItems.length)} more)
+                                </Button>
+                            </div>
+                        )}
+
+                        {/* Show total when all loaded */}
+                        {!hasMoreItems && displayedItems.length > 0 && (
+                            <div style={{
+                                padding: '16px',
+                                textAlign: 'center',
+                                borderTop: '1px solid var(--table-border)',
+                            }}>
+                                <p style={{
+                                    fontSize: '13px',
+                                    color: 'var(--enterprise-gray-500)',
+                                }}>
+                                    Showing all {filteredItems.length} items
+                                </p>
+                            </div>
+                        )}
+                    </>
                 )}
             </Card>
 
@@ -1055,7 +1124,7 @@ export function InventoryGrid() {
                     animation: spin 1s linear infinite;
                 }
             `}</style>
-        </div>
+        </div >
     );
 }
 
