@@ -1,4 +1,4 @@
-name: Build, Test, Deploy (deploy-test-1)
+name: Build, Test, Deploy (deploy/test-1)
 
 on:
   push:
@@ -29,11 +29,11 @@ jobs:
         run: npm run build
 
   deploy:
-    runs-on: ubuntu-latest
     needs: build-test
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy to EC2
+      - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.EC2_HOST }}

@@ -1,10 +1,11 @@
 version: "3.8"
 
 services:
-  wms-frontend:
+  app:
     build:
       context: .
-      dockerfile: devops/docker/Dockerfile
+      dockerfile: devops/docker/Dockerfile  # Adjust if your Dockerfile is elsewhere
     ports:
-      - "80:80"
-    restart: always
+      - "80:80"          # Expose container port 80 to host port 80
+    restart: always      # Restart policy for reliability
+
