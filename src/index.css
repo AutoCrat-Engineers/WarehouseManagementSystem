@@ -560,6 +560,23 @@
   }
 }
 
+/* Load More Button - stable hover using CSS */
+.load-more-btn {
+  padding: 10px 24px;
+  background-color: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.load-more-btn:hover {
+  background-color: #1d4ed8;
+}
+
 @layer utilities {
   .collapse {
     visibility: collapse;

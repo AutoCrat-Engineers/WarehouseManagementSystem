@@ -18,7 +18,9 @@ import {
     Download,
     XCircle,
     Shield,
-    UserCog
+    UserCog,
+    Settings,
+    ChevronDown
 } from 'lucide-react';
 import {
     getAllUsers,
@@ -45,6 +47,10 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
     const [searchTerm, setSearchTerm] = useState('');
     const [roleFilter, setRoleFilter] = useState<string>('all');
     const [statusFilter, setStatusFilter] = useState<string>('all');
+
+    // Pagination state - show 20 items at a time
+    const [displayCount, setDisplayCount] = useState(20);
+    const ITEMS_PER_PAGE = 20;
 
     // Modal states
     const [showCreateModal, setShowCreateModal] = useState(false);
@@ -207,6 +213,22 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
             (statusFilter === 'inactive' && !user.is_active);
         return matchesSearch && matchesRole && matchesStatus;
     });
+
+    // Paginated users - only show displayCount users
+    const displayedUsers = filteredUsers.slice(0, displayCount);
+
+    // Check if there are more users to load
+    const hasMoreUsers = displayCount < filteredUsers.length;
+
+    // Reset display count when filters change
+    useEffect(() => {
+        setDisplayCount(ITEMS_PER_PAGE);
+    }, [searchTerm, roleFilter, statusFilter]);
+
+    // Handle load more
+    const handleLoadMore = () => {
+        setDisplayCount(prev => prev + ITEMS_PER_PAGE);
+    };
 
     const stats = {
         total: users.length,
@@ -615,112 +637,162 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                         </p>
                     </div>
                 ) : (
-                    <div style={{ overflowX: 'auto' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                            <thead>
-                                <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e5e7eb' }}>
-                                    {['Employee ID', 'Name', 'Email', 'Role', 'Department', 'Shift', 'Status', 'Actions'].map((h) => (
-                                        <th key={h} style={{
-                                            padding: '14px 20px',
-                                            textAlign: 'left',
-                                            fontSize: '11px',
-                                            fontWeight: '600',
-                                            color: '#64748b',
-                                            textTransform: 'uppercase',
-                                            letterSpacing: '0.05em',
-                                            whiteSpace: 'nowrap',
-                                        }}>{h}</th>
-                                    ))}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {filteredUsers.map((user) => (
-                                    <tr key={user.id} style={{ borderBottom: '1px solid #f3f4f6', backgroundColor: user.id === currentUserId ? '#f0f9ff' : 'transparent' }}>
-                                        <td style={{ padding: '20px 24px', fontSize: '14px', fontWeight: '600', color: '#374151' }}>{user.employee_id || '---'}</td>
-                                        <td style={{ padding: '20px 24px' }}>
-                                            <div style={{ fontWeight: '600', color: '#111827' }}>{user.full_name}</div>
-                                            <div style={{ fontSize: '12px', color: '#9ca3af' }}>@{user.email.split('@')[0]}</div>
-                                        </td>
-                                        <td style={{ padding: '20px 24px', fontSize: '14px', color: '#4b5563' }}>{user.email}</td>
-                                        <td style={{ padding: '20px 24px' }}>
-                                            <RoleBadge role={user.role} />
-                                        </td>
-                                        <td style={{ padding: '20px 24px', fontSize: '14px', color: '#4b5563' }}>{user.department || 'Production'}</td>
-                                        <td style={{ padding: '20px 24px', fontSize: '14px', color: '#4b5563' }}>{user.shift || 'DAY'}</td>
-                                        <td style={{ padding: '20px 24px' }}>
-                                            <span style={{
-                                                display: 'inline-flex',
-                                                alignItems: 'center',
-                                                gap: '6px',
-                                                padding: '4px 12px',
-                                                borderRadius: '20px',
-                                                fontSize: '12px',
+                    <>
+                        <div style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                <thead>
+                                    <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e5e7eb' }}>
+                                        {['Employee ID', 'Name', 'Email', 'Role', 'Department', 'Shift', 'Status', 'Actions'].map((h) => (
+                                            <th key={h} style={{
+                                                padding: '14px 20px',
+                                                textAlign: 'left',
+                                                fontSize: '11px',
                                                 fontWeight: '600',
-                                                backgroundColor: user.is_active ? '#ecfdf5' : '#fef2f2',
-                                                color: user.is_active ? '#059669' : '#dc2626',
-                                            }}>
-                                                {user.is_active ? <UserCheck size={14} /> : <UserX size={14} />}
-                                                {user.is_active ? 'Active' : 'Inactive'}
-                                            </span>
-                                        </td>
-                                        <td style={{ padding: '20px 24px', position: 'relative' }}>
-                                            {user.id !== currentUserId && (
-                                                <>
-                                                    <button
-                                                        onClick={() => setActiveDropdown(activeDropdown === user.id ? null : user.id)}
-                                                        style={{ padding: '8px', backgroundColor: 'transparent', border: 'none', cursor: 'pointer', borderRadius: '8px', color: '#6b7280' }}
-                                                    >
-                                                        <MoreVertical size={20} />
-                                                    </button>
-
-                                                    {activeDropdown === user.id && (
-                                                        <div
-                                                            ref={dropdownRef}
-                                                            style={{
-                                                                position: 'absolute',
-                                                                right: '60px',
-                                                                top: '10px',
-                                                                zIndex: 50,
-                                                                width: '180px',
-                                                                backgroundColor: 'white',
-                                                                borderRadius: '12px',
-                                                                boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
-                                                                border: '1px solid #e5e7eb',
-                                                                overflow: 'hidden',
-                                                            }}
-                                                        >
-                                                            <button
-                                                                onClick={() => openEditModal(user)}
-                                                                style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
-                                                            >
-                                                                <Edit size={16} /> Edit User
-                                                            </button>
-                                                            <button
-                                                                onClick={() => handleStatusChange(user.id, !user.is_active)}
-                                                                style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: user.is_active ? '#f59e0b' : '#10b981' }}
-                                                            >
-                                                                <Power size={16} /> {user.is_active ? 'Deactivate' : 'Activate'}
-                                                            </button>
-                                                            <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
-                                                            <button
-                                                                onClick={() => openDeleteConfirm(user)}
-                                                                style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
-                                                            >
-                                                                <Trash2 size={16} /> Delete User
-                                                            </button>
-                                                        </div>
-                                                    )}
-                                                </>
-                                            )}
-                                            {user.id === currentUserId && (
-                                                <span style={{ color: '#94a3b8', fontSize: '12px' }}>You</span>
-                                            )}
-                                        </td>
+                                                color: '#64748b',
+                                                textTransform: 'uppercase',
+                                                letterSpacing: '0.05em',
+                                                whiteSpace: 'nowrap',
+                                            }}>{h}</th>
+                                        ))}
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+                                </thead>
+                                <tbody>
+                                    {displayedUsers.map((user) => (
+                                        <tr key={user.id} style={{ borderBottom: '1px solid #f3f4f6', backgroundColor: user.id === currentUserId ? '#f0f9ff' : 'transparent' }}>
+                                            <td style={{ padding: '20px 24px', fontSize: '14px', fontWeight: '600', color: '#374151' }}>{user.employee_id || '---'}</td>
+                                            <td style={{ padding: '20px 24px' }}>
+                                                <div style={{ fontWeight: '600', color: '#111827' }}>{user.full_name}</div>
+                                                <div style={{ fontSize: '12px', color: '#9ca3af' }}>@{user.email.split('@')[0]}</div>
+                                            </td>
+                                            <td style={{ padding: '20px 24px', fontSize: '14px', color: '#4b5563' }}>{user.email}</td>
+                                            <td style={{ padding: '20px 24px' }}>
+                                                <RoleBadge role={user.role} />
+                                            </td>
+                                            <td style={{ padding: '20px 24px', fontSize: '14px', color: '#4b5563' }}>{user.department || 'Production'}</td>
+                                            <td style={{ padding: '20px 24px', fontSize: '14px', color: '#4b5563' }}>{user.shift || 'DAY'}</td>
+                                            <td style={{ padding: '20px 24px' }}>
+                                                <span style={{
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '6px',
+                                                    padding: '4px 12px',
+                                                    borderRadius: '20px',
+                                                    fontSize: '12px',
+                                                    fontWeight: '600',
+                                                    backgroundColor: user.is_active ? '#ecfdf5' : '#fef2f2',
+                                                    color: user.is_active ? '#059669' : '#dc2626',
+                                                }}>
+                                                    {user.is_active ? <UserCheck size={14} /> : <UserX size={14} />}
+                                                    {user.is_active ? 'Active' : 'Inactive'}
+                                                </span>
+                                            </td>
+                                            <td style={{ padding: '20px 24px', position: 'relative' }}>
+                                                {user.id !== currentUserId && (
+                                                    <>
+                                                        <button
+                                                            onClick={() => setActiveDropdown(activeDropdown === user.id ? null : user.id)}
+                                                            style={{ padding: '8px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', backgroundColor: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', color: '#374151' }}
+                                                        >
+                                                            <Settings size={16} />
+                                                            Actions
+                                                            <ChevronDown size={14} />
+                                                        </button>
+                                                        {activeDropdown === user.id && (
+                                                            <div
+                                                                ref={dropdownRef}
+                                                                style={{
+                                                                    position: 'absolute',
+                                                                    top: '100%',
+                                                                    right: '24px',
+                                                                    marginTop: '4px',
+                                                                    zIndex: 50,
+                                                                    width: '180px',
+                                                                    backgroundColor: 'white',
+                                                                    borderRadius: '12px',
+                                                                    boxShadow: '0 10px 40px rgba(0,0,0,0.15)',
+                                                                    border: '1px solid #e5e7eb',
+                                                                    overflow: 'hidden',
+                                                                }}
+                                                            >
+                                                                <button
+                                                                    onClick={() => openEditModal(user)}
+                                                                    style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
+                                                                >
+                                                                    <Edit size={16} /> Edit User
+                                                                </button>
+                                                                <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
+                                                                <button
+                                                                    onClick={() => handleStatusChange(user.id, !user.is_active)}
+                                                                    style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: user.is_active ? '#f59e0b' : '#10b981' }}
+                                                                >
+                                                                    <Power size={16} /> {user.is_active ? 'Deactivate' : 'Activate'}
+                                                                </button>
+                                                                <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
+                                                                <button
+                                                                    onClick={() => openDeleteConfirm(user)}
+                                                                    style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
+                                                                >
+                                                                    <Trash2 size={16} /> Delete User
+                                                                </button>
+                                                            </div>
+                                                        )}
+                                                    </>
+                                                )}
+                                                {user.id === currentUserId && (
+                                                    <span style={{ color: '#94a3b8', fontSize: '12px' }}>You</span>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {/* Load More Button - Outside scrollable area */}
+                        {hasMoreUsers && (
+                            <div style={{
+                                padding: '20px',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'center',
+                                gap: '12px',
+                                borderTop: '1px solid #e5e7eb',
+                                position: 'relative',
+                                zIndex: 10,
+                                backgroundColor: 'white',
+                            }}>
+                                <p style={{
+                                    fontSize: '13px',
+                                    color: '#64748b',
+                                    margin: 0,
+                                }}>
+                                    Showing {displayedUsers.length} of {filteredUsers.length} users
+                                </p>
+                                <button
+                                    onClick={handleLoadMore}
+                                    className="load-more-btn"
+                                >
+                                    Load More ({Math.min(ITEMS_PER_PAGE, filteredUsers.length - displayedUsers.length)} more)
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Show total when all loaded */}
+                        {!hasMoreUsers && displayedUsers.length > 0 && (
+                            <div style={{
+                                padding: '16px',
+                                textAlign: 'center',
+                                borderTop: '1px solid #e5e7eb',
+                            }}>
+                                <p style={{
+                                    fontSize: '13px',
+                                    color: '#64748b',
+                                }}>
+                                    Showing all {filteredUsers.length} users
+                                </p>
+                            </div>
+                        )}
+                    </>
                 )}
             </div>
 
