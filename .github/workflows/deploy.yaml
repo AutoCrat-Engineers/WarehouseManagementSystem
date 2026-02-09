@@ -1,17 +1,16 @@
-name: Build, Test, Deploy (develop-test)
+name: Build, Test, Deploy (deploy-test-1)
 
 on:
   push:
     branches:
-      - develop-test
+      - deploy/test-1
 
 jobs:
   build-test:
-    name: Build and Test
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout source
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -26,16 +25,15 @@ jobs:
       - name: Run tests
         run: npm test --if-present
 
-      - name: Build application
+      - name: Build app
         run: npm run build
 
   deploy:
-    name: Deploy to EC2
     runs-on: ubuntu-latest
     needs: build-test
 
     steps:
-      - name: Deploy via SSH
+      - name: Deploy to EC2
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -44,3 +42,4 @@ jobs:
           script: |
             cd WarehouseManagementSystem
             ./devops/scripts/deploy.sh
+
