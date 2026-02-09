@@ -26,6 +26,7 @@ import {
     ChevronUp,
     Download,
     X,
+    XCircle,
 } from 'lucide-react';
 import { Card, Button, Badge, LoadingSpinner, EmptyState, Modal } from './ui/EnterpriseUI';
 import { useAllItemsStockDashboard, useItemStockDistribution } from '../hooks/useInventory';
@@ -259,8 +260,8 @@ function FilterBar({
                             whiteSpace: 'nowrap',
                         }}
                     >
-                        <X size={14} />
-                        Clear
+                        <XCircle size={16} />
+                        Clear Filters
                     </button>
                 )}
 
@@ -704,16 +705,15 @@ export function InventoryGrid() {
         }
     };
 
-    // Clear all filters
+    // Clear card/dropdown filters only (search has its own X button)
     const handleClearFilters = useCallback(() => {
-        setSearchTerm('');
         setStatusFilter('ALL');
         setActiveStatusFilter('ALL');
         setCardFilter('ALL');
     }, []);
 
-    // Check if any filters are active
-    const hasActiveFilters = searchTerm !== '' || statusFilter !== 'ALL' || activeStatusFilter !== 'ALL' || cardFilter !== 'ALL';
+    // Check if any CARD/DROPDOWN filters are active (not search - search has its own X button)
+    const hasActiveFilters = statusFilter !== 'ALL' || activeStatusFilter !== 'ALL' || cardFilter !== 'ALL';
 
     // Filter and sort items
     const filteredItems = useMemo(() => {
