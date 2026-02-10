@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { 
-  Package, 
-  AlertTriangle, 
-  CheckCircle, 
+import {
+  Package,
+  AlertTriangle,
+  CheckCircle,
   TrendingUp,
   AlertCircle,
   Loader2,
@@ -19,9 +19,10 @@ import { APIError } from '../utils/api/client';
 
 interface DashboardProps {
   accessToken: string;
+  onNavigate?: (view: string) => void;
 }
 
-export function DashboardNew({ accessToken }: DashboardProps) {
+export function DashboardNew({ accessToken, onNavigate }: DashboardProps) {
   const { data, loading, error, refetch } = useDashboard(accessToken);
   const [seeding, setSeeding] = useState(false);
   const [seedError, setSeedError] = useState<string | null>(null);
@@ -36,7 +37,7 @@ export function DashboardNew({ accessToken }: DashboardProps) {
 
     try {
       const result = await seedService.seedDatabase(accessToken);
-      
+
       alert(
         `Success! Loaded:\n` +
         `• ${result.stats.items} items\n` +
@@ -44,7 +45,7 @@ export function DashboardNew({ accessToken }: DashboardProps) {
         `• ${result.stats.blanketOrders} blanket orders\n` +
         `• ${result.stats.releases} releases`
       );
-      
+
       await refetch();
       window.location.reload();
     } catch (err) {
@@ -64,15 +65,15 @@ export function DashboardNew({ accessToken }: DashboardProps) {
         minHeight: '400px',
       }}>
         <div style={{ textAlign: 'center' }}>
-          <Loader2 
-            size={48} 
-            style={{ 
+          <Loader2
+            size={48}
+            style={{
               color: 'var(--enterprise-primary)',
               animation: 'spin 1s linear infinite',
               margin: '0 auto 16px',
-            }} 
+            }}
           />
-          <p style={{ 
+          <p style={{
             color: 'var(--enterprise-gray-600)',
             fontSize: 'var(--font-size-base)',
           }}>
@@ -95,7 +96,7 @@ export function DashboardNew({ accessToken }: DashboardProps) {
         <div style={{ display: 'flex', alignItems: 'start', gap: '16px' }}>
           <AlertCircle size={24} style={{ color: 'var(--enterprise-error)', flexShrink: 0 }} />
           <div>
-            <h3 style={{ 
+            <h3 style={{
               color: 'var(--enterprise-error)',
               fontSize: 'var(--font-size-lg)',
               fontWeight: 'var(--font-weight-semibold)',
@@ -103,7 +104,7 @@ export function DashboardNew({ accessToken }: DashboardProps) {
             }}>
               Failed to Load Dashboard
             </h3>
-            <p style={{ 
+            <p style={{
               color: 'var(--enterprise-error)',
               fontSize: 'var(--font-size-base)',
             }}>
@@ -154,6 +155,7 @@ export function DashboardNew({ accessToken }: DashboardProps) {
       description: 'Real-time stock tracking and monitoring',
       icon: Warehouse,
       color: 'var(--enterprise-primary)',
+      tabId: 'inventory',
       stats: [
         { label: 'Available', value: data?.summary.totalItems || 0 },
         { label: 'Low Stock', value: data?.summary.lowStockCount || 0 },
@@ -164,6 +166,7 @@ export function DashboardNew({ accessToken }: DashboardProps) {
       description: 'Multi-line customer order management',
       icon: FileText,
       color: 'var(--enterprise-secondary)',
+      tabId: 'orders',
       stats: [
         { label: 'Active Orders', value: data?.recentActivity?.blanketOrders?.length || 0 },
         { label: 'Total Lines', value: 0 },
@@ -174,6 +177,7 @@ export function DashboardNew({ accessToken }: DashboardProps) {
       description: 'Delivery planning with auto-deduction',
       icon: Calendar,
       color: 'var(--enterprise-info)',
+      tabId: 'releases',
       stats: [
         { label: 'Pending', value: 0 },
         { label: 'Delivered', value: 0 },
@@ -184,6 +188,7 @@ export function DashboardNew({ accessToken }: DashboardProps) {
       description: 'Holt-Winters predictive analytics',
       icon: TrendingUp,
       color: 'var(--enterprise-accent)',
+      tabId: 'forecast',
       stats: [
         { label: 'Forecasts', value: 0 },
         { label: 'Accuracy', value: '0%' },
@@ -298,6 +303,7 @@ export function DashboardNew({ accessToken }: DashboardProps) {
             return (
               <div
                 key={index}
+                onClick={() => onNavigate?.(module.tabId)}
                 style={{
                   backgroundColor: 'var(--card-background)',
                   border: '1px solid var(--border-color)',
@@ -310,10 +316,12 @@ export function DashboardNew({ accessToken }: DashboardProps) {
                 onMouseEnter={(e) => {
                   e.currentTarget.style.boxShadow = 'var(--shadow-md)';
                   e.currentTarget.style.borderColor = module.color;
+                  e.currentTarget.style.transform = 'translateY(-2px)';
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.boxShadow = 'var(--shadow-sm)';
                   e.currentTarget.style.borderColor = 'var(--border-color)';
+                  e.currentTarget.style.transform = 'translateY(0)';
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'start', gap: '16px', marginBottom: '16px' }}>
@@ -392,11 +400,11 @@ export function DashboardNew({ accessToken }: DashboardProps) {
               <div
                 key={index}
                 style={{
-                  backgroundColor: alert.severity === 'critical' 
-                    ? 'var(--enterprise-error-bg)' 
+                  backgroundColor: alert.severity === 'critical'
+                    ? 'var(--enterprise-error-bg)'
                     : 'var(--enterprise-warning-bg)',
-                  border: `1px solid ${alert.severity === 'critical' 
-                    ? 'var(--enterprise-error)' 
+                  border: `1px solid ${alert.severity === 'critical'
+                    ? 'var(--enterprise-error)'
                     : 'var(--enterprise-warning)'}`,
                   borderRadius: 'var(--border-radius-md)',
                   padding: '16px',
@@ -405,21 +413,21 @@ export function DashboardNew({ accessToken }: DashboardProps) {
                   gap: '12px',
                 }}
               >
-                <AlertTriangle 
-                  size={20} 
-                  style={{ 
-                    color: alert.severity === 'critical' 
-                      ? 'var(--enterprise-error)' 
+                <AlertTriangle
+                  size={20}
+                  style={{
+                    color: alert.severity === 'critical'
+                      ? 'var(--enterprise-error)'
                       : 'var(--enterprise-warning)',
                     flexShrink: 0,
-                  }} 
+                  }}
                 />
                 <div style={{ flex: 1 }}>
                   <p style={{
                     fontSize: 'var(--font-size-base)',
                     fontWeight: 'var(--font-weight-medium)',
-                    color: alert.severity === 'critical' 
-                      ? 'var(--enterprise-error)' 
+                    color: alert.severity === 'critical'
+                      ? 'var(--enterprise-error)'
                       : 'var(--enterprise-warning)',
                     marginBottom: '4px',
                   }}>
@@ -440,8 +448,8 @@ export function DashboardNew({ accessToken }: DashboardProps) {
                   textTransform: 'uppercase',
                   letterSpacing: '0.5px',
                   backgroundColor: 'white',
-                  color: alert.severity === 'critical' 
-                    ? 'var(--enterprise-error)' 
+                  color: alert.severity === 'critical'
+                    ? 'var(--enterprise-error)'
                     : 'var(--enterprise-warning)',
                 }}>
                   {alert.severity}
@@ -453,7 +461,7 @@ export function DashboardNew({ accessToken }: DashboardProps) {
       )}
 
       {/* Sample Data Section */}
-      <SampleDataInfo 
+      <SampleDataInfo
         onSeedDatabase={handleSeedDatabase}
         seeding={seeding}
         error={seedError}

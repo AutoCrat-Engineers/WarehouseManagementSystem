@@ -8,8 +8,8 @@
  *           is_active, created_at, updated_at, master_serial_no, revision, part_number, deleted_by
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Plus, Edit2, Trash2, Search, Package, Eye, ChevronDown, ChevronRight, AlertTriangle, Clock, Calendar, Download, X, XCircle, CheckCircle } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Plus, Edit2, Trash2, Search, Package, Eye, ChevronDown, ChevronRight, AlertTriangle, Clock, Calendar, Download, X, XCircle, CheckCircle, Settings } from 'lucide-react';
 import { Card, Button, Badge, Input, Select, Label, Modal, LoadingSpinner, EmptyState, Textarea } from './ui/EnterpriseUI';
 import * as itemsApi from '../utils/api/itemsSupabase';
 import { getSupabaseClient } from '../utils/supabase/client';
@@ -1260,6 +1260,21 @@ export function ItemMasterSupabase() {
   const [displayCount, setDisplayCount] = useState(20);
   const ITEMS_PER_PAGE = 20;
 
+  // Actions dropdown state (matches UserManagement pattern)
+  const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (activeDropdown && dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setActiveDropdown(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [activeDropdown]);
+
   const fetchItems = useCallback(async () => {
     setError(null);
     setLoading(true);
@@ -1490,7 +1505,8 @@ export function ItemMasterSupabase() {
                     <th style={{ ...thStyle, textAlign: 'center', minWidth: '60px' }}>UOM</th>
                     <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>Lead Time</th>
                     <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>Status</th>
-                    <th style={{ ...thStyle, textAlign: 'center', minWidth: '200px', width: '200px' }}>Actions</th>
+                    <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>View</th>
+                    <th style={{ ...thStyle, textAlign: 'center', minWidth: '120px' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1512,11 +1528,69 @@ export function ItemMasterSupabase() {
                       <td style={{ ...tdStyle, textAlign: 'center' }}>{item.uom}</td>
                       <td style={{ ...tdStyle, textAlign: 'center' }}>{item.lead_time_days} days</td>
                       <td style={{ ...tdStyle, textAlign: 'center' }}><Badge variant={item.is_active ? 'success' : 'neutral'}>{item.is_active ? 'Active' : 'Inactive'}</Badge></td>
+                      {/* View Button */}
                       <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px' }}>
-                        <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', alignItems: 'center' }}>
-                          <Button variant="secondary" size="sm" icon={<Edit2 size={14} />} onClick={() => handleEdit(item)} style={{ minWidth: '55px' }}>Edit</Button>
-                          <Button variant="danger" size="sm" icon={<Trash2 size={14} />} onClick={() => handleDeleteClick(item)} style={{ minWidth: '65px' }}>Delete</Button>
-                          <Button variant="tertiary" size="sm" icon={<Eye size={14} />} onClick={() => handleView(item)} style={{ minWidth: '55px' }}>View</Button>
+                        <Button variant="tertiary" size="sm" icon={<Eye size={14} />} onClick={() => handleView(item)} style={{ minWidth: '55px' }}>View</Button>
+                      </td>
+                      {/* Actions Dropdown - matches UserManagement */}
+                      <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px', position: 'relative' }}>
+                        <div ref={activeDropdown === item.id ? dropdownRef : null} style={{ position: 'relative', display: 'inline-block' }}>
+                          <button
+                            onClick={() => setActiveDropdown(activeDropdown === item.id ? null : item.id)}
+                            style={{
+                              padding: '8px 12px',
+                              border: '1px solid #e5e7eb',
+                              borderRadius: '8px',
+                              backgroundColor: activeDropdown === item.id ? '#f8fafc' : 'white',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              fontSize: '13px',
+                              color: '#374151',
+                              fontWeight: 500,
+                              transition: 'all 0.15s ease',
+                            }}
+                          >
+                            <Settings size={16} />
+                            Actions
+                            <ChevronDown size={14} style={{ transition: 'transform 0.2s', transform: activeDropdown === item.id ? 'rotate(180deg)' : 'rotate(0deg)' }} />
+                          </button>
+                          {activeDropdown === item.id && (
+                            <div
+                              style={{
+                                position: 'absolute',
+                                top: '100%',
+                                right: '0',
+                                marginTop: '4px',
+                                zIndex: 50,
+                                width: '180px',
+                                backgroundColor: 'white',
+                                borderRadius: '12px',
+                                boxShadow: '0 10px 40px rgba(0,0,0,0.15)',
+                                border: '1px solid #e5e7eb',
+                                overflow: 'hidden',
+                              }}
+                            >
+                              <button
+                                onClick={() => { handleEdit(item); setActiveDropdown(null); }}
+                                style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
+                                onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                              >
+                                <Edit2 size={16} /> Edit Item
+                              </button>
+                              <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
+                              <button
+                                onClick={() => { handleDeleteClick(item); setActiveDropdown(null); }}
+                                style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
+                                onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#fef2f2'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                              >
+                                <Trash2 size={16} /> Delete Item
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </td>
                     </tr>
