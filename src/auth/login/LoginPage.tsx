@@ -203,7 +203,7 @@ export function LoginPage({ onLogin, isLoading = false, error: propError }: Logi
                             letterSpacing: '-0.3px',
                             fontFamily: '"Poppins", sans-serif',
                         }}>
-                            Warehouse Management System
+                            U.S Warehouse Management System
                         </h2>
                         {/* Secondary Supporting Line */}
                         <p style={{

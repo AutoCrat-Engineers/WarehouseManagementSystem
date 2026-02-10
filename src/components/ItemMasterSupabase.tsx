@@ -9,7 +9,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Plus, Edit2, Trash2, Search, Package, Eye, ChevronDown, ChevronRight, AlertTriangle, Clock, Calendar, Download, X, CheckCircle } from 'lucide-react';
+import { Plus, Edit2, Trash2, Search, Package, Eye, ChevronDown, ChevronRight, AlertTriangle, Clock, Calendar, Download, X, XCircle, CheckCircle } from 'lucide-react';
 import { Card, Button, Badge, Input, Select, Label, Modal, LoadingSpinner, EmptyState, Textarea } from './ui/EnterpriseUI';
 import * as itemsApi from '../utils/api/itemsSupabase';
 import { getSupabaseClient } from '../utils/supabase/client';
@@ -315,8 +315,8 @@ function FilterBar({
               whiteSpace: 'nowrap',
             }}
           >
-            <X size={14} />
-            Clear
+            <XCircle size={16} />
+            Clear Filters
           </button>
         )}
 
@@ -1256,6 +1256,10 @@ export function ItemMasterSupabase() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<Item | null>(null);
 
+  // Pagination state - show 20 items at a time
+  const [displayCount, setDisplayCount] = useState(20);
+  const ITEMS_PER_PAGE = 20;
+
   const fetchItems = useCallback(async () => {
     setError(null);
     setLoading(true);
@@ -1291,30 +1295,49 @@ export function ItemMasterSupabase() {
       result = result.filter(item => item.is_active === false);
     }
 
-    // Apply search filter (case-insensitive)
+    // Apply search filter (case-insensitive) - includes part_number and master_serial_no
     if (searchTerm.trim()) {
       const search = searchTerm.toLowerCase();
       result = result.filter(item =>
         item.item_code.toLowerCase().includes(search) ||
-        (item.item_name || '').toLowerCase().includes(search)
+        (item.item_name || '').toLowerCase().includes(search) ||
+        (item.part_number || '').toLowerCase().includes(search) ||
+        (item.master_serial_no || '').toLowerCase().includes(search)
       );
     }
 
     return result;
   }, [items, cardFilter, searchTerm]);
 
-  // Check if any filters are active
-  const hasActiveFilters = searchTerm.trim() !== '' || cardFilter !== 'ALL';
+  // Paginated items - only show displayCount items
+  const displayedItems = useMemo(() => {
+    return filteredItems.slice(0, displayCount);
+  }, [filteredItems, displayCount]);
+
+  // Check if there are more items to load
+  const hasMoreItems = displayCount < filteredItems.length;
+
+  // Reset display count when filters change
+  useEffect(() => {
+    setDisplayCount(ITEMS_PER_PAGE);
+  }, [cardFilter, searchTerm]);
+
+  // Check if any CARD filters are active (not search - search has its own X button)
+  const hasActiveFilters = cardFilter !== 'ALL';
 
   // Handle card click - toggle filter
   const handleCardClick = (filter: CardFilter) => {
     setCardFilter(prev => prev === filter ? 'ALL' : filter);
   };
 
-  // Handle clear filters
+  // Handle clear filters (cards only - search has its own X button)
   const handleClearFilters = () => {
-    setSearchTerm('');
     setCardFilter('ALL');
+  };
+
+  // Handle load more
+  const handleLoadMore = () => {
+    setDisplayCount(prev => prev + ITEMS_PER_PAGE);
   };
 
   // Handle export
@@ -1455,53 +1478,98 @@ export function ItemMasterSupabase() {
             action={!hasActiveFilters ? { label: 'Add Item', onClick: () => setShowModal(true) } : undefined}
           />
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ backgroundColor: 'var(--table-header-bg)', borderBottom: '2px solid var(--table-border)' }}>
-                  <th style={{ ...thStyle, minWidth: '100px' }}>Item Code</th>
-                  <th style={{ ...thStyle, minWidth: '120px' }}>Part Number</th>
-                  <th style={{ ...thStyle, minWidth: '100px' }}>MSN</th>
-                  <th style={{ ...thStyle, textAlign: 'center', minWidth: '60px' }}>Rev</th>
-                  <th style={{ ...thStyle, textAlign: 'center', minWidth: '60px' }}>UOM</th>
-                  <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>Lead Time</th>
-                  <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>Status</th>
-                  <th style={{ ...thStyle, textAlign: 'center', minWidth: '120px' }}>Deleted By</th>
-                  <th style={{ ...thStyle, textAlign: 'center', minWidth: '200px', width: '200px' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredItems.map((item, index) => (
-                  <tr
-                    key={item.id}
-                    style={{
-                      backgroundColor: index % 2 === 0 ? 'white' : 'var(--table-stripe)',
-                      borderBottom: '1px solid var(--table-border)',
-                      transition: 'background-color var(--transition-fast)',
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'var(--table-hover)'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = index % 2 === 0 ? 'white' : 'var(--table-stripe)'; }}
-                  >
-                    <td style={{ ...tdStyle, fontWeight: 'var(--font-weight-medium)', color: 'var(--enterprise-gray-700)' }}>{item.item_code}</td>
-                    <td style={{ ...tdStyle, fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-primary)' }}>{item.part_number || '-'}</td>
-                    <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: '0.85em', color: 'var(--enterprise-gray-600)' }}>{item.master_serial_no || '-'}</td>
-                    <td style={{ ...tdStyle, textAlign: 'center' }}><Badge variant="info">{item.revision || '-'}</Badge></td>
-                    <td style={{ ...tdStyle, textAlign: 'center' }}>{item.uom}</td>
-                    <td style={{ ...tdStyle, textAlign: 'center' }}>{item.lead_time_days} days</td>
-                    <td style={{ ...tdStyle, textAlign: 'center' }}><Badge variant={item.is_active ? 'success' : 'neutral'}>{item.is_active ? 'Active' : 'Inactive'}</Badge></td>
-                    <td style={{ ...tdStyle, textAlign: 'center', fontSize: 'var(--font-size-sm)', color: item.deleted_by ? 'var(--enterprise-error)' : 'var(--enterprise-gray-400)' }}>{item.deleted_by || '—'}</td>
-                    <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px' }}>
-                      <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', alignItems: 'center' }}>
-                        <Button variant="secondary" size="sm" icon={<Edit2 size={14} />} onClick={() => handleEdit(item)} style={{ minWidth: '55px' }}>Edit</Button>
-                        <Button variant="danger" size="sm" icon={<Trash2 size={14} />} onClick={() => handleDeleteClick(item)} style={{ minWidth: '65px' }}>Delete</Button>
-                        <Button variant="tertiary" size="sm" icon={<Eye size={14} />} onClick={() => handleView(item)} style={{ minWidth: '55px' }}>View</Button>
-                      </div>
-                    </td>
+          <>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ backgroundColor: 'var(--table-header-bg)', borderBottom: '2px solid var(--table-border)' }}>
+                    <th style={{ ...thStyle, minWidth: '100px' }}>Item Code</th>
+                    <th style={{ ...thStyle, minWidth: '120px' }}>Part Number</th>
+                    <th style={{ ...thStyle, minWidth: '100px' }}>MSN</th>
+                    <th style={{ ...thStyle, textAlign: 'center', minWidth: '60px' }}>Rev</th>
+                    <th style={{ ...thStyle, textAlign: 'center', minWidth: '60px' }}>UOM</th>
+                    <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>Lead Time</th>
+                    <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>Status</th>
+                    <th style={{ ...thStyle, textAlign: 'center', minWidth: '200px', width: '200px' }}>Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {displayedItems.map((item, index) => (
+                    <tr
+                      key={item.id}
+                      style={{
+                        backgroundColor: index % 2 === 0 ? 'white' : 'var(--table-stripe)',
+                        borderBottom: '1px solid var(--table-border)',
+                        transition: 'background-color var(--transition-fast)',
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'var(--table-hover)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = index % 2 === 0 ? 'white' : 'var(--table-stripe)'; }}
+                    >
+                      <td style={{ ...tdStyle, fontWeight: 'var(--font-weight-medium)', color: 'var(--enterprise-gray-700)' }}>{item.item_code}</td>
+                      <td style={{ ...tdStyle, fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-primary)' }}>{item.part_number || '-'}</td>
+                      <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: '0.85em', color: 'var(--enterprise-gray-600)' }}>{item.master_serial_no || '-'}</td>
+                      <td style={{ ...tdStyle, textAlign: 'center' }}><Badge variant="info">{item.revision || '-'}</Badge></td>
+                      <td style={{ ...tdStyle, textAlign: 'center' }}>{item.uom}</td>
+                      <td style={{ ...tdStyle, textAlign: 'center' }}>{item.lead_time_days} days</td>
+                      <td style={{ ...tdStyle, textAlign: 'center' }}><Badge variant={item.is_active ? 'success' : 'neutral'}>{item.is_active ? 'Active' : 'Inactive'}</Badge></td>
+                      <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px' }}>
+                        <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', alignItems: 'center' }}>
+                          <Button variant="secondary" size="sm" icon={<Edit2 size={14} />} onClick={() => handleEdit(item)} style={{ minWidth: '55px' }}>Edit</Button>
+                          <Button variant="danger" size="sm" icon={<Trash2 size={14} />} onClick={() => handleDeleteClick(item)} style={{ minWidth: '65px' }}>Delete</Button>
+                          <Button variant="tertiary" size="sm" icon={<Eye size={14} />} onClick={() => handleView(item)} style={{ minWidth: '55px' }}>View</Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Load More Button - Outside scrollable area */}
+            {hasMoreItems && (
+              <div style={{
+                padding: '20px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '12px',
+                borderTop: '1px solid var(--table-border)',
+                position: 'relative',
+                zIndex: 10,
+                backgroundColor: 'white',
+              }}>
+                <p style={{
+                  fontSize: '13px',
+                  color: 'var(--enterprise-gray-500)',
+                  margin: 0,
+                }}>
+                  Showing {displayedItems.length} of {filteredItems.length} items
+                </p>
+                <Button
+                  variant="primary"
+                  onClick={handleLoadMore}
+                >
+                  Load More ({Math.min(ITEMS_PER_PAGE, filteredItems.length - displayedItems.length)} more)
+                </Button>
+              </div>
+            )}
+
+            {/* Show total when all loaded */}
+            {!hasMoreItems && displayedItems.length > 0 && (
+              <div style={{
+                padding: '16px',
+                textAlign: 'center',
+                borderTop: '1px solid var(--table-border)',
+              }}>
+                <p style={{
+                  fontSize: '13px',
+                  color: 'var(--enterprise-gray-500)',
+                }}>
+                  Showing all {filteredItems.length} items
+                </p>
+              </div>
+            )}
+          </>
         )}
       </Card>
 
