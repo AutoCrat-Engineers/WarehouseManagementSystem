@@ -5,7 +5,7 @@
  * NO TRANSFORMATION - frontend fields match database 1:1
  * 
  * Database: id, item_code, item_name, uom, unit_price, standard_cost, lead_time_days,
- *           is_active, created_at, updated_at, master_serial_no, revision, part_number
+ *           is_active, created_at, updated_at, master_serial_no, revision, part_number, deleted_by
  */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
@@ -386,6 +386,7 @@ function exportItemsToCSV(data: itemsApi.Item[], filename: string = 'items_expor
     'Standard Cost',
     'Lead Time (Days)',
     'Status',
+    'Deleted By',
   ];
 
   const rows = data.map(item => [
@@ -399,6 +400,7 @@ function exportItemsToCSV(data: itemsApi.Item[], filename: string = 'items_expor
     item.standard_cost ?? '',
     item.lead_time_days,
     item.is_active ? 'Active' : 'Inactive',
+    item.deleted_by || '',
   ]);
 
   const csvContent = [
@@ -1383,7 +1385,7 @@ export function ItemMasterSupabase() {
   const handleDeleteConfirm = async (deletionReason: string) => {
     if (!itemToDelete) return;
 
-    // NOTE: deletion_reason will be sent to backend when endpoint supports it
+    // Soft delete: sets is_active=false and records deleted_by from session
     console.log('Deletion reason:', deletionReason);
 
     const result = await itemsApi.deleteItem(itemToDelete.id);

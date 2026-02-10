@@ -6,7 +6,7 @@
  * 
  * Database Schema (public.items):
  * id, item_code, item_name, uom, unit_price, standard_cost, lead_time_days,
- * is_active, created_at, updated_at, master_serial_no, revision, part_number
+ * is_active, created_at, updated_at, master_serial_no, revision, part_number, deleted_by
  */
 
 import { getSupabaseClient } from '../supabase/client';
@@ -29,12 +29,13 @@ export interface Item {
   master_serial_no: string | null;
   revision: string | null;
   part_number: string | null;
+  deleted_by: string | null;
 }
 
 /**
  * Form state type - uses same DB schema fields
  */
-export type ItemFormData = Omit<Item, 'id' | 'created_at' | 'updated_at'>;
+export type ItemFormData = Omit<Item, 'id' | 'created_at' | 'updated_at' | 'deleted_by'>;
 
 /**
  * Default form values
@@ -133,17 +134,28 @@ export async function updateItem(id: string, formData: Partial<ItemFormData>): P
 }
 
 /**
- * Delete item
+ * Delete item (soft delete) - sets is_active=false and records deleted_by from session
  */
 export async function deleteItem(id: string): Promise<DeleteResult> {
   const supabase = getSupabaseClient();
 
-  const { data: session } = await supabase.auth.getSession();
-  if (!session?.session) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  if (!sessionData?.session) {
     return { success: false, error: 'Not signed in.' };
   }
 
-  const { error } = await supabase.from('items').delete().eq('id', id);
+  // Get the logged-in user's email from the session
+  const deletedBy = sessionData.session.user?.email || sessionData.session.user?.id || 'unknown';
+
+  // Soft delete: mark inactive and record who deleted
+  const { error } = await supabase
+    .from('items')
+    .update({
+      is_active: false,
+      deleted_by: deletedBy,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id);
 
   if (error) {
     return { success: false, error: error.message };
