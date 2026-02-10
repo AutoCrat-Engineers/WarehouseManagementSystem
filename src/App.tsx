@@ -275,7 +275,7 @@ export default function App() {
 
     switch (currentView) {
       case 'dashboard':
-        return <DashboardNew accessToken={accessToken} />;
+        return <DashboardNew accessToken={accessToken} onNavigate={(view) => setCurrentView(view as View)} />;
       case 'items':
         return <ItemMasterSupabase />;
       case 'inventory':
@@ -312,7 +312,7 @@ export default function App() {
         }
         return <UserManagement currentUserId={user?.id || ''} />;
       default:
-        return <DashboardNew accessToken={accessToken} />;
+        return <DashboardNew accessToken={accessToken} onNavigate={(view) => setCurrentView(view as View)} />;
     }
   };
 

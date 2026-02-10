@@ -688,7 +688,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                                             </td>
                                             <td style={{ padding: '20px 24px', position: 'relative' }}>
                                                 {user.id !== currentUserId && (
-                                                    <>
+                                                    <div ref={activeDropdown === user.id ? dropdownRef : null} style={{ position: 'relative', display: 'inline-block' }}>
                                                         <button
                                                             onClick={() => setActiveDropdown(activeDropdown === user.id ? null : user.id)}
                                                             style={{ padding: '8px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', backgroundColor: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', color: '#374151' }}
@@ -699,11 +699,10 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                                                         </button>
                                                         {activeDropdown === user.id && (
                                                             <div
-                                                                ref={dropdownRef}
                                                                 style={{
                                                                     position: 'absolute',
                                                                     top: '100%',
-                                                                    right: '24px',
+                                                                    right: '0',
                                                                     marginTop: '4px',
                                                                     zIndex: 50,
                                                                     width: '180px',
@@ -736,7 +735,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                                                                 </button>
                                                             </div>
                                                         )}
-                                                    </>
+                                                    </div>
                                                 )}
                                                 {user.id === currentUserId && (
                                                     <span style={{ color: '#94a3b8', fontSize: '12px' }}>You</span>
