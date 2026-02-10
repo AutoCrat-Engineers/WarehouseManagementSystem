@@ -5,7 +5,7 @@
  * NO TRANSFORMATION - frontend fields match database 1:1
  * 
  * Database: id, item_code, item_name, uom, unit_price, standard_cost, lead_time_days,
- *           is_active, created_at, updated_at, master_serial_no, revision, part_number
+ *           is_active, created_at, updated_at, master_serial_no, revision, part_number, deleted_by
  */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
@@ -386,6 +386,7 @@ function exportItemsToCSV(data: itemsApi.Item[], filename: string = 'items_expor
     'Standard Cost',
     'Lead Time (Days)',
     'Status',
+    'Deleted By',
   ];
 
   const rows = data.map(item => [
@@ -399,6 +400,7 @@ function exportItemsToCSV(data: itemsApi.Item[], filename: string = 'items_expor
     item.standard_cost ?? '',
     item.lead_time_days,
     item.is_active ? 'Active' : 'Inactive',
+    item.deleted_by || '',
   ]);
 
   const csvContent = [
@@ -1360,7 +1362,7 @@ export function ItemMasterSupabase() {
   const handleDeleteConfirm = async (deletionReason: string) => {
     if (!itemToDelete) return;
 
-    // NOTE: deletion_reason will be sent to backend when endpoint supports it
+    // Soft delete: sets is_active=false and records deleted_by from session
     console.log('Deletion reason:', deletionReason);
 
     const result = await itemsApi.deleteItem(itemToDelete.id);
@@ -1464,6 +1466,7 @@ export function ItemMasterSupabase() {
                   <th style={{ ...thStyle, textAlign: 'center', minWidth: '60px' }}>UOM</th>
                   <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>Lead Time</th>
                   <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>Status</th>
+                  <th style={{ ...thStyle, textAlign: 'center', minWidth: '120px' }}>Deleted By</th>
                   <th style={{ ...thStyle, textAlign: 'center', minWidth: '200px', width: '200px' }}>Actions</th>
                 </tr>
               </thead>
@@ -1486,6 +1489,7 @@ export function ItemMasterSupabase() {
                     <td style={{ ...tdStyle, textAlign: 'center' }}>{item.uom}</td>
                     <td style={{ ...tdStyle, textAlign: 'center' }}>{item.lead_time_days} days</td>
                     <td style={{ ...tdStyle, textAlign: 'center' }}><Badge variant={item.is_active ? 'success' : 'neutral'}>{item.is_active ? 'Active' : 'Inactive'}</Badge></td>
+                    <td style={{ ...tdStyle, textAlign: 'center', fontSize: 'var(--font-size-sm)', color: item.deleted_by ? 'var(--enterprise-error)' : 'var(--enterprise-gray-400)' }}>{item.deleted_by || '—'}</td>
                     <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px' }}>
                       <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', alignItems: 'center' }}>
                         <Button variant="secondary" size="sm" icon={<Edit2 size={14} />} onClick={() => handleEdit(item)} style={{ minWidth: '55px' }}>Edit</Button>
