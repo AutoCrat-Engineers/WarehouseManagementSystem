@@ -695,7 +695,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                                                         >
                                                             <Settings size={16} />
                                                             Actions
-                                                            <ChevronDown size={14} />
+                                                            <ChevronDown size={14} style={{ transform: activeDropdown === user.id ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s ease' }} />
                                                         </button>
                                                         {activeDropdown === user.id && (
                                                             <div
