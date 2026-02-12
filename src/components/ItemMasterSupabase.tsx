@@ -1403,7 +1403,7 @@ export function ItemMasterSupabase() {
     // HARD DELETE: removes item and all related data from the entire database
     console.log(`Permanently deleting item ${itemToDelete.item_code}, reason:`, deletionReason);
 
-    const result = await itemsApi.deleteItem(itemToDelete.id);
+    const result = await itemsApi.deleteItem(itemToDelete.id, deletionReason);
     if (result.error) {
       setError(result.error);
     } else {
