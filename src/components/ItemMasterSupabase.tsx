@@ -486,7 +486,7 @@ function DeleteConfirmModal({ isOpen, onClose, onConfirm, item }: DeleteConfirmM
               This action cannot be undone
             </p>
             <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--enterprise-gray-600)' }}>
-              You are about to permanently delete this item. Please confirm by entering the Part Number below.
+              You are about to <strong>permanently delete</strong> this item and <strong>all related data</strong> (inventory, warehouse stock, blanket orders, stock movements, demand forecasts, etc.) from the entire database. Please confirm by entering the Part Number below.
             </p>
           </div>
         </div>
@@ -1400,8 +1400,8 @@ export function ItemMasterSupabase() {
   const handleDeleteConfirm = async (deletionReason: string) => {
     if (!itemToDelete) return;
 
-    // Soft delete: sets is_active=false and records deleted_by from session
-    console.log('Deletion reason:', deletionReason);
+    // HARD DELETE: removes item and all related data from the entire database
+    console.log(`Permanently deleting item ${itemToDelete.item_code}, reason:`, deletionReason);
 
     const result = await itemsApi.deleteItem(itemToDelete.id);
     if (result.error) {
