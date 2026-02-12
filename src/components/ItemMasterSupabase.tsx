@@ -469,7 +469,7 @@ function DeleteConfirmModal({ isOpen, onClose, onConfirm, item }: DeleteConfirmM
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Confirm Item Deletion" maxWidth="500px">
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', userSelect: 'none' }} onCopy={(e) => e.preventDefault()}>
         {/* Warning Banner */}
         <div style={{
           background: 'linear-gradient(135deg, rgba(220,38,38,0.05) 0%, rgba(220,38,38,0.1) 100%)',
@@ -516,10 +516,37 @@ function DeleteConfirmModal({ isOpen, onClose, onConfirm, item }: DeleteConfirmM
         {/* Part Number Confirmation Input */}
         <div>
           <Label required>Type Part Number to Confirm</Label>
-          <Input
+          <input
+            type="text"
             value={partNumberInput}
             onChange={(e) => setPartNumberInput(e.target.value)}
             placeholder={`Enter "${item.part_number}" to confirm`}
+            onPaste={(e) => e.preventDefault()}
+            onCopy={(e) => e.preventDefault()}
+            onCut={(e) => e.preventDefault()}
+            onDrop={(e) => e.preventDefault()}
+            onContextMenu={(e) => e.preventDefault()}
+            autoComplete="off"
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              fontSize: 'var(--font-size-base)',
+              fontWeight: 'var(--font-weight-normal)',
+              color: 'var(--foreground)',
+              backgroundColor: 'var(--background)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--border-radius-md)',
+              outline: 'none',
+              transition: 'all var(--transition-fast)',
+            }}
+            onFocus={(e) => {
+              e.target.style.borderColor = 'var(--enterprise-primary)';
+              e.target.style.boxShadow = '0 0 0 3px rgba(30, 58, 138, 0.1)';
+            }}
+            onBlur={(e) => {
+              e.target.style.borderColor = 'var(--border-color)';
+              e.target.style.boxShadow = 'none';
+            }}
           />
           <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--enterprise-gray-500)', marginTop: '4px' }}>
             Must match exactly: <strong>{item.part_number}</strong>
