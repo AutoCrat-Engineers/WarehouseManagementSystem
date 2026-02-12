@@ -134,7 +134,22 @@ export async function updateItem(id: string, formData: Partial<ItemFormData>): P
 }
 
 /**
- * Delete item (soft delete) - sets is_active=false and records deleted_by from session
+ * Delete item (HARD DELETE) - removes item and ALL related records from the entire DB.
+ * 
+ * Cascade order (child tables first, then parent):
+ *  1. inv_blanket_release_stock  (FK → items.item_code)
+ *  2. inv_stock_ledger           (FK → items.item_code)
+ *  3. inv_movement_lines         (FK → items.item_code)
+ *  4. inv_warehouse_stock        (FK → items.item_code)
+ *  5. planning_recommendations   (FK → items.item_code)
+ *  6. demand_history             (FK → items.item_code)
+ *  7. demand_forecasts           (FK → items.item_code)
+ *  8. stock_movements            (FK → items.item_code)
+ *  9. inventory                  (FK → items.item_code)
+ * 10. blanket_releases           (FK → items.item_code)
+ * 11. blanket_order_lines        (FK → items.item_code)
+ * 12. blanket_order_items        (FK → items.id)
+ * 13. items                      (the master row)
  */
 export async function deleteItem(id: string): Promise<DeleteResult> {
   const supabase = getSupabaseClient();
@@ -144,21 +159,65 @@ export async function deleteItem(id: string): Promise<DeleteResult> {
     return { success: false, error: 'Not signed in.' };
   }
 
-  // Get the logged-in user's email from the session
-  const deletedBy = sessionData.session.user?.email || sessionData.session.user?.id || 'unknown';
-
-  // Soft delete: mark inactive and record who deleted
-  const { error } = await supabase
+  // Step 1: Get the item's item_code (needed for FK lookups in child tables)
+  const { data: item, error: fetchError } = await supabase
     .from('items')
-    .update({
-      is_active: false,
-      deleted_by: deletedBy,
-      updated_at: new Date().toISOString(),
-    })
+    .select('id, item_code')
+    .eq('id', id)
+    .single();
+
+  if (fetchError || !item) {
+    return { success: false, error: fetchError?.message || 'Item not found.' };
+  }
+
+  const itemCode = item.item_code;
+
+  // Step 2: Delete from all child tables that reference items(item_code)
+  // Order matters — deepest children first to avoid FK violations
+  const childTables = [
+    'inv_blanket_release_stock',
+    'inv_stock_ledger',
+    'inv_movement_lines',
+    'inv_warehouse_stock',
+    'planning_recommendations',
+    'demand_history',
+    'demand_forecasts',
+    'stock_movements',
+    'inventory',
+    'blanket_releases',
+    'blanket_order_lines',
+  ];
+
+  for (const table of childTables) {
+    const { error: childError } = await supabase
+      .from(table)
+      .delete()
+      .eq('item_code', itemCode);
+
+    if (childError) {
+      // Log but continue — table may not exist or may have no matching rows
+      console.warn(`Warning: Could not delete from ${table}:`, childError.message);
+    }
+  }
+
+  // Step 3: Delete from blanket_order_items (references items.id, not item_code)
+  const { error: boiError } = await supabase
+    .from('blanket_order_items')
+    .delete()
+    .eq('item_id', id);
+
+  if (boiError) {
+    console.warn('Warning: Could not delete from blanket_order_items:', boiError.message);
+  }
+
+  // Step 4: Finally delete the item itself
+  const { error: deleteError } = await supabase
+    .from('items')
+    .delete()
     .eq('id', id);
 
-  if (error) {
-    return { success: false, error: error.message };
+  if (deleteError) {
+    return { success: false, error: `Failed to delete item: ${deleteError.message}` };
   }
 
   return { success: true, error: null };
