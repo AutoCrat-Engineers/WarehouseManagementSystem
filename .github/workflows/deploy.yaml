@@ -39,8 +39,6 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_KEY }}
-          timeout: 30m
-          command_timeout: 30m
           script: |
             cd WarehouseManagementSystem
             ./devops/scripts/deploy.sh
