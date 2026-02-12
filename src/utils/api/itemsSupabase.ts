@@ -1,88 +1,65 @@
 /**
- * Items API – direct Supabase client access to public.items.
- * Uses the user's session (no Edge Function), so RLS applies and auth errors from the function are avoided.
- * Schema: id, item_code, item_name, description, category, uom, min_stock_level, max_stock_level,
- *         safety_stock, reorder_point, lead_time_days, is_active, created_at, updated_at.
+ * Items API – Direct Supabase access to public.items
+ * 
+ * SCHEMA ALIGNMENT: Frontend uses DB column names exactly (snake_case)
+ * NO TRANSFORMATION LAYER - fields match database 1:1
+ * 
+ * Database Schema (public.items):
+ * id, item_code, item_name, uom, unit_price, standard_cost, lead_time_days,
+ * is_active, created_at, updated_at, master_serial_no, revision, part_number, deleted_by
  */
 
 import { getSupabaseClient } from '../supabase/client';
 
-export interface ItemRow {
+/**
+ * Item interface - EXACTLY matches database schema (snake_case)
+ * No camelCase aliases, no transformation
+ */
+export interface Item {
   id: string;
   item_code: string;
   item_name: string;
-  description: string | null;
-  category: string | null;
   uom: string;
   unit_price: number | null;
   standard_cost: number | null;
-  min_stock_level: number;
-  max_stock_level: number;
-  safety_stock: number;
-  reorder_point: number;
   lead_time_days: number;
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  master_serial_no: string | null;
+  revision: string | null;
+  part_number: string | null;
+  deleted_by: string | null;
 }
-
-export interface ItemForm {
-  itemCode: string;
-  itemName: string;
-  uom: string;
-  minStock: number;
-  maxStock: number;
-  safetyStock: number;
-  leadTimeDays: number;
-  status: 'active' | 'inactive';
-}
-
-function rowToForm(row: ItemRow): ItemForm & { id: string; createdAt: string } {
-  return {
-    id: row.id,
-    itemCode: row.item_code,
-    itemName: row.item_name,
-    uom: row.uom ?? 'PCS',
-    minStock: row.min_stock_level ?? 0,
-    maxStock: row.max_stock_level ?? 0,
-    safetyStock: row.safety_stock ?? 0,
-    leadTimeDays: row.lead_time_days ?? 0,
-    status: row.is_active ? 'active' : 'inactive',
-    createdAt: row.created_at ?? '',
-  };
-}
-
-function formToInsert(form: ItemForm): Record<string, unknown> {
-  return {
-    item_code: form.itemCode,
-    item_name: form.itemName,
-    uom: form.uom,
-    min_stock_level: form.minStock,
-    max_stock_level: form.maxStock,
-    safety_stock: form.safetyStock,
-    lead_time_days: form.leadTimeDays,
-    is_active: form.status === 'active',
-  };
-}
-
-function formToUpdate(form: ItemForm): Record<string, unknown> {
-  return {
-    item_name: form.itemName,
-    uom: form.uom,
-    min_stock_level: form.minStock,
-    max_stock_level: form.maxStock,
-    safety_stock: form.safetyStock,
-    lead_time_days: form.leadTimeDays,
-    is_active: form.status === 'active',
-    updated_at: new Date().toISOString(),
-  };
-}
-
-export type ItemsResult = { data: (ItemForm & { id: string; createdAt: string })[]; error: null } | { data: null; error: string };
 
 /**
- * Fetch all items from public.items using the current Supabase session.
- * Fails with a clear error if not authenticated or RLS denies access.
+ * Form state type - uses same DB schema fields
+ */
+export type ItemFormData = Omit<Item, 'id' | 'created_at' | 'updated_at' | 'deleted_by'>;
+
+/**
+ * Default form values
+ */
+export const itemFormDefault: ItemFormData = {
+  item_code: '',
+  item_name: '',
+  uom: 'PCS',
+  unit_price: null,
+  standard_cost: null,
+  lead_time_days: 0,
+  is_active: true,
+  master_serial_no: '',
+  revision: '',
+  part_number: '',
+};
+
+// Result types
+export type ItemsResult = { data: Item[] | null; error: string | null };
+export type ItemResult = { data: Item | null; error: string | null };
+export type DeleteResult = { success: boolean; error: string | null };
+
+/**
+ * Fetch all items - returns raw DB data, no transformation
  */
 export async function fetchItems(): Promise<ItemsResult> {
   const supabase = getSupabaseClient();
@@ -99,72 +76,173 @@ export async function fetchItems(): Promise<ItemsResult> {
 
   if (error) {
     const msg = error.code === 'PGRST301' || error.message?.toLowerCase().includes('policy')
-      ? 'You do not have permission to view items. Check RLS policies on public.items.'
+      ? 'You do not have permission to view items. Check RLS policies.'
       : error.message;
     return { data: null, error: msg };
   }
 
-  const rows = (data ?? []) as ItemRow[];
-  return { data: rows.map(rowToForm), error: null };
+  return { data: data as Item[], error: null };
 }
 
-export type CreateItemResult = { item: (ItemForm & { id: string; createdAt: string }) | null; error: string | null };
-export type UpdateItemResult = { item: (ItemForm & { id: string; createdAt: string }) | null; error: string | null };
-export type DeleteItemResult = { ok: boolean; error: string | null };
-
-export async function createItem(form: ItemForm): Promise<CreateItemResult> {
+/**
+ * Create item - inserts raw form data to DB
+ */
+export async function createItem(formData: ItemFormData): Promise<ItemResult> {
   const supabase = getSupabaseClient();
 
   const { data: session } = await supabase.auth.getSession();
   if (!session?.session) {
-    return { item: null, error: 'Not signed in. Please sign in to create items.' };
+    return { data: null, error: 'Not signed in.' };
   }
 
   const { data, error } = await supabase
     .from('items')
-    .insert(formToInsert(form))
+    .insert(formData)
     .select()
     .single();
 
   if (error) {
-    return { item: null, error: error.message };
+    return { data: null, error: error.message };
   }
-  return { item: rowToForm(data as ItemRow), error: null };
+
+  return { data: data as Item, error: null };
 }
 
-export async function updateItem(id: string, form: ItemForm): Promise<UpdateItemResult> {
+/**
+ * Update item - updates with raw form data
+ */
+export async function updateItem(id: string, formData: Partial<ItemFormData>): Promise<ItemResult> {
   const supabase = getSupabaseClient();
 
   const { data: session } = await supabase.auth.getSession();
   if (!session?.session) {
-    return { item: null, error: 'Not signed in. Please sign in to update items.' };
+    return { data: null, error: 'Not signed in.' };
   }
 
   const { data, error } = await supabase
     .from('items')
-    .update(formToUpdate(form))
+    .update({ ...formData, updated_at: new Date().toISOString() })
     .eq('id', id)
     .select()
     .single();
 
   if (error) {
-    return { item: null, error: error.message };
+    return { data: null, error: error.message };
   }
-  return { item: rowToForm(data as ItemRow), error: null };
+
+  return { data: data as Item, error: null };
 }
 
-export async function deleteItem(id: string): Promise<DeleteItemResult> {
+/**
+ * Delete item (HARD DELETE) - removes item and ALL related records from the entire DB.
+ * 
+ * Cascade order (child tables first, then parent):
+ *  1. inv_blanket_release_stock  (FK → items.item_code)
+ *  2. inv_stock_ledger           (FK → items.item_code)
+ *  3. inv_movement_lines         (FK → items.item_code)
+ *  4. inv_warehouse_stock        (FK → items.item_code)
+ *  5. planning_recommendations   (FK → items.item_code)
+ *  6. demand_history             (FK → items.item_code)
+ *  7. demand_forecasts           (FK → items.item_code)
+ *  8. stock_movements            (FK → items.item_code)
+ *  9. inventory                  (FK → items.item_code)
+ * 10. blanket_releases           (FK → items.item_code)
+ * 11. blanket_order_lines        (FK → items.item_code)
+ * 12. blanket_order_items        (FK → items.id)
+ * 13. items                      (the master row)
+ */
+export async function deleteItem(id: string, deletionReason: string): Promise<DeleteResult> {
   const supabase = getSupabaseClient();
 
-  const { data: session } = await supabase.auth.getSession();
-  if (!session?.session) {
-    return { ok: false, error: 'Not signed in. Please sign in to delete items.' };
+  const { data: sessionData } = await supabase.auth.getSession();
+  if (!sessionData?.session) {
+    return { success: false, error: 'Not signed in.' };
   }
 
-  const { error } = await supabase.from('items').delete().eq('id', id);
+  const userId = sessionData.session.user.id;
+  const userEmail = sessionData.session.user.email;
 
-  if (error) {
-    return { ok: false, error: error.message };
+  // Step 1: Get FULL item details (for FK lookups + audit snapshot)
+  const { data: item, error: fetchError } = await supabase
+    .from('items')
+    .select('*')
+    .eq('id', id)
+    .single();
+
+  if (fetchError || !item) {
+    return { success: false, error: fetchError?.message || 'Item not found.' };
   }
-  return { ok: true, error: null };
+
+  const itemCode = item.item_code;
+
+  // Step 2: LOG THE DELETION into existing audit_log table
+  // Stores WHO deleted, WHEN, WHY (reason), and WHAT (full item snapshot)
+  const { error: auditError } = await supabase
+    .from('audit_log')
+    .insert({
+      user_id: userId,
+      action: 'DELETE_ITEM',
+      target_type: 'item',
+      target_id: itemCode,
+      old_value: {
+        ...item,
+        deletion_reason: deletionReason,
+        deleted_by_email: userEmail,
+      },
+      new_value: null, // item is being permanently removed
+    });
+
+  if (auditError) {
+    console.warn('Warning: Failed to write audit log:', auditError.message);
+    // Continue — audit failure should not block the delete operation
+  }
+
+  // Step 3: Delete from all child tables that reference items(item_code)
+  // Order matters — deepest children first to avoid FK violations
+  const childTables = [
+    'inv_blanket_release_stock',
+    'inv_stock_ledger',
+    'inv_movement_lines',
+    'inv_warehouse_stock',
+    'planning_recommendations',
+    'demand_history',
+    'demand_forecasts',
+    'stock_movements',
+    'inventory',
+    'blanket_releases',
+    'blanket_order_lines',
+  ];
+
+  for (const table of childTables) {
+    const { error: childError } = await supabase
+      .from(table)
+      .delete()
+      .eq('item_code', itemCode);
+
+    if (childError) {
+      console.warn(`Warning: Could not delete from ${table}:`, childError.message);
+    }
+  }
+
+  // Step 4: Delete from blanket_order_items (references items.id, not item_code)
+  const { error: boiError } = await supabase
+    .from('blanket_order_items')
+    .delete()
+    .eq('item_id', id);
+
+  if (boiError) {
+    console.warn('Warning: Could not delete from blanket_order_items:', boiError.message);
+  }
+
+  // Step 5: Finally delete the item itself
+  const { error: deleteError } = await supabase
+    .from('items')
+    .delete()
+    .eq('id', id);
+
+  if (deleteError) {
+    return { success: false, error: `Failed to delete item: ${deleteError.message}` };
+  }
+
+  return { success: true, error: null };
 }

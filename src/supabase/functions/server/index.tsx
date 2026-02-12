@@ -60,35 +60,35 @@
 // //     console.log('getUserFromToken: No authorization header provided');
 // //     return null;
 // //   }
-  
+
 // //   const parts = authHeader.split(' ');
 // //   if (parts.length !== 2 || parts[0] !== 'Bearer') {
 // //     console.log('getUserFromToken: Invalid authorization header format');
 // //     return null;
 // //   }
-  
+
 // //   const token = parts[1];
 // //   if (!token) {
 // //     console.log('getUserFromToken: No token found in authorization header');
 // //     return null;
 // //   }
-  
+
 // //   console.log('getUserFromToken: Validating token...');
-  
+
 // //   try {
 // //     // Use the ANON_KEY client to validate the user's access token
 // //     const { data: { user }, error } = await supabase.auth.getUser(token);
-    
+
 // //     if (error) {
 // //       console.error('getUserFromToken: Auth validation error:', error.message, error);
 // //       return null;
 // //     }
-    
+
 // //     if (!user) {
 // //       console.error('getUserFromToken: No user returned from token validation');
 // //       return null;
 // //     }
-    
+
 // //     console.log('getUserFromToken: Successfully validated user:', user.id);
 // //     return user;
 // //   } catch (error) {
@@ -121,7 +121,7 @@
 
 // //     const body = await c.req.json();
 // //     const itemId = `item:${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    
+
 // //     const item = {
 // //       id: itemId,
 // //       itemCode: body.itemCode,
@@ -210,7 +210,7 @@
 
 // //     const body = await c.req.json();
 // //     const invId = `inventory:${body.itemId}`;
-    
+
 // //     const inventory = {
 // //       id: invId,
 // //       itemId: body.itemId,
@@ -308,7 +308,7 @@
 
 // //     const body = await c.req.json();
 // //     const orderId = `blanket-order:${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    
+
 // //     const order = {
 // //       id: orderId,
 // //       orderNumber: body.orderNumber,
@@ -388,7 +388,7 @@
 
 // //     const body = await c.req.json();
 // //     const releaseId = `blanket-release:${body.blanketOrderId}:${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    
+
 // //     const release = {
 // //       id: releaseId,
 // //       blanketOrderId: body.blanketOrderId,
@@ -440,13 +440,13 @@
 // //     // Get historical releases for this item
 // //     const allOrders = await kv.getByPrefix('blanket-order:');
 // //     const itemOrders = allOrders.filter((order: any) => order.itemId === itemId);
-    
+
 // //     const allReleases = await kv.getByPrefix('blanket-release:');
 // //     const historicalData: number[] = [];
-    
+
 // //     // Aggregate monthly demand from releases
 // //     const monthlyDemand: { [key: string]: number } = {};
-    
+
 // //     for (const release of allReleases) {
 // //       const order = itemOrders.find((o: any) => o.id === release.blanketOrderId);
 // //       if (order) {
@@ -520,7 +520,7 @@
 
 // //     const itemId = c.req.param('itemId');
 // //     const forecasts = await kv.getByPrefix(`forecast:${itemId}:`);
-    
+
 // //     // Get most recent forecast
 // //     const sortedForecasts = forecasts.sort((a: any, b: any) => 
 // //       new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime()
@@ -631,10 +631,10 @@
 // //     if (!user) return c.json({ error: 'Unauthorized' }, 401);
 
 // //     const allPlanning = await kv.getByPrefix('planning:');
-    
+
 // //     // Get most recent planning for each item
 // //     const latestPlanning: { [key: string]: any } = {};
-    
+
 // //     for (const plan of allPlanning) {
 // //       const itemId = plan.itemId;
 // //       if (!latestPlanning[itemId] || 
@@ -658,7 +658,7 @@
 // //   try {
 // //     console.log('Dashboard endpoint: Received request');
 // //     console.log('Dashboard endpoint: Authorization header:', c.req.header('Authorization') ? 'Present' : 'Missing');
-    
+
 // //     const user = await getUserFromToken(c.req.header('Authorization'));
 // //     if (!user) {
 // //       console.error('Dashboard endpoint: User validation failed, returning 401');
@@ -739,20 +739,20 @@
 // // app.get('/make-server-9c637d11/debug/auth', async (c) => {
 // //   const authHeader = c.req.header('Authorization');
 // //   console.log('Debug auth endpoint: Authorization header:', authHeader);
-  
+
 // //   if (!authHeader) {
 // //     return c.json({ 
 // //       error: 'No authorization header',
 // //       received: 'null'
 // //     }, 400);
 // //   }
-  
+
 // //   const token = authHeader.split(' ')[1];
 // //   console.log('Debug auth endpoint: Token (first 20 chars):', token?.substring(0, 20));
-  
+
 // //   try {
 // //     const { data, error } = await supabase.auth.getUser(token);
-    
+
 // //     if (error) {
 // //       console.error('Debug auth endpoint: Validation error:', error);
 // //       return c.json({
@@ -761,14 +761,14 @@
 // //         code: error.status || 401
 // //       }, 401);
 // //     }
-    
+
 // //     if (!data.user) {
 // //       return c.json({
 // //         error: 'No user in response',
 // //         data
 // //       }, 401);
 // //     }
-    
+
 // //     return c.json({
 // //       success: true,
 // //       user: {
@@ -1030,7 +1030,7 @@
 // //     // Create Historical Blanket Releases (for forecasting)
 // //     const releases = [];
 // //     const now = new Date();
-    
+
 // //     // Widget A - 8 months of history with trend
 // //     const widgetAMonthly = [850, 920, 880, 1050, 1100, 1150, 1200, 1250];
 // //     for (let i = 0; i < 8; i++) {
@@ -1297,7 +1297,7 @@
 // //     if (!user) return c.json({ error: 'Unauthorized' }, 401);
 
 // //     const itemId = c.req.query('itemId');
-    
+
 // //     let movements;
 // //     if (itemId) {
 // //       // Get movements for specific item
@@ -1690,7 +1690,7 @@ const blanketReleaseService = new BlanketReleaseService(
 
 async function requireAuth(c: any, next: any) {
   const authHeader = c.req.header('Authorization');
-  
+
   if (!authHeader) {
     return c.json({ error: 'Unauthorized: No authorization header' }, 401);
   }
@@ -1704,7 +1704,7 @@ async function requireAuth(c: any, next: any) {
     // Local JWT verification using jose
     const jwksUrl = new URL(`${Deno.env.get('SUPABASE_URL')}/auth/v1/.well-known/jwks.json`);
     const JWKS = jose.createRemoteJWKSet(jwksUrl);
-    
+
     const { payload } = await jose.jwtVerify(token, JWKS, {
       issuer: `${Deno.env.get('SUPABASE_URL')}/auth/v1`,
       audience: 'authenticated',
@@ -1717,7 +1717,7 @@ async function requireAuth(c: any, next: any) {
     // Store user ID in context
     c.set('user', { id: payload.sub });
     await next();
-    
+
   } catch (error) {
     console.error('Auth verification failed:', error);
     return c.json({ error: 'Unauthorized: Invalid JWT' }, 401);
@@ -1725,29 +1725,298 @@ async function requireAuth(c: any, next: any) {
 }
 
 // ============================================================================
-// AUTHENTICATION ROUTES
+// L3 ROLE MIDDLEWARE (Admin Only Operations)
 // ============================================================================
 
-app.post('/make-server-9c637d11/auth/signup', async (c) => {
-  try {
-    const body = await c.req.json();
-    const { email, password, name } = body;
+async function requireL3(c: any, next: any) {
+  const user = c.get('user');
 
-    const { data, error } = await supabaseAdmin.auth.admin.createUser({
+  if (!user?.id) {
+    return c.json({ error: 'Unauthorized: No user context' }, 401);
+  }
+
+  try {
+    // Check if user has L3 role
+    const { data: profile, error } = await supabaseAdmin
+      .from('profiles')
+      .select('role, is_active')
+      .eq('id', user.id)
+      .single();
+
+    if (error || !profile) {
+      return c.json({ error: 'Unauthorized: User profile not found' }, 401);
+    }
+
+    if (!profile.is_active) {
+      return c.json({ error: 'Unauthorized: User account is deactivated' }, 401);
+    }
+
+    if (profile.role !== 'L3') {
+      return c.json({ error: 'Forbidden: L3 role required for this operation' }, 403);
+    }
+
+    // Store role in context for further use
+    c.set('userRole', profile.role);
+    await next();
+  } catch (error) {
+    console.error('L3 check failed:', error);
+    return c.json({ error: 'Authorization check failed' }, 500);
+  }
+}
+
+// ============================================================================
+// USER MANAGEMENT ROUTES (L3 ONLY - NO PUBLIC SIGNUP)
+// ============================================================================
+
+// Create new user (L3 only)
+app.post('/make-server-9c637d11/users/create', requireAuth, requireL3, async (c) => {
+  try {
+    const adminUser = c.get('user');
+    const body = await c.req.json();
+    const { email, password, full_name, role = 'L1', created_by } = body;
+
+    // Validate required fields
+    if (!email || !password || !full_name) {
+      return c.json({ error: 'Email, password, and full_name are required' }, 400);
+    }
+
+    // Validate role
+    if (!['L1', 'L2', 'L3'].includes(role)) {
+      return c.json({ error: 'Invalid role. Must be L1, L2, or L3' }, 400);
+    }
+
+    // Validate password strength
+    if (password.length < 6) {
+      return c.json({ error: 'Password must be at least 6 characters' }, 400);
+    }
+
+    // Create user in Supabase Auth
+    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email,
       password,
-      user_metadata: { name },
-      email_confirm: true
+      email_confirm: true, // Auto-confirm since L3 is creating the account
+      user_metadata: {
+        full_name,
+        role
+      }
+    });
+
+    if (authError) {
+      console.error('User creation error:', authError);
+      return c.json({ error: authError.message }, 400);
+    }
+
+    // The profile should be auto-created by the trigger, but let's ensure it's correct
+    const { error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .upsert({
+        id: authData.user.id,
+        email,
+        full_name,
+        role,
+        is_active: true,
+        created_by: created_by || adminUser.id,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      });
+
+    if (profileError) {
+      console.error('Profile creation error:', profileError);
+      // User was created but profile failed - try to clean up
+      await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
+      return c.json({ error: 'Failed to create user profile' }, 500);
+    }
+
+    // Log audit event
+    await supabaseAdmin.from('audit_log').insert({
+      user_id: adminUser.id,
+      action: 'CREATE_USER',
+      target_type: 'user',
+      target_id: authData.user.id,
+      new_value: { email, full_name, role }
+    });
+
+    console.log(`✓ User created: ${email} with role ${role} by admin ${adminUser.id}`);
+
+    return c.json({
+      success: true,
+      user: {
+        id: authData.user.id,
+        email,
+        full_name,
+        role,
+        is_active: true
+      }
+    });
+  } catch (error) {
+    console.error('Create user error:', error);
+    return c.json({ error: 'Failed to create user' }, 500);
+  }
+});
+
+// Reset user password (L3 only)
+app.post('/make-server-9c637d11/users/reset-password', requireAuth, requireL3, async (c) => {
+  try {
+    const adminUser = c.get('user');
+    const body = await c.req.json();
+    const { user_id, new_password } = body;
+
+    if (!user_id || !new_password) {
+      return c.json({ error: 'user_id and new_password are required' }, 400);
+    }
+
+    if (new_password.length < 6) {
+      return c.json({ error: 'Password must be at least 6 characters' }, 400);
+    }
+
+    // Update password in Supabase Auth
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(user_id, {
+      password: new_password
     });
 
     if (error) {
+      console.error('Password reset error:', error);
       return c.json({ error: error.message }, 400);
     }
 
-    return c.json({ success: true, user: data.user });
+    // Update password_changed_at in profile
+    await supabaseAdmin
+      .from('profiles')
+      .update({
+        password_changed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', user_id);
+
+    // Log audit event
+    await supabaseAdmin.from('audit_log').insert({
+      user_id: adminUser.id,
+      action: 'RESET_PASSWORD',
+      target_type: 'user',
+      target_id: user_id
+    });
+
+    console.log(`✓ Password reset for user ${user_id} by admin ${adminUser.id}`);
+
+    return c.json({ success: true });
   } catch (error) {
-    console.error('Signup error:', error);
-    return c.json({ error: 'Signup failed' }, 500);
+    console.error('Reset password error:', error);
+    return c.json({ error: 'Failed to reset password' }, 500);
+  }
+});
+
+// Get all users (L3 only)
+app.get('/make-server-9c637d11/users', requireAuth, requireL3, async (c) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('profiles')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Get users error:', error);
+      return c.json({ error: 'Failed to fetch users' }, 500);
+    }
+
+    return c.json({ users: data });
+  } catch (error) {
+    console.error('Get users error:', error);
+    return c.json({ error: 'Failed to fetch users' }, 500);
+  }
+});
+
+// Delete user (L3 only)
+app.delete('/make-server-9c637d11/users/:id', requireAuth, requireL3, async (c) => {
+  try {
+    const adminUser = c.get('user');
+    const userId = c.req.param('id');
+
+    // Prevent self-deletion
+    if (userId === adminUser.id) {
+      return c.json({ error: 'Cannot delete your own account' }, 400);
+    }
+
+    // Delete from Supabase Auth (will cascade to profiles due to FK)
+    const { error } = await supabaseAdmin.auth.admin.deleteUser(userId);
+
+    if (error) {
+      console.error('Delete user error:', error);
+      return c.json({ error: error.message }, 400);
+    }
+
+    // Log audit event
+    await supabaseAdmin.from('audit_log').insert({
+      user_id: adminUser.id,
+      action: 'DELETE_USER',
+      target_type: 'user',
+      target_id: userId
+    });
+
+    console.log(`✓ User ${userId} deleted by admin ${adminUser.id}`);
+
+    return c.json({ success: true });
+  } catch (error) {
+    console.error('Delete user error:', error);
+    return c.json({ error: 'Failed to delete user' }, 500);
+  }
+});
+
+// Get current user profile with role
+app.get('/make-server-9c637d11/auth/me', requireAuth, async (c) => {
+  try {
+    const user = c.get('user');
+
+    const { data: profile, error } = await supabaseAdmin
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single();
+
+    if (error || !profile) {
+      return c.json({ error: 'Profile not found' }, 404);
+    }
+
+    return c.json({ profile });
+  } catch (error) {
+    console.error('Get profile error:', error);
+    return c.json({ error: 'Failed to fetch profile' }, 500);
+  }
+});
+
+// Get user permissions
+app.get('/make-server-9c637d11/auth/permissions', requireAuth, async (c) => {
+  try {
+    const user = c.get('user');
+
+    // Get user role
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+    if (profileError || !profile) {
+      return c.json({ error: 'Profile not found' }, 404);
+    }
+
+    // Get permissions for role
+    const { data: permissions, error: permError } = await supabaseAdmin
+      .from('permissions')
+      .select('module, action, is_allowed')
+      .eq('role_id', profile.role);
+
+    if (permError) {
+      console.error('Get permissions error:', permError);
+      return c.json({ error: 'Failed to fetch permissions' }, 500);
+    }
+
+    return c.json({
+      role: profile.role,
+      permissions: permissions || []
+    });
+  } catch (error) {
+    console.error('Get permissions error:', error);
+    return c.json({ error: 'Failed to fetch permissions' }, 500);
   }
 });
 
@@ -1774,8 +2043,8 @@ app.post('/make-server-9c637d11/items', requireAuth, async (c) => {
     return c.json({ success: true, ...result });
   } catch (error) {
     console.error('Error creating item:', error);
-    return c.json({ 
-      error: error instanceof Error ? error.message : 'Failed to create item' 
+    return c.json({
+      error: error instanceof Error ? error.message : 'Failed to create item'
     }, 400);
   }
 });
@@ -1790,8 +2059,8 @@ app.put('/make-server-9c637d11/items/:id', requireAuth, async (c) => {
     return c.json({ success: true, item });
   } catch (error) {
     console.error('Error updating item:', error);
-    return c.json({ 
-      error: error instanceof Error ? error.message : 'Failed to update item' 
+    return c.json({
+      error: error instanceof Error ? error.message : 'Failed to update item'
     }, 400);
   }
 });
@@ -1803,8 +2072,8 @@ app.delete('/make-server-9c637d11/items/:id', requireAuth, async (c) => {
     return c.json({ success: true });
   } catch (error) {
     console.error('Error deleting item:', error);
-    return c.json({ 
-      error: error instanceof Error ? error.message : 'Failed to delete item' 
+    return c.json({
+      error: error instanceof Error ? error.message : 'Failed to delete item'
     }, 400);
   }
 });
@@ -1846,8 +2115,8 @@ app.post('/make-server-9c637d11/inventory/adjust', requireAuth, async (c) => {
     return c.json({ success: true, ...result });
   } catch (error) {
     console.error('Error adjusting stock:', error);
-    return c.json({ 
-      error: error instanceof Error ? error.message : 'Failed to adjust stock' 
+    return c.json({
+      error: error instanceof Error ? error.message : 'Failed to adjust stock'
     }, 400);
   }
 });
@@ -1886,8 +2155,8 @@ app.post('/make-server-9c637d11/blanket-orders', requireAuth, async (c) => {
     return c.json({ success: true, ...result });
   } catch (error) {
     console.error('Error creating order:', error);
-    return c.json({ 
-      error: error instanceof Error ? error.message : 'Failed to create order' 
+    return c.json({
+      error: error instanceof Error ? error.message : 'Failed to create order'
     }, 400);
   }
 });
@@ -1896,7 +2165,7 @@ app.get('/make-server-9c637d11/blanket-orders/:id', requireAuth, async (c) => {
   try {
     const orderId = c.req.param('id');
     const result = await blanketOrderService.getOrderWithLines(orderId);
-    
+
     if (!result) {
       return c.json({ error: 'Order not found' }, 404);
     }
@@ -1915,7 +2184,7 @@ app.get('/make-server-9c637d11/blanket-orders/:id', requireAuth, async (c) => {
 app.get('/make-server-9c637d11/blanket-releases', requireAuth, async (c) => {
   try {
     const orderId = c.req.query('orderId');
-    
+
     if (orderId) {
       const releases = await blanketReleaseService.getReleasesByOrderId(orderId);
       return c.json({ releases });
@@ -1938,8 +2207,8 @@ app.post('/make-server-9c637d11/blanket-releases', requireAuth, async (c) => {
     return c.json({ success: true, release });
   } catch (error) {
     console.error('Error creating release:', error);
-    return c.json({ 
-      error: error instanceof Error ? error.message : 'Failed to create release' 
+    return c.json({
+      error: error instanceof Error ? error.message : 'Failed to create release'
     }, 400);
   }
 });
@@ -1961,8 +2230,8 @@ app.put('/make-server-9c637d11/blanket-releases/:id/status', requireAuth, async 
     return c.json({ success: true, release });
   } catch (error) {
     console.error('Error updating release:', error);
-    return c.json({ 
-      error: error instanceof Error ? error.message : 'Failed to update release' 
+    return c.json({
+      error: error instanceof Error ? error.message : 'Failed to update release'
     }, 400);
   }
 });
@@ -1985,8 +2254,8 @@ app.post('/make-server-9c637d11/forecast/generate', requireAuth, async (c) => {
     return c.json({ success: true, forecasts });
   } catch (error) {
     console.error('Error generating forecast:', error);
-    return c.json({ 
-      error: error instanceof Error ? error.message : 'Failed to generate forecast' 
+    return c.json({
+      error: error instanceof Error ? error.message : 'Failed to generate forecast'
     }, 400);
   }
 });
@@ -1995,7 +2264,7 @@ app.get('/make-server-9c637d11/forecast/:itemId', requireAuth, async (c) => {
   try {
     const itemId = c.req.param('itemId');
     const forecasts = await forecastingService.getLatestForecast(itemId);
-    
+
     return c.json({ forecasts });
   } catch (error) {
     console.error('Error fetching forecast:', error);
@@ -2020,8 +2289,8 @@ app.post('/make-server-9c637d11/planning/run', requireAuth, async (c) => {
     return c.json({ success: true, recommendations });
   } catch (error) {
     console.error('Error running planning:', error);
-    return c.json({ 
-      error: error instanceof Error ? error.message : 'Failed to run planning' 
+    return c.json({
+      error: error instanceof Error ? error.message : 'Failed to run planning'
     }, 500);
   }
 });
@@ -2045,8 +2314,8 @@ app.put('/make-server-9c637d11/planning/:id/approve', requireAuth, async (c) => 
     return c.json({ success: true, recommendation });
   } catch (error) {
     console.error('Error approving recommendation:', error);
-    return c.json({ 
-      error: error instanceof Error ? error.message : 'Failed to approve recommendation' 
+    return c.json({
+      error: error instanceof Error ? error.message : 'Failed to approve recommendation'
     }, 400);
   }
 });
@@ -2070,9 +2339,9 @@ app.get('/make-server-9c637d11/dashboard', requireAuth, async (c) => {
 
     recommendations.forEach(r => {
       const status = r.priority === 'CRITICAL' ? 'critical' :
-                     r.priority === 'HIGH' ? 'warning' :
-                     r.priority === 'MEDIUM' ? 'warning' :
-                     'healthy';
+        r.priority === 'HIGH' ? 'warning' :
+          r.priority === 'MEDIUM' ? 'warning' :
+            'healthy';
       if (status in statusCounts) {
         statusCounts[status as keyof typeof statusCounts]++;
       }
@@ -2100,8 +2369,8 @@ app.get('/make-server-9c637d11/dashboard', requireAuth, async (c) => {
 // ============================================================================
 
 app.get('/make-server-9c637d11/health', (c) => {
-  return c.json({ 
-    status: 'ok', 
+  return c.json({
+    status: 'ok',
     timestamp: new Date().toISOString(),
     architecture: 'clean-layers',
     version: '2.0-enterprise'
