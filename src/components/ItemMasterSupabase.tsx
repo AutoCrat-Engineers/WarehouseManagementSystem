@@ -1461,9 +1461,9 @@ export function ItemMasterSupabase() {
         <SummaryCard
           label="Inactive Items"
           value={stats.inactiveCount}
-          icon={<AlertTriangle size={22} style={{ color: 'var(--enterprise-gray-500)' }} />}
-          color="var(--enterprise-gray-500)"
-          bgColor="rgba(107, 114, 128, 0.1)"
+          icon={<AlertTriangle size={22} style={{ color: '#b91c1c' }} />}
+          color="#b91c1c"
+          bgColor="rgba(185, 28, 28, 0.1)"
           isActive={cardFilter === 'INACTIVE'}
           onClick={() => handleCardClick('INACTIVE')}
         />
@@ -1527,7 +1527,7 @@ export function ItemMasterSupabase() {
                       <td style={{ ...tdStyle, textAlign: 'center' }}><Badge variant="info">{item.revision || '-'}</Badge></td>
                       <td style={{ ...tdStyle, textAlign: 'center' }}>{item.uom}</td>
                       <td style={{ ...tdStyle, textAlign: 'center' }}>{item.lead_time_days} days</td>
-                      <td style={{ ...tdStyle, textAlign: 'center' }}><Badge variant={item.is_active ? 'success' : 'neutral'}>{item.is_active ? 'Active' : 'Inactive'}</Badge></td>
+                      <td style={{ ...tdStyle, textAlign: 'center' }}><Badge variant={item.is_active ? 'success' : 'error'} style={!item.is_active ? { backgroundColor: '#fee2e2', color: '#b91c1c' } : {}}>{item.is_active ? 'Active' : 'Inactive'}</Badge></td>
                       {/* View Button */}
                       <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px' }}>
                         <Button variant="tertiary" size="sm" icon={<Eye size={14} />} onClick={() => handleView(item)} style={{ minWidth: '55px' }}>View</Button>
