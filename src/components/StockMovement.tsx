@@ -64,6 +64,8 @@ interface MovementRecord {
   destination_warehouse_id: string | null;
   item_code: string | null;
   item_name: string | null;
+  part_number: string | null;
+  master_serial_no: string | null;
   quantity: number | null;
   requested_quantity: number | null;
   approved_quantity: number | null;
@@ -85,7 +87,7 @@ interface ReasonCode {
 type LocationCode = 'PW' | 'IT' | 'SV' | 'US';
 type ExternalEntity = 'PRODUCTION' | 'CUSTOMER';
 type Endpoint = LocationCode | ExternalEntity;
-type StockType = 'STOCK_IN' | 'REJECTION';
+type StockType = 'STOCK_IN' | 'REJECTION' | '';
 
 type MovementType =
   | 'PRODUCTION_RECEIPT'
@@ -146,6 +148,11 @@ const MOVEMENT_TYPE_LABELS: Record<string, string> = {
   RETURN_TO_PRODUCTION: 'Return to Production',
 };
 
+// Reverse-flow movement types = Rejection; everything else = Stock In
+const REVERSE_MOVEMENT_TYPES = ['CUSTOMER_RETURN', 'RETURN_TO_PRODUCTION_FLOW', 'RETURN_TO_PRODUCTION'];
+const getStockType = (movementType: string): 'STOCK_IN' | 'REJECTION' =>
+  REVERSE_MOVEMENT_TYPES.includes(movementType) ? 'REJECTION' : 'STOCK_IN';
+
 const DB_CODE_MAP: Record<string, LocationCode> = {
   'WH-PROD-FLOOR': 'PW',
   'WH-INTRANSIT': 'IT',
@@ -163,10 +170,10 @@ const REFERENCE_TYPES = [
 
 const STATUS_CONFIG: Record<string, { color: string; bg: string; label: string }> = {
   DRAFT: { color: '#6b7280', bg: '#f9fafb', label: 'Draft' },
-  PENDING_APPROVAL: { color: '#d97706', bg: '#fffbeb', label: 'Pending Approval' },
-  APPROVED: { color: '#16a34a', bg: '#f0fdf4', label: 'Approved' },
+  PENDING_APPROVAL: { color: '#d97706', bg: '#fffbeb', label: 'Pending' },
+  APPROVED: { color: '#16a34a', bg: '#f0fdf4', label: 'Completed' },  // legacy records
   IN_PROGRESS: { color: '#2563eb', bg: '#eff6ff', label: 'In Progress' },
-  PARTIALLY_APPROVED: { color: '#2563eb', bg: '#eff6ff', label: 'Partially Approved' },
+  PARTIALLY_APPROVED: { color: '#2563eb', bg: '#eff6ff', label: 'Partial' },
   REJECTED: { color: '#dc2626', bg: '#fef2f2', label: 'Rejected' },
   CANCELLED: { color: '#6b7280', bg: '#f9fafb', label: 'Cancelled' },
   COMPLETED: { color: '#16a34a', bg: '#f0fdf4', label: 'Completed' },
@@ -267,6 +274,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<string>('ALL');
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
+  const [filterStockType, setFilterStockType] = useState<string>('ALL');
   const [showModal, setShowModal] = useState(false);
 
   // Modal form state
@@ -277,7 +285,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
   const [selectedItem, setSelectedItem] = useState<ItemResult | null>(null);
   const [warehouseStocks, setWarehouseStocks] = useState<WarehouseStock[]>([]);
   const [loadingStocks, setLoadingStocks] = useState(false);
-  const [stockType, setStockType] = useState<StockType>('STOCK_IN');
+  const [stockType, setStockType] = useState<StockType>('');
   const [selectedWarehouse, setSelectedWarehouse] = useState<LocationCode | ''>('');
   const [selectedRoute, setSelectedRoute] = useState<MovementRoute | null>(null);
   const [availableRoutes, setAvailableRoutes] = useState<MovementRoute[]>([]);
@@ -346,26 +354,47 @@ export function StockMovement({ accessToken }: StockMovementProps) {
       }
 
       const itemCodes = [...new Set(Object.values(linesMap).map(l => l.item_code))];
-      let itemNameMap: Record<string, string> = {};
+      let itemInfoMap: Record<string, { item_name: string; part_number: string | null; master_serial_no: string | null }> = {};
       if (itemCodes.length > 0) {
-        const { data: items } = await supabase.from('items').select('item_code, item_name').in('item_code', itemCodes);
-        (items || []).forEach((i: any) => { itemNameMap[i.item_code] = i.item_name; });
+        const { data: items } = await supabase.from('items').select('item_code, item_name, part_number, master_serial_no').in('item_code', itemCodes);
+        (items || []).forEach((i: any) => {
+          itemInfoMap[i.item_code] = {
+            item_name: i.item_name,
+            part_number: i.part_number || null,
+            master_serial_no: i.master_serial_no || null,
+          };
+        });
       }
 
       const records: MovementRecord[] = (headers || []).map((h: any) => {
         const line = linesMap[h.id];
         const reqQty = line?.requested_quantity || 0;
         const apprQty = line?.approved_quantity || 0;
+
+        // Smart status correction:
+        // - If DB says APPROVED but approved < requested → it's actually PARTIALLY_APPROVED
+        // - If DB says APPROVED and approved >= requested → it's COMPLETED (full approval)
+        let correctedStatus = h.status;
+        if (h.status === 'APPROVED') {
+          if (apprQty > 0 && reqQty > 0 && apprQty < reqQty) {
+            correctedStatus = 'PARTIALLY_APPROVED';
+          } else {
+            correctedStatus = 'COMPLETED';
+          }
+        }
+
         return {
           id: h.id, movement_number: h.movement_number, movement_date: h.movement_date,
-          movement_type: h.movement_type, status: h.status,
+          movement_type: h.movement_type, status: correctedStatus,
           reason_description: h.reason_description, notes: h.notes, created_at: h.created_at,
           source_warehouse: h.source_warehouse?.warehouse_name || null,
           destination_warehouse: h.destination_warehouse?.warehouse_name || null,
           source_warehouse_id: h.source_warehouse_id || null,
           destination_warehouse_id: h.destination_warehouse_id || null,
           item_code: line?.item_code || null,
-          item_name: line ? (itemNameMap[line.item_code] || line.item_code) : null,
+          item_name: line ? (itemInfoMap[line.item_code]?.item_name || line.item_code) : null,
+          part_number: line ? (itemInfoMap[line.item_code]?.part_number || null) : null,
+          master_serial_no: line ? (itemInfoMap[line.item_code]?.master_serial_no || null) : null,
           quantity: line?.actual_quantity || null,
           requested_quantity: reqQty || null,
           approved_quantity: apprQty || null,
@@ -459,7 +488,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
     setSearchQuery(item.part_number || item.item_code);
     setShowDropdown(false);
     fetchWarehouseStocks(item.item_code);
-    setSelectedWarehouse(''); setStockType('STOCK_IN'); setSelectedRoute(null);
+    setSelectedWarehouse(''); setStockType(''); setSelectedRoute(null);
     setQuantity(0); setNote(''); setFormMessage(null);
     setSelectedCategory(''); setReferenceType(''); setReferenceId('');
   };
@@ -479,7 +508,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
 
   const resetForm = () => {
     setSearchQuery(''); setSearchResults([]); setSelectedItem(null);
-    setWarehouseStocks([]); setSelectedWarehouse(''); setStockType('STOCK_IN');
+    setWarehouseStocks([]); setSelectedWarehouse(''); setStockType('');
     setSelectedRoute(null); setAvailableRoutes([]); setQuantity(0);
     setNote(''); setFormMessage(null);
     setSelectedCategory(''); setReferenceType(''); setReferenceId('');
@@ -493,7 +522,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
   // ============================================================================
 
   const handleSubmitRequest = async () => {
-    if (!selectedItem || !selectedWarehouse || !selectedRoute || quantity <= 0) {
+    if (!selectedItem || !stockType || !selectedWarehouse || !selectedRoute || quantity <= 0) {
       setFormMessage({ type: 'error', text: 'Please fill all required fields.' }); return;
     }
     if (!selectedCategory) {
@@ -515,6 +544,11 @@ export function StockMovement({ accessToken }: StockMovementProps) {
       const srcId = srcIsInternal ? getWhId(selectedRoute.from as LocationCode) : null;
       const dstId = dstIsInternal ? getWhId(selectedRoute.to as LocationCode) : null;
 
+      // DB constraint requires both warehouse IDs to be non-null.
+      // For external entities (PRODUCTION, CUSTOMER), use the internal warehouse for both.
+      const finalSrcId = srcId || dstId;
+      const finalDstId = dstId || srcId;
+
       const { data: { session } } = await supabase.auth.getSession();
       const userId = session?.user?.id;
       const movNum = `MOV-${Date.now().toString(36).toUpperCase()}`;
@@ -524,8 +558,8 @@ export function StockMovement({ accessToken }: StockMovementProps) {
         movement_number: movNum,
         movement_date: new Date().toISOString().split('T')[0],
         movement_type: selectedRoute.movementType,
-        source_warehouse_id: srcId,
-        destination_warehouse_id: dstId,
+        source_warehouse_id: finalSrcId,
+        destination_warehouse_id: finalDstId,
         status: 'PENDING_APPROVAL',
         approval_status: 'PENDING',
         reason_code: selectedCategory || null,
@@ -605,13 +639,15 @@ export function StockMovement({ accessToken }: StockMovementProps) {
       const { data: { session } } = await supabase.auth.getSession();
       const userId = session?.user?.id;
 
-      // Map action to valid movement_status enum values
-      const headerStatus = action === 'PARTIALLY_APPROVED' ? 'APPROVED' : action;
+      // Write DB-valid status values (the fetchMovements smart correction
+      // handles display: APPROVED with partial qty → "Partial", full qty → "Completed")
+      // DB only accepts: APPROVED, PENDING_APPROVAL, REJECTED (not PARTIALLY_APPROVED or COMPLETED)
+      const headerStatus = action === 'REJECTED' ? 'REJECTED' : 'APPROVED';
 
       // Update header (only columns that exist on inv_movement_headers)
       await supabase.from('inv_movement_headers').update({
         status: headerStatus,
-        approval_status: action === 'REJECTED' ? 'REJECTED' : 'APPROVED',
+        approval_status: headerStatus,
         approved_by: userId,
         approved_at: new Date().toISOString(),
       }).eq('id', reviewMovement.id);
@@ -620,7 +656,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
       await supabase.from('inv_movement_lines').update({
         approved_quantity: finalApproved,
         actual_quantity: finalApproved,
-        line_status: action,
+        line_status: headerStatus,
       }).eq('header_id', reviewMovement.id);
 
       // Create approval audit record
@@ -680,13 +716,16 @@ export function StockMovement({ accessToken }: StockMovementProps) {
   const filteredMovements = movements.filter(m => {
     const matchesSearch = !searchTerm ||
       m.movement_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      m.part_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      m.master_serial_no?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       m.item_code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      m.item_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       m.source_warehouse?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       m.destination_warehouse?.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesFilter = filterType === 'ALL' || m.movement_type === filterType;
-    const matchesStatus = filterStatus === 'ALL' || m.status === filterStatus;
-    return matchesSearch && matchesFilter && matchesStatus;
+    const matchesStatus = filterStatus === 'ALL' ||
+      (filterStatus === 'COMPLETED' ? ['COMPLETED', 'APPROVED'].includes(m.status) : m.status === filterStatus);
+    const matchesStockType = filterStockType === 'ALL' || getStockType(m.movement_type) === filterStockType;
+    return matchesSearch && matchesFilter && matchesStatus && matchesStockType;
   });
 
   const displayedMovements = filteredMovements.slice(0, displayCount);
@@ -695,7 +734,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
   // Summary counts
   const totalMovements = movements.length;
   const pendingCount = movements.filter(m => m.status === 'PENDING_APPROVAL').length;
-  const approvedCount = movements.filter(m => ['APPROVED', 'PARTIALLY_APPROVED', 'COMPLETED'].includes(m.status)).length;
+  const completedCount = movements.filter(m => ['APPROVED', 'COMPLETED'].includes(m.status)).length;
   const rejectedCount = movements.filter(m => m.status === 'REJECTED').length;
 
   // All active reason codes (no reason_type filtering needed)
@@ -706,10 +745,10 @@ export function StockMovement({ accessToken }: StockMovementProps) {
   // ============================================================================
 
   const handleExport = () => {
-    const headers = ['Movement #', 'Date', 'Type', 'Status', 'Item Code', 'Item', 'Qty', 'From', 'To', 'Reason'];
+    const headers = ['Movement #', 'Date', 'Type', 'Status', 'Part Number', 'MSN', 'Qty', 'From', 'To', 'Reason'];
     const rows = filteredMovements.map(m => [
       m.movement_number, m.movement_date, MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type,
-      m.status, m.item_code || '', m.item_name || '', m.quantity ?? '', m.source_warehouse || '—',
+      m.status, m.part_number || m.item_code || '', m.master_serial_no || '', m.quantity ?? '', m.source_warehouse || '—',
       m.destination_warehouse || '—', m.reason_description || '',
     ]);
     const csv = [headers.join(','), ...rows.map(r => r.map(c => typeof c === 'string' && c.includes(',') ? `"${c}"` : c).join(','))].join('\n');
@@ -725,9 +764,12 @@ export function StockMovement({ accessToken }: StockMovementProps) {
   // ============================================================================
 
   const getTypeBadge = (type: string) => {
-    const isReverse = ['CUSTOMER_RETURN', 'RETURN_TO_PRODUCTION_FLOW', 'RETURN_TO_PRODUCTION'].includes(type);
+    const isReverse = REVERSE_MOVEMENT_TYPES.includes(type);
     return (
-      <Badge variant={isReverse ? 'warning' : 'info'} style={{ fontSize: '11px' }}>
+      <Badge variant={isReverse ? 'warning' : 'info'} style={{
+        fontSize: '11px', width: '100%', justifyContent: 'center',
+        whiteSpace: 'nowrap', padding: '5px 6px', boxSizing: 'border-box',
+      }}>
         {MOVEMENT_TYPE_LABELS[type] || type}
       </Badge>
     );
@@ -741,7 +783,8 @@ export function StockMovement({ accessToken }: StockMovementProps) {
         style={{
           padding: '4px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: 600,
           border: `1px solid ${cfg.color}30`, background: cfg.bg, color: cfg.color,
-          cursor: movement ? 'pointer' : 'default', display: 'inline-flex', alignItems: 'center', gap: '4px',
+          cursor: movement ? 'pointer' : 'default', display: 'inline-flex', alignItems: 'center',
+          justifyContent: 'center', gap: '4px', minWidth: '95px',
         }}
       >
         <Eye size={12} /> {cfg.label}
@@ -781,16 +824,16 @@ export function StockMovement({ accessToken }: StockMovementProps) {
           isActive={filterStatus === 'ALL'} onClick={() => setFilterStatus('ALL')}
         />
         <SummaryCard
-          label="Pending Approval" value={pendingCount}
+          label="Pending" value={pendingCount}
           icon={<Clock size={22} style={{ color: '#d97706' }} />}
           color="#d97706" bgColor="rgba(217,119,6,0.1)"
           isActive={filterStatus === 'PENDING_APPROVAL'} onClick={() => setFilterStatus('PENDING_APPROVAL')}
         />
         <SummaryCard
-          label="Approved" value={approvedCount}
+          label="Completed" value={completedCount}
           icon={<CheckCircle2 size={22} style={{ color: '#16a34a' }} />}
           color="#16a34a" bgColor="rgba(22,163,74,0.1)"
-          isActive={filterStatus === 'APPROVED'} onClick={() => setFilterStatus('APPROVED')}
+          isActive={filterStatus === 'COMPLETED'} onClick={() => setFilterStatus('COMPLETED')}
         />
         <SummaryCard
           label="Rejected" value={rejectedCount}
@@ -812,7 +855,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
         }}>
           <Search size={18} style={{ color: 'var(--enterprise-gray-400)', marginRight: '10px', flexShrink: 0 }} />
           <input
-            type="text" placeholder="Search by movement #, item code, item name, warehouse..."
+            type="text" placeholder="Search by movement #, part number, MSN, warehouse..."
             value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
             style={{ border: 'none', outline: 'none', flex: 1, fontSize: '13px', color: 'var(--enterprise-gray-800)', background: 'transparent', minWidth: '180px' }}
           />
@@ -829,17 +872,26 @@ export function StockMovement({ accessToken }: StockMovementProps) {
           fontSize: '13px', fontWeight: 500, cursor: 'pointer', background: 'white',
         }}>
           <option value="ALL">All Status</option>
-          <option value="PENDING_APPROVAL">Pending Approval</option>
-          <option value="APPROVED">Approved</option>
-          <option value="PARTIALLY_APPROVED">Partially Approved</option>
-          <option value="REJECTED">Rejected</option>
+          <option value="PENDING_APPROVAL">Pending</option>
+          <option value="PARTIALLY_APPROVED">Partial</option>
           <option value="COMPLETED">Completed</option>
+          <option value="REJECTED">Rejected</option>
+        </select>
+
+        {/* Stock Type Filter */}
+        <select value={filterStockType} onChange={e => setFilterStockType(e.target.value)} style={{
+          padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--enterprise-gray-300)',
+          fontSize: '13px', fontWeight: 500, cursor: 'pointer', background: 'white',
+        }}>
+          <option value="ALL">All Stock Type</option>
+          <option value="STOCK_IN">Stock In</option>
+          <option value="REJECTION">Rejection</option>
         </select>
 
         {/* Right actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-          {(searchTerm || filterType !== 'ALL' || filterStatus !== 'ALL') && (
-            <button onClick={() => { setSearchTerm(''); setFilterType('ALL'); setFilterStatus('ALL'); }} style={{
+          {(searchTerm || filterType !== 'ALL' || filterStatus !== 'ALL' || filterStockType !== 'ALL') && (
+            <button onClick={() => { setSearchTerm(''); setFilterType('ALL'); setFilterStatus('ALL'); setFilterStockType('ALL'); }} style={{
               padding: '0 12px', height: '36px', borderRadius: '6px', border: '1px solid #dc2626',
               background: 'white', color: '#dc2626', fontSize: '13px', fontWeight: 500, cursor: 'pointer',
               display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap',
@@ -871,7 +923,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
         <EmptyState
           icon={<ArrowRightLeft size={48} style={{ color: 'var(--enterprise-gray-400)' }} />}
           title="No Stock Movements"
-          description={searchTerm || filterType !== 'ALL' ? 'No movements match your filters.' : 'Click "New Movement" to record your first stock movement.'}
+          description={searchTerm || filterType !== 'ALL' || filterStockType !== 'ALL' ? 'No movements match your filters.' : 'Click "New Movement" to record your first stock movement.'}
           action={{ label: 'New Movement', onClick: openModal }}
         />
       ) : (
@@ -881,7 +933,17 @@ export function StockMovement({ accessToken }: StockMovementProps) {
             overflow: 'hidden', boxShadow: 'var(--shadow-sm)',
           }}>
             <div style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 380px)', overflowY: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                <colgroup>
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '18%' }} />
+                  <col style={{ width: '16%' }} />
+                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '9%' }} />
+                </colgroup>
                 <thead style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--enterprise-gray-50)' }}>
                   <tr>
                     <th style={thStyle}>Movement #</th>
@@ -891,7 +953,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
                     <th style={{ ...thStyle, textAlign: 'right' }}>Req Qty</th>
                     <th style={thStyle}>From</th>
                     <th style={thStyle}>To</th>
-                    <th style={thStyle}>Status</th>
+                    <th style={{ ...thStyle, textAlign: 'center' }}>Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -903,20 +965,20 @@ export function StockMovement({ accessToken }: StockMovementProps) {
                       <td style={{ ...tdStyle, fontSize: '13px', whiteSpace: 'nowrap' }}>
                         {m.movement_date ? new Date(m.movement_date).toLocaleDateString('en-IN') : '—'}
                       </td>
-                      <td style={tdStyle}>{getTypeBadge(m.movement_type)}</td>
+                      <td style={{ ...tdStyle, padding: '12px 8px' }}>{getTypeBadge(m.movement_type)}</td>
                       <td style={tdStyle}>
-                        <div style={{ fontSize: '13px', fontWeight: 600 }}>{m.item_code || '—'}</div>
-                        {m.item_name && <div style={{ fontSize: '11px', color: 'var(--enterprise-gray-500)' }}>{m.item_name}</div>}
+                        <div style={{ fontSize: '13px', fontWeight: 600 }}>{m.part_number || m.item_code || '—'}</div>
+                        {m.master_serial_no && <div style={{ fontSize: '11px', color: 'var(--enterprise-gray-500)' }}>MSN: {m.master_serial_no}</div>}
                       </td>
                       <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontSize: '14px' }}>
                         <div style={{ fontWeight: 700 }}>{(m.requested_quantity ?? m.quantity ?? 0).toLocaleString()}</div>
                         {m.approved_quantity != null && m.status !== 'PENDING_APPROVAL' && (
-                          <div style={{ fontSize: '11px', color: '#16a34a' }}>Appr: {m.approved_quantity.toLocaleString()}</div>
+                          <div style={{ fontSize: '11px', color: '#16a34a' }}>Moved: {m.approved_quantity.toLocaleString()}</div>
                         )}
                       </td>
                       <td style={{ ...tdStyle, fontSize: '13px' }}>{m.source_warehouse || '—'}</td>
                       <td style={{ ...tdStyle, fontSize: '13px' }}>{m.destination_warehouse || '—'}</td>
-                      <td style={tdStyle}>{getStatusBadge(m.status, m)}</td>
+                      <td style={{ ...tdStyle, textAlign: 'center' }}>{getStatusBadge(m.status, m)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -954,10 +1016,12 @@ export function StockMovement({ accessToken }: StockMovementProps) {
 
           {/* Search Item */}
           <div ref={searchRef} style={{ position: 'relative' }}>
-            <label style={mLabelStyle}>
-              <Search size={14} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
-              Search Item (Part Number, MSN, or Item Code)
-            </label>
+            {!selectedItem && (
+              <label style={mLabelStyle}>
+                <Search size={14} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
+                Search Item (Part Number, MSN, or Item Code)
+              </label>
+            )}
             <div style={{ position: 'relative' }}>
               <input type="text" value={searchQuery} onChange={e => handleSearch(e.target.value)}
                 onFocus={() => searchResults.length > 0 && setShowDropdown(true)}
@@ -1028,22 +1092,32 @@ export function StockMovement({ accessToken }: StockMovementProps) {
                 <div>
                   <label style={mLabelStyle}>Stock Type *</label>
                   <select value={stockType} onChange={e => { setStockType(e.target.value as StockType); setSelectedWarehouse(''); setSelectedRoute(null); setAvailableRoutes([]); }} style={mSelectStyle}>
+                    <option value="">Select stock type...</option>
                     <option value="STOCK_IN">Stock In</option>
                     <option value="REJECTION">From Rejection</option>
                   </select>
                 </div>
-                <div style={{
-                  padding: '8px 16px', borderRadius: '8px', fontWeight: 700, fontSize: '13px',
-                  display: 'flex', alignItems: 'center', gap: '6px', height: '42px',
-                  background: stockType === 'STOCK_IN' ? '#ecfdf5' : '#fef2f2',
-                  color: stockType === 'STOCK_IN' ? '#065f46' : '#991b1b',
-                  border: `2px solid ${stockType === 'STOCK_IN' ? '#10b981' : '#ef4444'}`,
-                }}>
-                  {stockType === 'STOCK_IN' ? <><ArrowDownCircle size={16} /> IN</> : <><RefreshCw size={16} /> REJECTION</>}
-                </div>
+                {stockType && (
+                  <div style={{
+                    padding: '8px 16px', borderRadius: '8px', fontWeight: 700, fontSize: '13px',
+                    display: 'flex', alignItems: 'center', gap: '6px', height: '42px',
+                    background: stockType === 'STOCK_IN' ? '#ecfdf5' : '#fef2f2',
+                    color: stockType === 'STOCK_IN' ? '#065f46' : '#991b1b',
+                    border: `2px solid ${stockType === 'STOCK_IN' ? '#10b981' : '#ef4444'}`,
+                  }}>
+                    {stockType === 'STOCK_IN' ? <><ArrowDownCircle size={16} /> IN</> : <><RefreshCw size={16} /> REJECTION</>}
+                  </div>
+                )}
               </div>
+            </>
+          )}
 
-              {/* ── LAYOUT 2: Movement Entry Form ── */}
+          {/* ── LAYOUT 2: Movement Entry Form (appears after stock type is selected) ── */}
+          {selectedItem && stockType && (
+            <>
+              {/* Divider */}
+              <div style={{ borderTop: '1px dashed #d1d5db', margin: '4px 0' }} />
+
               {/* Row 1: Warehouse + Route */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div>
@@ -1116,10 +1190,10 @@ export function StockMovement({ accessToken }: StockMovementProps) {
               {/* Row 3: Reason Code + Quantity */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div>
-                  <label style={mLabelStyle}>Reason Category *</label>
+                  <label style={mLabelStyle}>Reason Code *</label>
                   <select value={selectedCategory} onChange={e => handleCategoryChange(e.target.value)} style={mSelectStyle}>
-                    <option value="">Select category...</option>
-                    {filteredReasonCodes.map(rc => <option key={rc.id} value={rc.category}>{rc.category.replace(/_/g, ' ')}</option>)}
+                    <option value="">Select reason code...</option>
+                    {filteredReasonCodes.map(rc => <option key={rc.id} value={rc.category}>{rc.reason_code.replace(/_/g, ' ')}</option>)}
                   </select>
                 </div>
                 <div>
@@ -1182,7 +1256,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
                 { label: 'To', value: reviewMovement.destination_warehouse || 'External' },
                 { label: 'Item', value: `${reviewMovement.item_code} — ${reviewMovement.item_name}` },
                 { label: 'Requested Qty', value: (reviewMovement.requested_quantity ?? reviewMovement.quantity ?? 0).toLocaleString() },
-                { label: 'Reason Category', value: reviewReasonCode?.category?.replace(/_/g, ' ') || reviewMovement.reason_code?.replace(/_/g, ' ') || '—' },
+                { label: 'Reason Code', value: reviewReasonCode?.reason_code?.replace(/_/g, ' ') || reviewMovement.reason_code?.replace(/_/g, ' ') || '—' },
                 { label: 'Reference', value: reviewMovement.reference_document_number ? `${reviewMovement.reference_document_type?.replace(/_/g, ' ') || ''} — ${reviewMovement.reference_document_number}` : '—' },
                 { label: 'Created', value: reviewMovement.created_at ? new Date(reviewMovement.created_at).toLocaleString('en-IN') : '—' },
               ].map(f => (
@@ -1214,11 +1288,11 @@ export function StockMovement({ accessToken }: StockMovementProps) {
               </div>
             )}
 
-            {/* Approved/Rejected Quantities */}
+            {/* Moved/Rejected Quantities */}
             {reviewMovement.status !== 'PENDING_APPROVAL' && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
                 <div style={{ padding: '10px', borderRadius: '8px', background: '#f0fdf4', border: '1px solid #bbf7d0', textAlign: 'center' }}>
-                  <div style={{ fontSize: '10px', fontWeight: 600, color: '#6b7280' }}>APPROVED</div>
+                  <div style={{ fontSize: '10px', fontWeight: 600, color: '#6b7280' }}>MOVED</div>
                   <div style={{ fontSize: '18px', fontWeight: 800, color: '#16a34a' }}>{(reviewMovement.approved_quantity ?? 0).toLocaleString()}</div>
                 </div>
                 <div style={{ padding: '10px', borderRadius: '8px', background: '#fef2f2', border: '1px solid #fecaca', textAlign: 'center' }}>
@@ -1244,7 +1318,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
                 {/* Partial Approval Input — only for eligible types */}
                 {canPartialApprove(reviewMovement.movement_type) && (
                   <div>
-                    <label style={mLabelStyle}>Approved Quantity (for partial approval)</label>
+                    <label style={mLabelStyle}>Quantity to Move (for partial)</label>
                     <input type="number" min={1} max={(reviewMovement.requested_quantity ?? 1) - 1} value={approvedQty || ''}
                       onChange={e => setApprovedQty(parseInt(e.target.value) || 0)}
                       style={mInputStyle} placeholder={`Max: ${(reviewMovement.requested_quantity ?? 0) - 1}`} />
@@ -1268,7 +1342,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
                       cursor: !supervisorNote.trim() ? 'not-allowed' : 'pointer', opacity: !supervisorNote.trim() ? 0.5 : 1,
                       display: 'flex', alignItems: 'center', gap: '6px',
                     }}>
-                      <Shield size={14} /> Partial Approve
+                      <Shield size={14} /> Partial
                     </button>
                   )}
 
@@ -1278,7 +1352,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
                     cursor: !supervisorNote.trim() ? 'not-allowed' : 'pointer', opacity: !supervisorNote.trim() ? 0.5 : 1,
                     display: 'flex', alignItems: 'center', gap: '6px',
                   }}>
-                    <CheckCircle2 size={14} /> Approve Full
+                    <CheckCircle2 size={14} /> Complete
                   </button>
                 </div>
               </>
