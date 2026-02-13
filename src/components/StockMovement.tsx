@@ -532,6 +532,24 @@ export function StockMovement({ accessToken }: StockMovementProps) {
       setFormMessage({ type: 'error', text: 'Note is required.' }); return;
     }
 
+    // STOCK VALIDATION at request time — block if source warehouse has no/insufficient stock
+    // Skip for external sources (PRODUCTION, CUSTOMER) since stock enters the system for those
+    const externalSourceTypes = ['PRODUCTION_RECEIPT', 'CUSTOMER_RETURN'];
+    if (!externalSourceTypes.includes(selectedRoute.movementType)) {
+      const srcIsInternal = Object.keys(LOCATIONS).includes(selectedRoute.from);
+      if (srcIsInternal) {
+        const availableStock = getStockForLocation(selectedRoute.from as LocationCode);
+        if (availableStock <= 0) {
+          setFormMessage({ type: 'error', text: `Cannot request movement — source warehouse "${LOCATIONS[selectedRoute.from as LocationCode]?.name}" has 0 stock for this item.` });
+          return;
+        }
+        if (quantity > availableStock) {
+          setFormMessage({ type: 'error', text: `Requested quantity (${quantity}) exceeds available stock (${availableStock}) in "${LOCATIONS[selectedRoute.from as LocationCode]?.name}".` });
+          return;
+        }
+      }
+    }
+
     setSubmitting(true); setFormMessage(null);
     try {
       const { data: warehouses } = await supabase.from('inv_warehouses').select('id, warehouse_code').eq('is_active', true);
@@ -638,6 +656,25 @@ export function StockMovement({ accessToken }: StockMovementProps) {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const userId = session?.user?.id;
+
+      // STOCK VALIDATION — check if source has enough stock before approving
+      // Skip for routes where stock comes from external sources (production/customer returns)
+      const externalSourceTypes = ['PRODUCTION_RECEIPT', 'CUSTOMER_RETURN'];
+      if (action !== 'REJECTED' && !externalSourceTypes.includes(reviewMovement.movement_type)) {
+        const srcId = reviewMovement.source_warehouse_id;
+        const itemCode = reviewMovement.item_code;
+        if (srcId && itemCode) {
+          const { data: stockRecord } = await supabase.from('inv_warehouse_stock')
+            .select('quantity_on_hand').eq('warehouse_id', srcId)
+            .eq('item_code', itemCode).eq('is_active', true).single();
+          const availableQty = stockRecord?.quantity_on_hand || 0;
+          if (availableQty < finalApproved) {
+            setReviewSubmitting(false);
+            alert(`Insufficient stock in source warehouse.\n\nAvailable: ${availableQty}\nRequested: ${finalApproved}\n\nPlease reduce the quantity or reject this movement.`);
+            return;
+          }
+        }
+      }
 
       // Write DB-valid status values (the fetchMovements smart correction
       // handles display: APPROVED with partial qty → "Partial", full qty → "Completed")
