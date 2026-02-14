@@ -28,6 +28,7 @@ import {
   FileText,
   Shield,
   Eye,
+  CalendarDays,
 } from 'lucide-react';
 import { Card, Button, Badge, Modal, LoadingSpinner, EmptyState } from './ui/EnterpriseUI';
 import { getSupabaseClient } from '../utils/supabase/client';
@@ -84,7 +85,7 @@ interface ReasonCode {
   description: string | null;
 }
 
-type LocationCode = 'PW' | 'IT' | 'SV' | 'US';
+type LocationCode = 'PW' | 'IT' | 'SV' | 'US' | 'PF';
 type ExternalEntity = 'PRODUCTION' | 'CUSTOMER';
 type Endpoint = LocationCode | ExternalEntity;
 type StockType = 'STOCK_IN' | 'REJECTION' | '';
@@ -96,7 +97,8 @@ type MovementType =
   | 'CUSTOMER_SALE'
   | 'CUSTOMER_RETURN'
   | 'RETURN_TO_PRODUCTION_FLOW'
-  | 'RETURN_TO_PRODUCTION';
+  | 'RETURN_TO_PRODUCTION'
+  | 'REJECTION_DISPOSAL';
 
 interface MovementRoute {
   from: Endpoint;
@@ -121,6 +123,7 @@ const LOCATIONS: Record<LocationCode, { name: string; icon: React.ElementType; c
   IT: { name: 'In-Transit', icon: Truck, color: '#f59e0b' },
   SV: { name: 'S&V Warehouse', icon: MapPin, color: '#10b981' },
   US: { name: 'US Warehouse', icon: MapPin, color: '#3b82f6' },
+  PF: { name: 'Production Floor', icon: ArrowDownCircle, color: '#dc2626' },
 };
 
 const VALID_ROUTES: MovementRoute[] = [
@@ -136,6 +139,7 @@ const VALID_ROUTES: MovementRoute[] = [
   { from: 'US', to: 'IT', movementType: 'RETURN_TO_PRODUCTION_FLOW', flow: 'REVERSE', label: 'US → In-Transit' },
   { from: 'IT', to: 'PW', movementType: 'RETURN_TO_PRODUCTION_FLOW', flow: 'REVERSE', label: 'In-Transit → PW' },
   { from: 'PW', to: 'PRODUCTION', movementType: 'RETURN_TO_PRODUCTION', flow: 'REVERSE', label: 'PW → Production' },
+  { from: 'PW', to: 'PF', movementType: 'REJECTION_DISPOSAL', flow: 'REVERSE', label: 'PW → Production Floor (Disposal)' },
 ];
 
 const MOVEMENT_TYPE_LABELS: Record<string, string> = {
@@ -146,12 +150,16 @@ const MOVEMENT_TYPE_LABELS: Record<string, string> = {
   CUSTOMER_RETURN: 'Customer Return',
   RETURN_TO_PRODUCTION_FLOW: 'Return to Production Flow',
   RETURN_TO_PRODUCTION: 'Return to Production',
+  REJECTION_DISPOSAL: 'Rejection Disposal (Final Removal)',
 };
 
 // Reverse-flow movement types = Rejection; everything else = Stock In
-const REVERSE_MOVEMENT_TYPES = ['CUSTOMER_RETURN', 'RETURN_TO_PRODUCTION_FLOW', 'RETURN_TO_PRODUCTION'];
+const REVERSE_MOVEMENT_TYPES = ['CUSTOMER_RETURN', 'RETURN_TO_PRODUCTION_FLOW', 'RETURN_TO_PRODUCTION', 'REJECTION_DISPOSAL'];
 const getStockType = (movementType: string): 'STOCK_IN' | 'REJECTION' =>
   REVERSE_MOVEMENT_TYPES.includes(movementType) ? 'REJECTION' : 'STOCK_IN';
+
+/** Movement types where stock is only deducted (OUT only), no destination increment */
+const OUT_ONLY_MOVEMENT_TYPES = ['REJECTION_DISPOSAL'];
 
 const DB_CODE_MAP: Record<string, LocationCode> = {
   'WH-PROD-FLOOR': 'PW',
@@ -275,6 +283,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
   const [filterType, setFilterType] = useState<string>('ALL');
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [filterStockType, setFilterStockType] = useState<string>('ALL');
+  const [filterDate, setFilterDate] = useState<string>('');
   const [showModal, setShowModal] = useState(false);
 
   // Modal form state
@@ -291,6 +300,8 @@ export function StockMovement({ accessToken }: StockMovementProps) {
   const [availableRoutes, setAvailableRoutes] = useState<MovementRoute[]>([]);
   const [quantity, setQuantity] = useState<number>(0);
   const [note, setNote] = useState('');
+  const [notePrefix, setNotePrefix] = useState('');  // Non-removable auto-message prefix
+  const noteRef = useRef<HTMLTextAreaElement>(null);
   const [submitting, setSubmitting] = useState(false);
   const [formMessage, setFormMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -398,7 +409,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
           quantity: line?.actual_quantity || null,
           requested_quantity: reqQty || null,
           approved_quantity: apprQty || null,
-          rejected_quantity: reqQty > 0 && apprQty > 0 ? reqQty - apprQty : null,
+          rejected_quantity: h.status === 'REJECTED' ? reqQty : (reqQty > 0 && apprQty > 0 ? reqQty - apprQty : 0),
           supervisor_note: null,
           requested_by: h.requested_by || null,
           reason_code: h.reason_code || null,
@@ -499,18 +510,28 @@ export function StockMovement({ accessToken }: StockMovementProps) {
     return warehouseStocks.find(s => s.warehouse_code === dbCode)?.quantity_on_hand || 0;
   };
 
-  const handleCategoryChange = (cat: string) => {
-    setSelectedCategory(cat);
-    const rc = reasonCodes.find(r => r.category === cat);
-    // Auto-fill note with description (acts as a base template)
-    setNote(rc?.description || '');
+  const handleCategoryChange = (reasonCode: string) => {
+    setSelectedCategory(reasonCode);
+    const rc = reasonCodes.find(r => r.reason_code === reasonCode);
+    // Auto-fill note with format: "Reason Code Description" - 
+    const desc = rc?.description || rc?.reason_code?.replace(/_/g, ' ') || '';
+    const prefix = desc ? `"${desc}" - ` : '';
+    setNotePrefix(prefix);
+    setNote(prefix);
+    // Place cursor after the dash+space
+    setTimeout(() => {
+      if (noteRef.current) {
+        noteRef.current.focus();
+        noteRef.current.setSelectionRange(prefix.length, prefix.length);
+      }
+    }, 50);
   };
 
   const resetForm = () => {
     setSearchQuery(''); setSearchResults([]); setSelectedItem(null);
     setWarehouseStocks([]); setSelectedWarehouse(''); setStockType('');
     setSelectedRoute(null); setAvailableRoutes([]); setQuantity(0);
-    setNote(''); setFormMessage(null);
+    setNote(''); setNotePrefix(''); setFormMessage(null);
     setSelectedCategory(''); setReferenceType(''); setReferenceId('');
   };
 
@@ -518,7 +539,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
   const closeModal = () => { setShowModal(false); resetForm(); };
 
   // ============================================================================
-  // SUBMIT REQUEST (PENDING — No Stock Movement)
+  // SUBMIT REQUEST (PENDING — No Stock Movement) or IMMEDIATE for REJECTION_DISPOSAL
   // ============================================================================
 
   const handleSubmitRequest = async () => {
@@ -571,7 +592,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
       const userId = session?.user?.id;
       const movNum = `MOV-${Date.now().toString(36).toUpperCase()}`;
 
-      // Create PENDING header — NO stock updates
+      // Create PENDING header — NO stock updates (all movements go through approval)
       const { data: header, error: hErr } = await supabase.from('inv_movement_headers').insert({
         movement_number: movNum,
         movement_date: new Date().toISOString().split('T')[0],
@@ -617,15 +638,15 @@ export function StockMovement({ accessToken }: StockMovementProps) {
 
     // Look up reason code from cached data by matching reason_code string
     if (m.reason_code) {
-      const rc = reasonCodes.find(r => r.category === m.reason_code);
+      const rc = reasonCodes.find(r => r.reason_code === m.reason_code);
       if (rc) {
         setReviewReasonCode(rc);
       } else {
-        // Fallback: fetch from DB by reason_category
+        // Fallback: fetch from DB by reason_code
         const { data } = await supabase
           .from('inv_reason_codes')
           .select('id, reason_code, category:reason_category, description')
-          .eq('reason_category', m.reason_code)
+          .eq('reason_code', m.reason_code)
           .single();
         if (data) setReviewReasonCode(data as any);
       }
@@ -710,30 +731,47 @@ export function StockMovement({ accessToken }: StockMovementProps) {
         const dstId = reviewMovement.destination_warehouse_id;
         const itemCode = reviewMovement.item_code;
         const qty = finalApproved;
+        const movType = reviewMovement.movement_type;
+        const isDisposal = OUT_ONLY_MOVEMENT_TYPES.includes(movType);
 
-        // Decrement source
-        if (srcId && itemCode) {
+        // Determine which sides are external (no stock operations needed for external entities)
+        // External SOURCE: stock comes from outside — only INCREMENT destination, no source deduction
+        const hasExternalSource = ['PRODUCTION_RECEIPT', 'CUSTOMER_RETURN'].includes(movType);
+        // External DESTINATION: stock goes outside — only DECREMENT source, no destination increment
+        const hasExternalDest = ['CUSTOMER_SALE', 'RETURN_TO_PRODUCTION'].includes(movType) || isDisposal;
+
+        // Decrement source — SKIP if source is external (stock comes from outside)
+        if (!hasExternalSource && srcId && itemCode) {
           const { data: ss } = await supabase.from('inv_warehouse_stock')
             .select('id, quantity_on_hand').eq('warehouse_id', srcId)
             .eq('item_code', itemCode).eq('is_active', true).single();
           if (ss) {
             const nq = Math.max(0, ss.quantity_on_hand - qty);
             await supabase.from('inv_warehouse_stock').update({ quantity_on_hand: nq, last_issue_date: new Date().toISOString(), updated_by: userId }).eq('id', ss.id);
-            await supabase.from('inv_stock_ledger').insert({ warehouse_id: srcId, item_code: itemCode, transaction_type: 'TRANSFER_OUT', quantity_change: -qty, quantity_before: ss.quantity_on_hand, quantity_after: nq, reference_type: reviewMovement.movement_type, reference_id: reviewMovement.id, notes: `OUT: ${qty} units | ${supervisorNote}`, created_by: userId });
+            await supabase.from('inv_stock_ledger').insert({
+              warehouse_id: srcId, item_code: itemCode,
+              transaction_type: isDisposal ? 'STOCK_REMOVAL' : 'TRANSFER_OUT',
+              quantity_change: -qty, quantity_before: ss.quantity_on_hand, quantity_after: nq,
+              reference_type: movType, reference_id: reviewMovement.id,
+              notes: isDisposal
+                ? `OUT: ${qty} units | REJECTION DISPOSAL — Final removal from system | ${supervisorNote}`
+                : `OUT: ${qty} units | ${supervisorNote}`,
+              created_by: userId,
+            });
           }
         }
-        // Increment destination
-        if (dstId && itemCode) {
+        // Increment destination — SKIP if destination is external (stock goes outside)
+        if (!hasExternalDest && dstId && itemCode) {
           const { data: ds } = await supabase.from('inv_warehouse_stock')
             .select('id, quantity_on_hand').eq('warehouse_id', dstId)
             .eq('item_code', itemCode).eq('is_active', true).single();
           if (ds) {
             const nq = ds.quantity_on_hand + qty;
             await supabase.from('inv_warehouse_stock').update({ quantity_on_hand: nq, last_receipt_date: new Date().toISOString(), updated_by: userId }).eq('id', ds.id);
-            await supabase.from('inv_stock_ledger').insert({ warehouse_id: dstId, item_code: itemCode, transaction_type: 'TRANSFER_IN', quantity_change: qty, quantity_before: ds.quantity_on_hand, quantity_after: nq, reference_type: reviewMovement.movement_type, reference_id: reviewMovement.id, notes: `IN: ${qty} units | ${supervisorNote}`, created_by: userId });
+            await supabase.from('inv_stock_ledger').insert({ warehouse_id: dstId, item_code: itemCode, transaction_type: 'TRANSFER_IN', quantity_change: qty, quantity_before: ds.quantity_on_hand, quantity_after: nq, reference_type: movType, reference_id: reviewMovement.id, notes: `IN: ${qty} units | ${supervisorNote}`, created_by: userId });
           } else {
             await supabase.from('inv_warehouse_stock').insert({ warehouse_id: dstId, item_code: itemCode, quantity_on_hand: qty, last_receipt_date: new Date().toISOString(), created_by: userId });
-            await supabase.from('inv_stock_ledger').insert({ warehouse_id: dstId, item_code: itemCode, transaction_type: 'TRANSFER_IN', quantity_change: qty, quantity_before: 0, quantity_after: qty, reference_type: reviewMovement.movement_type, reference_id: reviewMovement.id, notes: `IN: ${qty} units | ${supervisorNote}`, created_by: userId });
+            await supabase.from('inv_stock_ledger').insert({ warehouse_id: dstId, item_code: itemCode, transaction_type: 'TRANSFER_IN', quantity_change: qty, quantity_before: 0, quantity_after: qty, reference_type: movType, reference_id: reviewMovement.id, notes: `IN: ${qty} units | ${supervisorNote}`, created_by: userId });
           }
         }
       }
@@ -762,7 +800,8 @@ export function StockMovement({ accessToken }: StockMovementProps) {
     const matchesStatus = filterStatus === 'ALL' ||
       (filterStatus === 'COMPLETED' ? ['COMPLETED', 'APPROVED'].includes(m.status) : m.status === filterStatus);
     const matchesStockType = filterStockType === 'ALL' || getStockType(m.movement_type) === filterStockType;
-    return matchesSearch && matchesFilter && matchesStatus && matchesStockType;
+    const matchesDate = !filterDate || m.movement_date === filterDate;
+    return matchesSearch && matchesFilter && matchesStatus && matchesStockType && matchesDate;
   });
 
   const displayedMovements = filteredMovements.slice(0, displayCount);
@@ -804,8 +843,9 @@ export function StockMovement({ accessToken }: StockMovementProps) {
     const isReverse = REVERSE_MOVEMENT_TYPES.includes(type);
     return (
       <Badge variant={isReverse ? 'warning' : 'info'} style={{
-        fontSize: '11px', width: '100%', justifyContent: 'center',
-        whiteSpace: 'nowrap', padding: '5px 6px', boxSizing: 'border-box',
+        fontSize: '10px', width: '100%', justifyContent: 'center',
+        whiteSpace: 'nowrap', padding: '5px 4px', boxSizing: 'border-box',
+        overflow: 'hidden', textOverflow: 'ellipsis', display: 'inline-flex',
       }}>
         {MOVEMENT_TYPE_LABELS[type] || type}
       </Badge>
@@ -927,8 +967,8 @@ export function StockMovement({ accessToken }: StockMovementProps) {
 
         {/* Right actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-          {(searchTerm || filterType !== 'ALL' || filterStatus !== 'ALL' || filterStockType !== 'ALL') && (
-            <button onClick={() => { setSearchTerm(''); setFilterType('ALL'); setFilterStatus('ALL'); setFilterStockType('ALL'); }} style={{
+          {(searchTerm || filterType !== 'ALL' || filterStatus !== 'ALL' || filterStockType !== 'ALL' || filterDate) && (
+            <button onClick={() => { setSearchTerm(''); setFilterType('ALL'); setFilterStatus('ALL'); setFilterStockType('ALL'); setFilterDate(''); }} style={{
               padding: '0 12px', height: '36px', borderRadius: '6px', border: '1px solid #dc2626',
               background: 'white', color: '#dc2626', fontSize: '13px', fontWeight: 500, cursor: 'pointer',
               display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap',
@@ -972,19 +1012,60 @@ export function StockMovement({ accessToken }: StockMovementProps) {
             <div style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 380px)', overflowY: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                 <colgroup>
-                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '17%' }} />
+                  <col style={{ width: '15%' }} />
                   <col style={{ width: '9%' }} />
-                  <col style={{ width: '18%' }} />
-                  <col style={{ width: '16%' }} />
-                  <col style={{ width: '9%' }} />
-                  <col style={{ width: '13%' }} />
-                  <col style={{ width: '13%' }} />
-                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '11%' }} />
                 </colgroup>
                 <thead style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--enterprise-gray-50)' }}>
                   <tr>
                     <th style={thStyle}>Movement #</th>
-                    <th style={thStyle}>Date</th>
+                    <th style={thStyle}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        Date
+                        <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+                          <input
+                            type="date"
+                            value={filterDate}
+                            onChange={e => setFilterDate(e.target.value)}
+                            title="Filter by date"
+                            style={{
+                              width: '20px', height: '20px', padding: 0, border: 'none', background: 'transparent',
+                              cursor: 'pointer', opacity: 0, position: 'absolute', left: 0, top: 0, zIndex: 2,
+                            }}
+                          />
+                          <CalendarDays
+                            size={14}
+                            style={{
+                              cursor: 'pointer',
+                              color: filterDate ? '#2563eb' : '#9ca3af',
+                              transition: 'color 0.2s',
+                            }}
+                          />
+                        </div>
+                        {filterDate && (
+                          <>
+                            <span style={{ fontSize: '10px', color: '#2563eb', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                              {new Date(filterDate + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                            </span>
+                            <button
+                              onClick={e => { e.stopPropagation(); setFilterDate(''); }}
+                              style={{
+                                background: 'none', border: 'none', cursor: 'pointer', padding: '1px',
+                                display: 'inline-flex', alignItems: 'center', borderRadius: '3px',
+                              }}
+                              title="Clear date filter"
+                            >
+                              <X size={12} style={{ color: '#dc2626' }} />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </th>
                     <th style={thStyle}>Type</th>
                     <th style={thStyle}>Item</th>
                     <th style={{ ...thStyle, textAlign: 'right' }}>Req Qty</th>
@@ -1013,8 +1094,18 @@ export function StockMovement({ accessToken }: StockMovementProps) {
                           <div style={{ fontSize: '11px', color: '#16a34a' }}>Moved: {m.approved_quantity.toLocaleString()}</div>
                         )}
                       </td>
-                      <td style={{ ...tdStyle, fontSize: '13px' }}>{m.source_warehouse || '—'}</td>
-                      <td style={{ ...tdStyle, fontSize: '13px' }}>{m.destination_warehouse || '—'}</td>
+                      <td style={{ ...tdStyle, fontSize: '13px' }}>
+                        {m.movement_type === 'REJECTION_DISPOSAL' ? 'Production Warehouse'
+                          : m.movement_type === 'PRODUCTION_RECEIPT' ? 'Production'
+                            : m.movement_type === 'CUSTOMER_RETURN' ? 'Customer'
+                              : (m.source_warehouse || '—')}
+                      </td>
+                      <td style={{ ...tdStyle, fontSize: '13px' }}>
+                        {m.movement_type === 'REJECTION_DISPOSAL' ? 'Production Floor (Disposal)'
+                          : m.movement_type === 'PRODUCTION_RECEIPT' ? 'Production Warehouse'
+                            : m.movement_type === 'CUSTOMER_SALE' ? 'Customer'
+                              : (m.destination_warehouse || '—')}
+                      </td>
                       <td style={{ ...tdStyle, textAlign: 'center' }}>{getStatusBadge(m.status, m)}</td>
                     </tr>
                   ))}
@@ -1105,9 +1196,9 @@ export function StockMovement({ accessToken }: StockMovementProps) {
                 ))}
               </div>
 
-              {/* Stock Across Warehouses — On-Hand */}
+              {/* Stock Across Warehouses — On-Hand (exclude PF which is not a real warehouse) */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
-                {(Object.entries(LOCATIONS) as [LocationCode, typeof LOCATIONS[LocationCode]][]).map(([code, loc]) => {
+                {(Object.entries(LOCATIONS) as [LocationCode, typeof LOCATIONS[LocationCode]][]).filter(([code]) => code !== 'PF').map(([code, loc]) => {
                   const stock = getStockForLocation(code);
                   const Icon = loc.icon;
                   return (
@@ -1230,7 +1321,7 @@ export function StockMovement({ accessToken }: StockMovementProps) {
                   <label style={mLabelStyle}>Reason Code *</label>
                   <select value={selectedCategory} onChange={e => handleCategoryChange(e.target.value)} style={mSelectStyle}>
                     <option value="">Select reason code...</option>
-                    {filteredReasonCodes.map(rc => <option key={rc.id} value={rc.category}>{rc.reason_code.replace(/_/g, ' ')}</option>)}
+                    {filteredReasonCodes.map(rc => <option key={rc.id} value={rc.reason_code}>{rc.reason_code.replace(/_/g, ' ')}</option>)}
                   </select>
                 </div>
                 <div>
@@ -1243,11 +1334,72 @@ export function StockMovement({ accessToken }: StockMovementProps) {
               {/* Row 4: Note (full width) */}
               <div>
                 <label style={mLabelStyle}>Note *</label>
-                <textarea value={note} onChange={e => setNote(e.target.value)} rows={3}
-                  placeholder="Auto-filled from reason category. You may add additional notes."
-                  style={{ ...mInputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
+                <textarea
+                  ref={noteRef}
+                  value={note}
+                  onChange={e => {
+                    const val = e.target.value;
+                    // Protect the auto-message prefix — if user tries to delete it, restore it
+                    if (notePrefix && !val.startsWith(notePrefix)) {
+                      setNote(notePrefix);
+                      setTimeout(() => {
+                        if (noteRef.current) {
+                          noteRef.current.setSelectionRange(notePrefix.length, notePrefix.length);
+                        }
+                      }, 0);
+                    } else {
+                      setNote(val);
+                    }
+                  }}
+                  onKeyDown={e => {
+                    // Prevent backspace/delete from modifying the prefix
+                    if (notePrefix && noteRef.current) {
+                      const cursorPos = noteRef.current.selectionStart || 0;
+                      const selEnd = noteRef.current.selectionEnd || 0;
+                      if (e.key === 'Backspace' && cursorPos <= notePrefix.length && cursorPos === selEnd) {
+                        e.preventDefault();
+                      }
+                      if (e.key === 'Delete' && cursorPos < notePrefix.length) {
+                        e.preventDefault();
+                      }
+                    }
+                  }}
+                  onClick={() => {
+                    // If user clicks inside the prefix area, move cursor to after prefix
+                    if (notePrefix && noteRef.current) {
+                      const cursorPos = noteRef.current.selectionStart || 0;
+                      if (cursorPos < notePrefix.length) {
+                        setTimeout(() => {
+                          noteRef.current?.setSelectionRange(notePrefix.length, notePrefix.length);
+                        }, 0);
+                      }
+                    }
+                  }}
+                  rows={3}
+                  placeholder={notePrefix ? 'Add your notes after the dash...' : 'Auto-filled from reason code. You may add additional notes.'}
+                  style={{ ...mInputStyle, resize: 'vertical', fontFamily: 'inherit' }}
+                />
+                {notePrefix && (
+                  <div style={{ fontSize: '11px', color: '#6b7280', marginTop: '4px', fontStyle: 'italic' }}>
+                    💡 Auto-message from reason code is locked. Add your notes after the dash.
+                  </div>
+                )}
               </div>
             </>
+          )}
+
+          {/* Rejection Disposal Info Banner */}
+          {selectedRoute && OUT_ONLY_MOVEMENT_TYPES.includes(selectedRoute.movementType) && (
+            <div style={{
+              padding: '10px 14px', borderRadius: '8px', display: 'flex', alignItems: 'flex-start', gap: '10px',
+              background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e',
+            }}>
+              <Info size={18} style={{ flexShrink: 0, marginTop: '1px' }} />
+              <div style={{ fontSize: '12px', lineHeight: '1.5' }}>
+                <strong>Rejection Disposal:</strong> On approval, stock will be deducted from PW and removed from the system.
+                No stock will be added to Production Floor. Ledger entry will be OUT only.
+              </div>
+            </div>
           )}
 
           {/* Row 5: Action Buttons */}
@@ -1288,9 +1440,21 @@ export function StockMovement({ accessToken }: StockMovementProps) {
             }}>
               {[
                 { label: 'Movement Type', value: MOVEMENT_TYPE_LABELS[reviewMovement.movement_type] || reviewMovement.movement_type },
-                { label: 'Stock Type', value: reviewMovement.movement_type.includes('RETURN') || reviewMovement.movement_type === 'CUSTOMER_RETURN' ? 'From Rejection' : 'Stock In' },
-                { label: 'From', value: reviewMovement.source_warehouse || 'External' },
-                { label: 'To', value: reviewMovement.destination_warehouse || 'External' },
+                { label: 'Stock Type', value: getStockType(reviewMovement.movement_type) === 'REJECTION' ? 'From Rejection' : 'Stock In' },
+                {
+                  label: 'From', value:
+                    reviewMovement.movement_type === 'REJECTION_DISPOSAL' ? 'Production Warehouse'
+                      : reviewMovement.movement_type === 'PRODUCTION_RECEIPT' ? 'Production'
+                        : reviewMovement.movement_type === 'CUSTOMER_RETURN' ? 'Customer'
+                          : (reviewMovement.source_warehouse || 'External')
+                },
+                {
+                  label: 'To', value:
+                    reviewMovement.movement_type === 'REJECTION_DISPOSAL' ? 'Production Floor (Disposal)'
+                      : reviewMovement.movement_type === 'PRODUCTION_RECEIPT' ? 'Production Warehouse'
+                        : reviewMovement.movement_type === 'CUSTOMER_SALE' ? 'Customer'
+                          : (reviewMovement.destination_warehouse || 'External')
+                },
                 { label: 'Item', value: `${reviewMovement.item_code} — ${reviewMovement.item_name}` },
                 { label: 'Requested Qty', value: (reviewMovement.requested_quantity ?? reviewMovement.quantity ?? 0).toLocaleString() },
                 { label: 'Reason Code', value: reviewReasonCode?.reason_code?.replace(/_/g, ' ') || reviewMovement.reason_code?.replace(/_/g, ' ') || '—' },
