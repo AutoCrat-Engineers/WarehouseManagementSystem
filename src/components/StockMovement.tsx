@@ -1418,155 +1418,448 @@ export function StockMovement({ accessToken }: StockMovementProps) {
       </Modal>
 
       {/* ═══════════════ SUPERVISOR REVIEW MODAL ═══════════════ */}
-      <Modal isOpen={showReviewModal} onClose={() => setShowReviewModal(false)} title="Movement Review" maxWidth="680px">
-        {reviewMovement && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {/* Status Banner */}
-            <div style={{
-              padding: '12px 16px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              background: STATUS_CONFIG[reviewMovement.status]?.bg || '#f9fafb',
-              border: `1px solid ${STATUS_CONFIG[reviewMovement.status]?.color || '#6b7280'}30`,
-            }}>
-              <span style={{ fontWeight: 700, fontSize: '14px', color: STATUS_CONFIG[reviewMovement.status]?.color }}>
-                {STATUS_CONFIG[reviewMovement.status]?.label || reviewMovement.status}
-              </span>
-              <span style={{ fontSize: '12px', color: '#6b7280' }}>{reviewMovement.movement_number}</span>
+      <Modal isOpen={showReviewModal} onClose={() => setShowReviewModal(false)} title="" maxWidth="780px">
+        {reviewMovement && (() => {
+          const statusCfg = STATUS_CONFIG[reviewMovement.status] || { color: '#6b7280', bg: '#f9fafb', label: reviewMovement.status };
+          const isPending = reviewMovement.status === 'PENDING_APPROVAL';
+          const stockType = getStockType(reviewMovement.movement_type);
+          const fromLabel =
+            reviewMovement.movement_type === 'REJECTION_DISPOSAL' ? 'Production Warehouse'
+              : reviewMovement.movement_type === 'PRODUCTION_RECEIPT' ? 'Production'
+                : reviewMovement.movement_type === 'CUSTOMER_RETURN' ? 'Customer'
+                  : (reviewMovement.source_warehouse || 'External');
+          const toLabel =
+            reviewMovement.movement_type === 'REJECTION_DISPOSAL' ? 'Production Floor (Disposal)'
+              : reviewMovement.movement_type === 'PRODUCTION_RECEIPT' ? 'Production Warehouse'
+                : reviewMovement.movement_type === 'CUSTOMER_SALE' ? 'Customer'
+                  : (reviewMovement.destination_warehouse || 'External');
+          const routeLabel = `${fromLabel} → ${toLabel}`;
+
+          // Detail field renderer
+          const DetailField = ({ label, value, span = 1 }: { label: string; value: React.ReactNode; span?: number }) => (
+            <div style={{ gridColumn: span > 1 ? `span ${span}` : undefined }}>
+              <div style={{
+                fontSize: '10px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase',
+                letterSpacing: '0.5px', marginBottom: '4px',
+              }}>{label}</div>
+              <div style={{
+                fontSize: '13px', fontWeight: 600, color: '#1e293b', lineHeight: '1.4',
+                wordBreak: 'break-word',
+              }}>{value || '—'}</div>
             </div>
+          );
 
-            {/* Movement Details Grid */}
-            <div style={{
-              display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', padding: '14px',
-              borderRadius: '8px', background: '#f9fafb', border: '1px solid #e5e7eb',
-            }}>
-              {[
-                { label: 'Movement Type', value: MOVEMENT_TYPE_LABELS[reviewMovement.movement_type] || reviewMovement.movement_type },
-                { label: 'Stock Type', value: getStockType(reviewMovement.movement_type) === 'REJECTION' ? 'From Rejection' : 'Stock In' },
-                {
-                  label: 'From', value:
-                    reviewMovement.movement_type === 'REJECTION_DISPOSAL' ? 'Production Warehouse'
-                      : reviewMovement.movement_type === 'PRODUCTION_RECEIPT' ? 'Production'
-                        : reviewMovement.movement_type === 'CUSTOMER_RETURN' ? 'Customer'
-                          : (reviewMovement.source_warehouse || 'External')
-                },
-                {
-                  label: 'To', value:
-                    reviewMovement.movement_type === 'REJECTION_DISPOSAL' ? 'Production Floor (Disposal)'
-                      : reviewMovement.movement_type === 'PRODUCTION_RECEIPT' ? 'Production Warehouse'
-                        : reviewMovement.movement_type === 'CUSTOMER_SALE' ? 'Customer'
-                          : (reviewMovement.destination_warehouse || 'External')
-                },
-                { label: 'Item', value: `${reviewMovement.item_code} — ${reviewMovement.item_name}` },
-                { label: 'Requested Qty', value: (reviewMovement.requested_quantity ?? reviewMovement.quantity ?? 0).toLocaleString() },
-                { label: 'Reason Code', value: reviewReasonCode?.reason_code?.replace(/_/g, ' ') || reviewMovement.reason_code?.replace(/_/g, ' ') || '—' },
-                { label: 'Reference', value: reviewMovement.reference_document_number ? `${reviewMovement.reference_document_type?.replace(/_/g, ' ') || ''} — ${reviewMovement.reference_document_number}` : '—' },
-                { label: 'Created', value: reviewMovement.created_at ? new Date(reviewMovement.created_at).toLocaleString('en-IN') : '—' },
-              ].map(f => (
-                <div key={f.label}>
-                  <div style={{ fontSize: '10px', fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase' }}>{f.label}</div>
-                  <div style={{ fontSize: '13px', fontWeight: 600, color: '#111827', marginTop: '2px' }}>{f.value}</div>
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0px' }}>
+
+              {/* ── ROW 1: HEADER SECTION ── */}
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '14px 20px', borderRadius: '12px',
+                background: `linear-gradient(135deg, ${statusCfg.bg}, ${statusCfg.color}08)`,
+                border: `1.5px solid ${statusCfg.color}25`,
+                marginBottom: '16px',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{
+                    width: '10px', height: '10px', borderRadius: '50%', background: statusCfg.color,
+                    boxShadow: `0 0 8px ${statusCfg.color}40`,
+                  }} />
+                  <span style={{
+                    fontWeight: 800, fontSize: '15px', color: statusCfg.color,
+                    letterSpacing: '-0.2px',
+                  }}>
+                    {statusCfg.label}
+                  </span>
                 </div>
-              ))}
-            </div>
-
-            {/* Category Description */}
-            {reviewReasonCode?.description && (
-              <div style={{ padding: '10px 14px', borderRadius: '8px', background: '#fffbeb', border: '1px solid #fde68a', fontSize: '12px', color: '#92400e' }}>
-                <strong>Category Description:</strong> {reviewReasonCode.description}
+                <span style={{
+                  fontSize: '12px', fontWeight: 600, color: '#64748b',
+                  fontFamily: 'monospace', background: '#f1f5f9',
+                  padding: '4px 10px', borderRadius: '6px', border: '1px solid #e2e8f0',
+                }}>
+                  {reviewMovement.movement_number}
+                </span>
               </div>
-            )}
 
-            {/* Operator Note */}
-            {reviewMovement.reason_description && (
-              <div style={{ padding: '10px 14px', borderRadius: '8px', background: '#f0f9ff', border: '1px solid #bae6fd', fontSize: '12px', color: '#0c4a6e' }}>
-                <strong>Operator Note:</strong> {reviewMovement.reason_description}
-              </div>
-            )}
-
-            {/* Supervisor Note (if already reviewed) */}
-            {reviewMovement.supervisor_note && (
-              <div style={{ padding: '10px 14px', borderRadius: '8px', background: '#f5f3ff', border: '1px solid #c4b5fd', fontSize: '12px', color: '#5b21b6' }}>
-                <strong>Supervisor Note:</strong> {reviewMovement.supervisor_note}
-              </div>
-            )}
-
-            {/* Moved/Rejected Quantities */}
-            {reviewMovement.status !== 'PENDING_APPROVAL' && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
-                <div style={{ padding: '10px', borderRadius: '8px', background: '#f0fdf4', border: '1px solid #bbf7d0', textAlign: 'center' }}>
-                  <div style={{ fontSize: '10px', fontWeight: 600, color: '#6b7280' }}>MOVED</div>
-                  <div style={{ fontSize: '18px', fontWeight: 800, color: '#16a34a' }}>{(reviewMovement.approved_quantity ?? 0).toLocaleString()}</div>
-                </div>
-                <div style={{ padding: '10px', borderRadius: '8px', background: '#fef2f2', border: '1px solid #fecaca', textAlign: 'center' }}>
-                  <div style={{ fontSize: '10px', fontWeight: 600, color: '#6b7280' }}>REJECTED</div>
-                  <div style={{ fontSize: '18px', fontWeight: 800, color: '#dc2626' }}>{(reviewMovement.rejected_quantity ?? 0).toLocaleString()}</div>
-                </div>
-                <div style={{ padding: '10px', borderRadius: '8px', background: '#eff6ff', border: '1px solid #bfdbfe', textAlign: 'center' }}>
-                  <div style={{ fontSize: '10px', fontWeight: 600, color: '#6b7280' }}>REQUESTED</div>
-                  <div style={{ fontSize: '18px', fontWeight: 800, color: '#2563eb' }}>{(reviewMovement.requested_quantity ?? 0).toLocaleString()}</div>
-                </div>
-              </div>
-            )}
-
-            {/* Supervisor Actions — Only for PENDING_APPROVAL */}
-            {reviewMovement.status === 'PENDING_APPROVAL' && (
-              <>
-                <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '14px' }}>
-                  <label style={mLabelStyle}>Supervisor Reason *</label>
-                  <textarea value={supervisorNote} onChange={e => setSupervisorNote(e.target.value)} rows={2}
-                    placeholder="Enter reason for your decision..." style={{ ...mInputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
+              {/* ── ROWS 2–7: MOVEMENT DETAILS CARD ── */}
+              <div style={{
+                borderRadius: '12px', border: '1px solid #e2e8f0',
+                background: '#fff', overflow: 'hidden', marginBottom: '16px',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+              }}>
+                {/* Card Header */}
+                <div style={{
+                  padding: '10px 18px',
+                  background: 'linear-gradient(135deg, #f8fafc, #f1f5f9)',
+                  borderBottom: '1px solid #e2e8f0',
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                }}>
+                  <FileText size={14} style={{ color: '#475569' }} />
+                  <span style={{
+                    fontSize: '12px', fontWeight: 700, color: '#475569',
+                    textTransform: 'uppercase', letterSpacing: '0.6px',
+                  }}>Movement Details</span>
                 </div>
 
-                {/* Partial Approval Input — only for eligible types */}
-                {canPartialApprove(reviewMovement.movement_type) && (
-                  <div>
-                    <label style={mLabelStyle}>Quantity to Move (for partial)</label>
-                    <input type="number" min={1} max={(reviewMovement.requested_quantity ?? 1) - 1} value={approvedQty || ''}
-                      onChange={e => setApprovedQty(parseInt(e.target.value) || 0)}
-                      style={mInputStyle} placeholder={`Max: ${(reviewMovement.requested_quantity ?? 0) - 1}`} />
+                <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+                  {/* Row 2: Item Details */}
+                  <div style={{
+                    display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px',
+                    padding: '12px 14px', borderRadius: '8px',
+                    background: '#f8fafc', border: '1px solid #f1f5f9',
+                  }}>
+                    <DetailField label="MSN" value={reviewMovement.master_serial_no || '—'} />
+                    <DetailField label="Part Number" value={reviewMovement.part_number || '—'} />
+                    <DetailField label="Description" value={reviewMovement.item_name} />
+                    <DetailField label="Item Code" value={reviewMovement.item_code} />
                   </div>
-                )}
 
-                <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', borderTop: '1px solid #e5e7eb', paddingTop: '14px' }}>
-                  <button onClick={() => handleApproval('REJECTED')} disabled={reviewSubmitting || !supervisorNote.trim()} style={{
-                    padding: '8px 18px', borderRadius: '8px', fontWeight: 600, fontSize: '13px',
-                    border: '1px solid #dc2626', background: '#fef2f2', color: '#dc2626',
-                    cursor: !supervisorNote.trim() ? 'not-allowed' : 'pointer', opacity: !supervisorNote.trim() ? 0.5 : 1,
-                    display: 'flex', alignItems: 'center', gap: '6px',
+                  {/* Row 3: Movement Classification */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                    <DetailField
+                      label="Movement Type"
+                      value={
+                        <span style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '6px',
+                          padding: '3px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
+                          background: stockType === 'STOCK_IN' ? '#ecfdf5' : '#fef2f2',
+                          color: stockType === 'STOCK_IN' ? '#065f46' : '#991b1b',
+                          border: `1px solid ${stockType === 'STOCK_IN' ? '#a7f3d0' : '#fecaca'}`,
+                        }}>
+                          {MOVEMENT_TYPE_LABELS[reviewMovement.movement_type] || reviewMovement.movement_type}
+                        </span>
+                      }
+                    />
+                    <DetailField
+                      label="Stock Type"
+                      value={
+                        <span style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '4px',
+                          padding: '3px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: 700,
+                          background: stockType === 'STOCK_IN' ? '#eff6ff' : '#fff7ed',
+                          color: stockType === 'STOCK_IN' ? '#1d4ed8' : '#c2410c',
+                          border: `1px solid ${stockType === 'STOCK_IN' ? '#bfdbfe' : '#fed7aa'}`,
+                        }}>
+                          {stockType === 'REJECTION' ? '↩ From Rejection' : '📥 Stock In'}
+                        </span>
+                      }
+                    />
+                  </div>
+
+                  {/* Row 4: Requested By */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                    <DetailField
+                      label="Requested By"
+                      value={
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                          <div style={{
+                            width: '22px', height: '22px', borderRadius: '50%',
+                            background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: '10px', fontWeight: 700, color: '#fff',
+                          }}>
+                            {(reviewMovement.requested_by || 'O')[0].toUpperCase()}
+                          </div>
+                          <span style={{ fontSize: '12px', color: '#475569' }}>
+                            {reviewMovement.requested_by ? reviewMovement.requested_by.split('@')[0] : 'Operator'}
+                          </span>
+                        </span>
+                      }
+                    />
+                    <DetailField
+                      label="Created"
+                      value={reviewMovement.created_at ? new Date(reviewMovement.created_at).toLocaleString('en-IN', {
+                        day: '2-digit', month: 'short', year: 'numeric',
+                        hour: '2-digit', minute: '2-digit', hour12: true,
+                      }) : '—'}
+                    />
+                  </div>
+
+                  {/* Row 5: Reference Information */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                    <DetailField
+                      label="Reference Type"
+                      value={reviewMovement.reference_document_type?.replace(/_/g, ' ') || '—'}
+                    />
+                    <DetailField
+                      label="Reference ID"
+                      value={reviewMovement.reference_document_number || '—'}
+                    />
+                  </div>
+
+                  {/* Row 6: Reason Details */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                    <DetailField
+                      label="Reason Code"
+                      value={
+                        <span style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '4px',
+                          padding: '2px 8px', borderRadius: '4px', fontSize: '12px', fontWeight: 700,
+                          background: '#f1f5f9', color: '#334155', border: '1px solid #e2e8f0',
+                          fontFamily: 'monospace',
+                        }}>
+                          {reviewReasonCode?.reason_code?.replace(/_/g, ' ') || reviewMovement.reason_code?.replace(/_/g, ' ') || '—'}
+                        </span>
+                      }
+                    />
+                    <DetailField
+                      label="Description"
+                      value={reviewReasonCode?.description || '—'}
+                    />
+                  </div>
+
+                  {/* Row 7: Quantity & Route */}
+                  <div style={{
+                    display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px',
+                    padding: '12px 14px', borderRadius: '8px',
+                    background: 'linear-gradient(135deg, #fafafa, #f5f5f5)',
+                    border: '1px solid #e5e7eb',
                   }}>
-                    <XCircle size={14} /> Reject
-                  </button>
+                    <DetailField
+                      label="Quantity Requested"
+                      value={
+                        <span style={{
+                          fontSize: '20px', fontWeight: 800, color: '#1e293b',
+                          letterSpacing: '-0.5px',
+                        }}>
+                          {(reviewMovement.requested_quantity ?? reviewMovement.quantity ?? 0).toLocaleString()}
+                        </span>
+                      }
+                    />
+                    <DetailField
+                      label="Movement Route"
+                      value={
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                          <span style={{
+                            padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600,
+                            background: '#e0e7ff', color: '#3730a3', border: '1px solid #c7d2fe',
+                          }}>{fromLabel}</span>
+                          <ArrowRight size={14} style={{ color: '#94a3b8', flexShrink: 0 }} />
+                          <span style={{
+                            padding: '3px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600,
+                            background: '#dbeafe', color: '#1e40af', border: '1px solid #bfdbfe',
+                          }}>{toLabel}</span>
+                        </div>
+                      }
+                    />
+                  </div>
+                </div>
+              </div>
 
-                  {canPartialApprove(reviewMovement.movement_type) && (
-                    <button onClick={() => handleApproval('PARTIALLY_APPROVED')} disabled={reviewSubmitting || !supervisorNote.trim() || approvedQty <= 0 || approvedQty >= (reviewMovement.requested_quantity ?? 0)} style={{
-                      padding: '8px 18px', borderRadius: '8px', fontWeight: 600, fontSize: '13px',
-                      border: '1px solid #2563eb', background: '#eff6ff', color: '#2563eb',
-                      cursor: !supervisorNote.trim() ? 'not-allowed' : 'pointer', opacity: !supervisorNote.trim() ? 0.5 : 1,
+              {/* ── ROW 8: OPERATOR NOTE ── */}
+              {reviewMovement.reason_description && (
+                <div style={{
+                  padding: '12px 16px', borderRadius: '10px', marginBottom: '12px',
+                  background: 'linear-gradient(135deg, #f0f9ff, #e0f2fe)',
+                  border: '1px solid #bae6fd',
+                  display: 'flex', alignItems: 'flex-start', gap: '10px',
+                }}>
+                  <div style={{
+                    width: '28px', height: '28px', borderRadius: '8px', flexShrink: 0,
+                    background: 'linear-gradient(135deg, #0ea5e9, #0284c7)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <FileText size={14} style={{ color: '#fff' }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>
+                      Operator Note
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#0c4a6e', lineHeight: '1.5', fontWeight: 500 }}>
+                      {reviewMovement.reason_description}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Moved/Rejected Quantities (for already-reviewed) ── */}
+              {!isPending && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '12px' }}>
+                  <div style={{
+                    padding: '12px', borderRadius: '10px', textAlign: 'center',
+                    background: 'linear-gradient(135deg, #f0fdf4, #dcfce7)',
+                    border: '1px solid #bbf7d0',
+                  }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#6b7280', letterSpacing: '0.5px' }}>MOVED</div>
+                    <div style={{ fontSize: '22px', fontWeight: 800, color: '#16a34a', letterSpacing: '-0.5px' }}>{(reviewMovement.approved_quantity ?? 0).toLocaleString()}</div>
+                  </div>
+                  <div style={{
+                    padding: '12px', borderRadius: '10px', textAlign: 'center',
+                    background: 'linear-gradient(135deg, #fef2f2, #fee2e2)',
+                    border: '1px solid #fecaca',
+                  }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#6b7280', letterSpacing: '0.5px' }}>REJECTED</div>
+                    <div style={{ fontSize: '22px', fontWeight: 800, color: '#dc2626', letterSpacing: '-0.5px' }}>{(reviewMovement.rejected_quantity ?? 0).toLocaleString()}</div>
+                  </div>
+                  <div style={{
+                    padding: '12px', borderRadius: '10px', textAlign: 'center',
+                    background: 'linear-gradient(135deg, #eff6ff, #dbeafe)',
+                    border: '1px solid #bfdbfe',
+                  }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#6b7280', letterSpacing: '0.5px' }}>REQUESTED</div>
+                    <div style={{ fontSize: '22px', fontWeight: 800, color: '#2563eb', letterSpacing: '-0.5px' }}>{(reviewMovement.requested_quantity ?? 0).toLocaleString()}</div>
+                  </div>
+                </div>
+              )}
+
+              {/* Supervisor Note (if already reviewed) */}
+              {reviewMovement.supervisor_note && (
+                <div style={{
+                  padding: '12px 16px', borderRadius: '10px', marginBottom: '12px',
+                  background: 'linear-gradient(135deg, #f5f3ff, #ede9fe)',
+                  border: '1px solid #c4b5fd',
+                  display: 'flex', alignItems: 'flex-start', gap: '10px',
+                }}>
+                  <div style={{
+                    width: '28px', height: '28px', borderRadius: '8px', flexShrink: 0,
+                    background: 'linear-gradient(135deg, #8b5cf6, #7c3aed)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <Shield size={14} style={{ color: '#fff' }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#6d28d9', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>
+                      Supervisor Note
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#5b21b6', lineHeight: '1.5', fontWeight: 500 }}>
+                      {reviewMovement.supervisor_note}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── ROW 9 & 10: SUPERVISOR ACTIONS — Only for PENDING ── */}
+              {isPending && (
+                <>
+                  {/* ROW 9: Supervisor Note Input */}
+                  <div style={{
+                    padding: '16px', borderRadius: '10px', marginBottom: '4px',
+                    background: '#fafafa', border: '1px solid #e5e7eb',
+                  }}>
+                    <label style={{
                       display: 'flex', alignItems: 'center', gap: '6px',
+                      fontSize: '12px', fontWeight: 700, color: '#374151',
+                      marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.3px',
                     }}>
-                      <Shield size={14} /> Partial
-                    </button>
-                  )}
+                      <Shield size={14} style={{ color: '#6366f1' }} />
+                      Supervisor Reason *
+                    </label>
+                    <textarea
+                      value={supervisorNote}
+                      onChange={e => setSupervisorNote(e.target.value)}
+                      rows={2}
+                      placeholder="Enter reason for your decision..."
+                      style={{
+                        ...mInputStyle, resize: 'vertical', fontFamily: 'inherit',
+                        borderColor: supervisorNote.trim() ? '#a5b4fc' : '#d1d5db',
+                        boxShadow: supervisorNote.trim() ? '0 0 0 3px rgba(99,102,241,0.08)' : 'none',
+                        transition: 'all 0.2s ease',
+                      }}
+                    />
 
-                  <button onClick={() => handleApproval('APPROVED')} disabled={reviewSubmitting || !supervisorNote.trim()} style={{
-                    padding: '8px 18px', borderRadius: '8px', fontWeight: 600, fontSize: '13px',
-                    border: 'none', background: '#16a34a', color: '#fff',
-                    cursor: !supervisorNote.trim() ? 'not-allowed' : 'pointer', opacity: !supervisorNote.trim() ? 0.5 : 1,
-                    display: 'flex', alignItems: 'center', gap: '6px',
+                    {/* Partial Approval Quantity — inline within supervisor section */}
+                    {canPartialApprove(reviewMovement.movement_type) && (
+                      <div style={{ marginTop: '12px' }}>
+                        <label style={{
+                          fontSize: '11px', fontWeight: 600, color: '#6b7280',
+                          marginBottom: '6px', display: 'block',
+                        }}>
+                          Quantity to Move (for partial approval)
+                        </label>
+                        <input
+                          type="number" min={1} max={(reviewMovement.requested_quantity ?? 1) - 1}
+                          value={approvedQty || ''}
+                          onChange={e => setApprovedQty(parseInt(e.target.value) || 0)}
+                          style={{ ...mInputStyle, maxWidth: '200px' }}
+                          placeholder={`Max: ${(reviewMovement.requested_quantity ?? 0) - 1}`}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ROW 10: Action Buttons */}
+                  <div style={{
+                    display: 'flex', gap: '10px', justifyContent: 'flex-end',
+                    padding: '14px 0 4px', borderTop: '1px solid #e5e7eb',
                   }}>
-                    <CheckCircle2 size={14} /> Complete
+                    {/* Reject */}
+                    <button
+                      onClick={() => handleApproval('REJECTED')}
+                      disabled={reviewSubmitting || !supervisorNote.trim()}
+                      style={{
+                        padding: '10px 20px', borderRadius: '10px', fontWeight: 700, fontSize: '13px',
+                        border: '1.5px solid #dc2626', background: 'linear-gradient(135deg, #fff5f5, #fef2f2)', color: '#dc2626',
+                        cursor: !supervisorNote.trim() ? 'not-allowed' : 'pointer',
+                        opacity: !supervisorNote.trim() ? 0.4 : 1,
+                        display: 'flex', alignItems: 'center', gap: '6px',
+                        transition: 'all 0.2s ease',
+                        boxShadow: supervisorNote.trim() ? '0 1px 3px rgba(220,38,38,0.15)' : 'none',
+                      }}
+                    >
+                      <XCircle size={15} /> Reject
+                    </button>
+
+                    {/* Partial — only for eligible types */}
+                    {canPartialApprove(reviewMovement.movement_type) && (
+                      <button
+                        onClick={() => handleApproval('PARTIALLY_APPROVED')}
+                        disabled={reviewSubmitting || !supervisorNote.trim() || approvedQty <= 0 || approvedQty >= (reviewMovement.requested_quantity ?? 0)}
+                        style={{
+                          padding: '10px 20px', borderRadius: '10px', fontWeight: 700, fontSize: '13px',
+                          border: '1.5px solid #2563eb', background: 'linear-gradient(135deg, #f0f4ff, #eff6ff)', color: '#2563eb',
+                          cursor: !supervisorNote.trim() ? 'not-allowed' : 'pointer',
+                          opacity: !supervisorNote.trim() ? 0.4 : 1,
+                          display: 'flex', alignItems: 'center', gap: '6px',
+                          transition: 'all 0.2s ease',
+                          boxShadow: supervisorNote.trim() ? '0 1px 3px rgba(37,99,235,0.15)' : 'none',
+                        }}
+                      >
+                        <Shield size={15} /> Partial
+                      </button>
+                    )}
+
+                    {/* Complete / Approve */}
+                    <button
+                      onClick={() => handleApproval('APPROVED')}
+                      disabled={reviewSubmitting || !supervisorNote.trim()}
+                      style={{
+                        padding: '10px 24px', borderRadius: '10px', fontWeight: 700, fontSize: '13px',
+                        border: 'none', background: supervisorNote.trim()
+                          ? 'linear-gradient(135deg, #16a34a, #15803d)'
+                          : '#d1d5db',
+                        color: '#fff',
+                        cursor: !supervisorNote.trim() ? 'not-allowed' : 'pointer',
+                        opacity: !supervisorNote.trim() ? 0.7 : 1,
+                        display: 'flex', alignItems: 'center', gap: '6px',
+                        transition: 'all 0.2s ease',
+                        boxShadow: supervisorNote.trim() ? '0 2px 8px rgba(22,163,74,0.3)' : 'none',
+                      }}
+                    >
+                      <CheckCircle2 size={15} /> Complete
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* Close button for non-PENDING */}
+              {!isPending && (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: '8px' }}>
+                  <button
+                    onClick={() => setShowReviewModal(false)}
+                    style={{
+                      padding: '10px 28px', borderRadius: '10px', fontWeight: 600, fontSize: '13px',
+                      border: '1px solid #d1d5db', background: 'white', color: '#374151',
+                      cursor: 'pointer', transition: 'all 0.2s ease',
+                    }}
+                  >
+                    Close
                   </button>
                 </div>
-              </>
-            )}
-
-            {/* Close button for non-PENDING_APPROVAL */}
-            {reviewMovement.status !== 'PENDING_APPROVAL' && (
-              <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid #e5e7eb', paddingTop: '14px' }}>
-                <Button variant="tertiary" onClick={() => setShowReviewModal(false)}>Close</Button>
-              </div>
-            )}
-          </div>
-        )}
+              )}
+            </div>
+          );
+        })()}
       </Modal>
     </div>
   );
