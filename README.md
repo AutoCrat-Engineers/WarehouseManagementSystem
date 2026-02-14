@@ -2,6 +2,7 @@
 
 An enterprise-grade Inventory Planning, Forecasting, and Warehouse Management System. Designed for high-performance stock tracking, demand prediction using advanced algorithms, and seamless warehouse operations.
 
+[![Status](https://img.shields.io/badge/Status-Under--Development-blue.svg)](#)
 [![Status](https://img.shields.io/badge/Status-Production--Ready-success.svg)](#)
 [![Stack](https://img.shields.io/badge/Stack-React%20%7C%20TypeScript%20%7C%20Supabase-blue.svg)](#)
 
