@@ -38,8 +38,11 @@ import { getSupabaseClient } from '../utils/supabase/client';
 // TYPES
 // ============================================================================
 
+type UserRole = 'L1' | 'L2' | 'L3' | null;
+
 interface StockMovementProps {
   accessToken: string;
+  userRole?: UserRole;
 }
 
 interface ItemResult {
@@ -274,7 +277,10 @@ function SummaryCard({ label, value, icon, color, bgColor, isActive = false, onC
 // MAIN COMPONENT
 // ============================================================================
 
-export function StockMovement({ accessToken }: StockMovementProps) {
+export function StockMovement({ accessToken, userRole }: StockMovementProps) {
+  // RBAC helpers
+  const isOperator = userRole === 'L1';
+  const canApprove = userRole === 'L2' || userRole === 'L3'; // Supervisor or Manager
   const supabase = getSupabaseClient();
 
   // Main page state
@@ -2147,8 +2153,8 @@ export function StockMovement({ accessToken }: StockMovementProps) {
                 </div>
               )}
 
-              {/* ── ROW 9 & 10: SUPERVISOR ACTIONS — Only for PENDING ── */}
-              {isPending && (
+              {/* ── ROW 9 & 10: SUPERVISOR ACTIONS — Only for PENDING + L2/L3 roles ── */}
+              {isPending && canApprove && (
                 <>
                   {/* ROW 9: Supervisor Note Input */}
                   <div style={{
@@ -2260,11 +2266,33 @@ export function StockMovement({ accessToken }: StockMovementProps) {
                 </>
               )}
 
+              {/* Close button for operators viewing PENDING movements (view-only) */}
+              {isPending && isOperator && (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingTop: '8px', borderTop: '1px solid #e5e7eb' }}>
+                  <div style={{
+                    flex: 1, display: 'flex', alignItems: 'center', gap: '6px',
+                    fontSize: '12px', color: '#9ca3af', fontStyle: 'italic',
+                  }}>
+                    <Eye size={14} /> View-only — awaiting supervisor approval
+                  </div>
+                  <button
+                    onClick={() => setShowReviewModal(false)}
+                    style={{
+                      padding: '10px 28px', borderRadius: '10px', fontWeight: 600, fontSize: '13px',
+                      border: '1px solid #d1d5db', background: 'white', color: '#374151',
+                      cursor: 'pointer', transition: 'all 0.2s ease',
+                    }}
+                  >
+                    Close
+                  </button>
+                </div>
+              )}
+
               {/* Close / Print button for non-PENDING */}
               {!isPending && (
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingTop: '8px', borderTop: '1px solid #e5e7eb' }}>
-                  {/* Print Slip Button — only for actioned statuses */}
-                  {['COMPLETED', 'PARTIALLY_APPROVED', 'REJECTED'].includes(reviewMovement.status) && (
+                  {/* Print Slip Button — only for actioned statuses + L2/L3 only */}
+                  {!isOperator && ['COMPLETED', 'PARTIALLY_APPROVED', 'REJECTED'].includes(reviewMovement.status) && (
                     <button
                       onClick={() => handlePrintSlip(reviewMovement, statusCfg, stockType, fromLabel, toLabel)}
                       style={{

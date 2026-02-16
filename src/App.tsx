@@ -277,11 +277,11 @@ export default function App() {
       case 'dashboard':
         return <DashboardNew accessToken={accessToken} onNavigate={(view) => setCurrentView(view as View)} />;
       case 'items':
-        return <ItemMasterSupabase />;
+        return <ItemMasterSupabase userRole={userRole} />;
       case 'inventory':
         return <InventoryGrid />;
       case 'stock-movements':
-        return <StockMovement accessToken={accessToken} />;
+        return <StockMovement accessToken={accessToken} userRole={userRole} />;
       case 'orders':
         return <BlanketOrders accessToken={accessToken} />;
       case 'releases':
