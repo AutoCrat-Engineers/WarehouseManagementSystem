@@ -225,6 +225,7 @@ interface FilterBarProps {
   onAddItem: () => void;
   onClearFilters: () => void;
   hasActiveFilters: boolean;
+  showAddItem?: boolean;
 }
 
 function FilterBar({
@@ -234,6 +235,7 @@ function FilterBar({
   onAddItem,
   onClearFilters,
   hasActiveFilters,
+  showAddItem = true,
 }: FilterBarProps) {
   return (
     <div style={{
@@ -343,28 +345,30 @@ function FilterBar({
           Export CSV
         </button>
 
-        {/* Add Item Button - Primary action */}
-        <button
-          onClick={onAddItem}
-          style={{
-            padding: '0 14px',
-            height: '36px',
-            borderRadius: '6px',
-            border: 'none',
-            background: '#1e3a8a',
-            color: 'white',
-            fontSize: '13px',
-            fontWeight: 500,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          <Plus size={14} />
-          Add Item
-        </button>
+        {/* Add Item Button - Primary action (role-gated) */}
+        {showAddItem && (
+          <button
+            onClick={onAddItem}
+            style={{
+              padding: '0 14px',
+              height: '36px',
+              borderRadius: '6px',
+              border: 'none',
+              background: '#1e3a8a',
+              color: 'white',
+              fontSize: '13px',
+              fontWeight: 500,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <Plus size={14} />
+            Add Item
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1265,7 +1269,16 @@ function ItemViewModal({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
 
 /* ========== MAIN COMPONENT ========== */
 
-export function ItemMasterSupabase() {
+type UserRole = 'L1' | 'L2' | 'L3' | null;
+
+interface ItemMasterProps {
+  userRole?: UserRole;
+}
+
+export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
+  // RBAC helpers
+  const canAddItem = userRole === 'L2' || userRole === 'L3'; // Supervisor or Manager
+  const canEditDelete = userRole === 'L3'; // Manager only
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1504,6 +1517,7 @@ export function ItemMasterSupabase() {
         onAddItem={() => setShowModal(true)}
         onClearFilters={handleClearFilters}
         hasActiveFilters={hasActiveFilters}
+        showAddItem={canAddItem}
       />
 
       {/* Items Table - PRIMARY IDENTIFIER: Part Number */}
@@ -1517,7 +1531,7 @@ export function ItemMasterSupabase() {
                 ? "Try adjusting your search or filter criteria"
                 : "Create your first item or check sign-in and RLS on public.items"
             }
-            action={!hasActiveFilters ? { label: 'Add Item', onClick: () => setShowModal(true) } : undefined}
+            action={!hasActiveFilters && canAddItem ? { label: 'Add Item', onClick: () => setShowModal(true) } : undefined}
           />
         ) : (
           <>
@@ -1533,7 +1547,7 @@ export function ItemMasterSupabase() {
                     <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>Lead Time</th>
                     <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>Status</th>
                     <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>View</th>
-                    <th style={{ ...thStyle, textAlign: 'center', minWidth: '120px' }}>Actions</th>
+                    {canEditDelete && <th style={{ ...thStyle, textAlign: 'center', minWidth: '120px' }}>Actions</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -1559,67 +1573,69 @@ export function ItemMasterSupabase() {
                       <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px' }}>
                         <Button variant="tertiary" size="sm" icon={<Eye size={14} />} onClick={() => handleView(item)} style={{ minWidth: '55px' }}>View</Button>
                       </td>
-                      {/* Actions Dropdown - matches UserManagement */}
-                      <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px', position: 'relative' }}>
-                        <div ref={activeDropdown === item.id ? dropdownRef : null} style={{ position: 'relative', display: 'inline-block' }}>
-                          <button
-                            onClick={() => setActiveDropdown(activeDropdown === item.id ? null : item.id)}
-                            style={{
-                              padding: '8px 12px',
-                              border: '1px solid #e5e7eb',
-                              borderRadius: '8px',
-                              backgroundColor: activeDropdown === item.id ? '#f8fafc' : 'white',
-                              cursor: 'pointer',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                              fontSize: '13px',
-                              color: '#374151',
-                              fontWeight: 500,
-                              transition: 'all 0.15s ease',
-                            }}
-                          >
-                            <Settings size={16} />
-                            Actions
-                            <ChevronDown size={14} style={{ transition: 'transform 0.2s', transform: activeDropdown === item.id ? 'rotate(180deg)' : 'rotate(0deg)' }} />
-                          </button>
-                          {activeDropdown === item.id && (
-                            <div
+                      {/* Actions Dropdown - L3 Manager only */}
+                      {canEditDelete && (
+                        <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px', position: 'relative' }}>
+                          <div ref={activeDropdown === item.id ? dropdownRef : null} style={{ position: 'relative', display: 'inline-block' }}>
+                            <button
+                              onClick={() => setActiveDropdown(activeDropdown === item.id ? null : item.id)}
                               style={{
-                                position: 'absolute',
-                                top: '100%',
-                                right: '0',
-                                marginTop: '4px',
-                                zIndex: 50,
-                                width: '180px',
-                                backgroundColor: 'white',
-                                borderRadius: '12px',
-                                boxShadow: '0 10px 40px rgba(0,0,0,0.15)',
+                                padding: '8px 12px',
                                 border: '1px solid #e5e7eb',
-                                overflow: 'hidden',
+                                borderRadius: '8px',
+                                backgroundColor: activeDropdown === item.id ? '#f8fafc' : 'white',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                fontSize: '13px',
+                                color: '#374151',
+                                fontWeight: 500,
+                                transition: 'all 0.15s ease',
                               }}
                             >
-                              <button
-                                onClick={() => { handleEdit(item); setActiveDropdown(null); }}
-                                style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
-                                onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
-                                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                              <Settings size={16} />
+                              Actions
+                              <ChevronDown size={14} style={{ transition: 'transform 0.2s', transform: activeDropdown === item.id ? 'rotate(180deg)' : 'rotate(0deg)' }} />
+                            </button>
+                            {activeDropdown === item.id && (
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  top: '100%',
+                                  right: '0',
+                                  marginTop: '4px',
+                                  zIndex: 50,
+                                  width: '180px',
+                                  backgroundColor: 'white',
+                                  borderRadius: '12px',
+                                  boxShadow: '0 10px 40px rgba(0,0,0,0.15)',
+                                  border: '1px solid #e5e7eb',
+                                  overflow: 'hidden',
+                                }}
                               >
-                                <Edit2 size={16} /> Edit Item
-                              </button>
-                              <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
-                              <button
-                                onClick={() => { handleDeleteClick(item); setActiveDropdown(null); }}
-                                style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
-                                onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#fef2f2'; }}
-                                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-                              >
-                                <Trash2 size={16} /> Delete Item
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </td>
+                                <button
+                                  onClick={() => { handleEdit(item); setActiveDropdown(null); }}
+                                  style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                >
+                                  <Edit2 size={16} /> Edit Item
+                                </button>
+                                <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
+                                <button
+                                  onClick={() => { handleDeleteClick(item); setActiveDropdown(null); }}
+                                  style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#fef2f2'; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                >
+                                  <Trash2 size={16} /> Delete Item
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
