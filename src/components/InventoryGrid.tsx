@@ -848,7 +848,7 @@ export function InventoryGrid() {
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             {/* Summary Cards - Responsive Grid with Click-to-Filter */}
-            <div style={{
+            <div className="summary-cards-grid" style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
                 gap: '14px',
@@ -918,7 +918,7 @@ export function InventoryGrid() {
                     />
                 ) : (
                     <>
-                        <div style={{ overflowX: 'auto' }}>
+                        <div className="table-responsive" style={{ overflowX: 'auto' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                                 <thead>
                                     <tr style={{

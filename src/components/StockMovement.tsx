@@ -1223,7 +1223,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   return (
     <div>
       {/* ─── SUMMARY CARDS ─── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '20px' }}>
+      <div className="summary-cards-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '20px' }}>
         <SummaryCard
           label="Total Movements" value={totalMovements}
           icon={<ArrowRightLeft size={22} style={{ color: '#1e3a8a' }} />}
@@ -1251,7 +1251,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
       </div>
 
       {/* ─── FILTER BAR ─── */}
-      <div style={{
+      <div className="filter-bar" style={{
         display: 'flex', alignItems: 'center', marginBottom: '16px', gap: '12px', flexWrap: 'wrap',
         background: 'white', padding: '10px 16px', borderRadius: '8px', border: '1px solid var(--enterprise-gray-200)',
       }}>
@@ -1408,7 +1408,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
             background: 'white', borderRadius: '8px', border: '1px solid var(--enterprise-gray-200)',
             overflow: 'hidden', boxShadow: 'var(--shadow-sm)',
           }}>
-            <div style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 380px)', overflowY: 'auto' }}>
+            <div className="table-responsive" style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 380px)', overflowY: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                 <colgroup>
                   <col style={{ width: '12%' }} />

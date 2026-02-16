@@ -22,7 +22,7 @@ export interface Item {
   uom: string;
   unit_price: number | null;
   standard_cost: number | null;
-  lead_time_days: number;
+  lead_time_days: string;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -46,7 +46,7 @@ export const itemFormDefault: ItemFormData = {
   uom: 'PCS',
   unit_price: null,
   standard_cost: null,
-  lead_time_days: 0,
+  lead_time_days: '',
   is_active: true,
   master_serial_no: '',
   revision: '',

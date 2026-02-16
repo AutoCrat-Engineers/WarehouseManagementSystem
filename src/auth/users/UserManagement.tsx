@@ -310,7 +310,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
             {/* Summary Cards - Responsive Grid with Click-to-Filter */}
-            <div style={{
+            <div className="summary-cards-grid" style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
                 gap: '14px',
@@ -482,7 +482,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
             </div>
 
             {/* Filter Bar - Search with Action Buttons */}
-            <div style={{
+            <div className="filter-bar" style={{
                 backgroundColor: 'white',
                 padding: '16px 20px',
                 borderRadius: '12px',
@@ -678,7 +678,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                     </div>
                 ) : (
                     <>
-                        <div style={{ overflowX: 'auto' }}>
+                        <div className="table-responsive" style={{ overflowX: 'auto' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                                 <thead>
                                     <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e5e7eb' }}>
