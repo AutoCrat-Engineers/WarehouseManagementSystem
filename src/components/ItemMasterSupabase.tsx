@@ -26,7 +26,7 @@ interface ViewItemDetails {
   uom: string;
   unit_price: number | null;
   standard_cost: number | null;
-  lead_time_days: number;
+  lead_time_days: string;
   is_active: boolean;
   item_created_at: string;
   item_updated_at: string;
@@ -113,7 +113,7 @@ const formDefault: itemsApi.ItemFormData = {
   uom: 'PCS',
   unit_price: null,
   standard_cost: null,
-  lead_time_days: 0,
+  lead_time_days: '',
   is_active: true,
   master_serial_no: '',
   revision: '',
@@ -388,7 +388,7 @@ function exportItemsToCSV(data: itemsApi.Item[], filename: string = 'items_expor
     'UOM',
     'Unit Price',
     'Standard Cost',
-    'Lead Time (Days)',
+    'Lead Time',
     'Status',
     'Deleted By',
   ];
@@ -1031,7 +1031,7 @@ function ItemViewModal({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
             <div><Label>Master Serial No</Label><Input value={item.master_serial_no || '-'} disabled /></div>
             <div><Label>Revision</Label><Input value={item.revision || '-'} disabled /></div>
-            <div><Label>Lead Time (Days)</Label><Input value={item.lead_time_days || '-'} disabled /></div>
+            <div><Label>Lead Time</Label><Input value={item.lead_time_days || '-'} disabled /></div>
           </div>
           <div style={{ borderTop: '1px solid var(--enterprise-gray-200)', paddingTop: '16px', marginTop: '8px' }}>
             <p style={{ fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-gray-600)', marginBottom: '12px' }}>Pricing</p>
@@ -1435,7 +1435,7 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
       uom: item.uom,
       unit_price: item.unit_price ?? null,
       standard_cost: item.standard_cost ?? null,
-      lead_time_days: item.lead_time_days,
+      lead_time_days: item.lead_time_days ?? '',
       is_active: item.is_active,
       master_serial_no: item.master_serial_no || '',
       revision: item.revision || '',
@@ -1559,7 +1559,7 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
       )}
 
       {/* Summary Cards - Responsive & Clickable (matches InventoryGrid) */}
-      <div style={{
+      <div className="summary-cards-grid" style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
         gap: '16px',
@@ -1619,7 +1619,7 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
           />
         ) : (
           <>
-            <div style={{ overflowX: 'auto' }}>
+            <div className="table-responsive" style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ backgroundColor: 'var(--table-header-bg)', borderBottom: '2px solid var(--table-border)' }}>
@@ -1651,7 +1651,7 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
                       <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: '0.85em', color: 'var(--enterprise-gray-600)' }}>{item.master_serial_no || '-'}</td>
                       <td style={{ ...tdStyle, textAlign: 'center' }}><Badge variant="info">{item.revision || '-'}</Badge></td>
                       <td style={{ ...tdStyle, textAlign: 'center' }}>{item.uom}</td>
-                      <td style={{ ...tdStyle, textAlign: 'center' }}>{item.lead_time_days} days</td>
+                      <td style={{ ...tdStyle, textAlign: 'center' }}>{item.lead_time_days || '—'}</td>
                       <td style={{ ...tdStyle, textAlign: 'center' }}><Badge variant={item.is_active ? 'success' : 'error'} style={!item.is_active ? { backgroundColor: '#fee2e2', color: '#b91c1c' } : {}}>{item.is_active ? 'Active' : 'Inactive'}</Badge></td>
                       {/* View Button */}
                       <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px' }}>
@@ -1822,8 +1822,8 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
                 <Input value={formData.revision || ''} onChange={(e) => setFormData({ ...formData, revision: e.target.value })} placeholder="A / AB / 1A" required />
               </div>
               <div>
-                <Label required>Lead Time (Days)</Label>
-                <Input type="number" value={formData.lead_time_days} onChange={(e) => setFormData({ ...formData, lead_time_days: parseInt(e.target.value) || 0 })} placeholder="Enter days" required min={0} />
+                <Label required>Lead Time</Label>
+                <Input type="text" value={formData.lead_time_days} onChange={(e) => setFormData({ ...formData, lead_time_days: e.target.value })} placeholder="e.g. 15 days, 2 weeks, TBD" required />
               </div>
               <div>
                 <Label>Status</Label>
