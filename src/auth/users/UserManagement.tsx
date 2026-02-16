@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
     Users,
     UserPlus,
@@ -21,7 +21,9 @@ import {
     UserCog,
     Settings,
     ChevronDown,
-    AlertTriangle
+    AlertTriangle,
+    CheckCircle2,
+    Info
 } from 'lucide-react';
 import {
     getAllUsers,
@@ -45,6 +47,16 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
+
+    // Toast notification state (same pattern as StockMovement)
+    const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; title: string; text: string } | null>(null);
+    const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const showToast = useCallback((type: 'success' | 'error' | 'warning' | 'info', title: string, text: string, duration = 5000) => {
+        if (toastTimer.current) clearTimeout(toastTimer.current);
+        setToast({ type, title, text });
+        toastTimer.current = setTimeout(() => setToast(null), duration);
+    }, []);
     const [searchTerm, setSearchTerm] = useState('');
     const [roleFilter, setRoleFilter] = useState<string>('all');
     const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -124,7 +136,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
         const result = await createUser(createForm, currentUserId);
 
         if (result.success) {
-            setSuccess('User created successfully');
+            showToast('success', 'User Created', `User "${createForm.full_name}" has been created successfully.`);
             setShowCreateModal(false);
             setCreateForm({
                 email: '',
@@ -137,7 +149,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
             });
             fetchUsers();
         } else {
-            setError(result.error || 'Failed to create user');
+            showToast('error', 'Creation Failed', result.error || 'Failed to create user.');
         }
 
         setCreateLoading(false);
@@ -153,12 +165,12 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
         const result = await updateUser(selectedUser.id, editForm);
 
         if (result.success) {
-            setSuccess('User updated successfully');
+            showToast('success', 'User Updated', `User "${selectedUser.full_name}" has been updated successfully.`);
             setShowEditModal(false);
             setSelectedUser(null);
             fetchUsers();
         } else {
-            setError(result.error || 'Failed to update user');
+            showToast('error', 'Update Failed', result.error || 'Failed to update user.');
         }
 
         setEditLoading(false);
@@ -194,10 +206,14 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
         if (!statusConfirmAction) return;
         const result = await updateUserStatus(statusConfirmAction.userId, statusConfirmAction.newStatus);
         if (result.success) {
-            setSuccess(statusConfirmAction.newStatus ? 'User activated' : 'User deactivated');
+            showToast(
+                statusConfirmAction.newStatus ? 'success' : 'warning',
+                statusConfirmAction.newStatus ? 'User Activated' : 'User Deactivated',
+                `User "${statusConfirmAction.userName}" has been ${statusConfirmAction.newStatus ? 'activated' : 'deactivated'} successfully.`
+            );
             fetchUsers();
         } else {
-            setError(result.error || 'Failed to update status');
+            showToast('error', 'Status Change Failed', result.error || 'Failed to update user status.');
         }
         setShowStatusConfirm(false);
         setStatusConfirmAction(null);
@@ -228,14 +244,14 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
         setDeleteError('');
         const result = await deleteUser(selectedUser.id);
         if (result.success) {
-            setSuccess('User deleted successfully');
+            showToast('success', 'User Deleted', `User "${selectedUser.full_name}" has been permanently deleted.`);
             setShowDeleteConfirm(false);
             setSelectedUser(null);
             setDeleteEmpIdInput('');
             setDeleteReason('');
             fetchUsers();
         } else {
-            setError(result.error || 'Failed to delete user');
+            showToast('error', 'Deletion Failed', result.error || 'Failed to delete user.');
         }
     };
 
@@ -292,19 +308,6 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            {/* Alerts */}
-            {success && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 18px', borderRadius: '10px', fontSize: '14px', backgroundColor: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}>
-                    <CheckCircle size={18} />
-                    {success}
-                </div>
-            )}
-            {error && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 18px', borderRadius: '10px', fontSize: '14px', backgroundColor: '#fef2f2', color: '#dc2626', border: '1px solid #fca5a5' }}>
-                    <AlertCircle size={18} />
-                    {error}
-                </div>
-            )}
 
             {/* Summary Cards - Responsive Grid with Click-to-Filter */}
             <div style={{
@@ -1238,11 +1241,84 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                 </div>
             )}
 
-            {/* CSS for spinner animation */}
+            {/* ═══════════════ FLOATING TOAST NOTIFICATION ═══════════════ */}
+            {toast && (
+                <div style={{
+                    position: 'fixed', top: '24px', right: '24px', zIndex: 10000,
+                    minWidth: '360px', maxWidth: '440px',
+                    padding: '16px 20px', borderRadius: '14px',
+                    background: toast.type === 'success' ? 'linear-gradient(135deg, #f0fdf4, #dcfce7)'
+                        : toast.type === 'error' ? 'linear-gradient(135deg, #fef2f2, #fee2e2)'
+                            : toast.type === 'warning' ? 'linear-gradient(135deg, #fffbeb, #fef3c7)'
+                                : 'linear-gradient(135deg, #eff6ff, #dbeafe)',
+                    border: `1.5px solid ${toast.type === 'success' ? '#86efac'
+                        : toast.type === 'error' ? '#fca5a5'
+                            : toast.type === 'warning' ? '#fcd34d'
+                                : '#93c5fd'
+                        }`,
+                    boxShadow: '0 10px 40px rgba(0,0,0,0.12), 0 4px 12px rgba(0,0,0,0.06)',
+                    display: 'flex', alignItems: 'flex-start', gap: '12px',
+                    animation: 'slideInDown 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+                }}>
+                    {/* Icon */}
+                    <div style={{
+                        width: '36px', height: '36px', borderRadius: '10px', flexShrink: 0,
+                        background: toast.type === 'success' ? 'linear-gradient(135deg, #16a34a, #15803d)'
+                            : toast.type === 'error' ? 'linear-gradient(135deg, #dc2626, #b91c1c)'
+                                : toast.type === 'warning' ? 'linear-gradient(135deg, #f59e0b, #d97706)'
+                                    : 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        boxShadow: `0 2px 8px ${toast.type === 'success' ? 'rgba(22,163,74,0.3)'
+                            : toast.type === 'error' ? 'rgba(220,38,38,0.3)'
+                                : toast.type === 'warning' ? 'rgba(245,158,11,0.3)'
+                                    : 'rgba(37,99,235,0.3)'
+                            }`,
+                    }}>
+                        {toast.type === 'success' && <CheckCircle2 size={18} style={{ color: '#fff' }} />}
+                        {toast.type === 'error' && <XCircle size={18} style={{ color: '#fff' }} />}
+                        {toast.type === 'warning' && <AlertTriangle size={18} style={{ color: '#fff' }} />}
+                        {toast.type === 'info' && <Info size={18} style={{ color: '#fff' }} />}
+                    </div>
+                    {/* Content */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{
+                            fontSize: '13px', fontWeight: 800,
+                            color: toast.type === 'success' ? '#14532d'
+                                : toast.type === 'error' ? '#7f1d1d'
+                                    : toast.type === 'warning' ? '#78350f'
+                                        : '#1e3a5f',
+                            marginBottom: '2px', letterSpacing: '-0.2px',
+                        }}>{toast.title}</div>
+                        <div style={{
+                            fontSize: '12px', fontWeight: 500, lineHeight: '1.5',
+                            color: toast.type === 'success' ? '#166534'
+                                : toast.type === 'error' ? '#991b1b'
+                                    : toast.type === 'warning' ? '#92400e'
+                                        : '#1e40af',
+                        }}>{toast.text}</div>
+                    </div>
+                    {/* Close */}
+                    <button onClick={() => { if (toastTimer.current) clearTimeout(toastTimer.current); setToast(null); }} style={{
+                        background: 'none', border: 'none', cursor: 'pointer', padding: '4px',
+                        color: toast.type === 'success' ? '#16a34a'
+                            : toast.type === 'error' ? '#dc2626'
+                                : toast.type === 'warning' ? '#d97706'
+                                    : '#2563eb',
+                        borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        flexShrink: 0,
+                    }}><X size={16} /></button>
+                </div>
+            )}
+
+            {/* CSS for spinner + toast animations */}
             <style>{`
                 @keyframes spin {
                     from { transform: rotate(0deg); }
                     to { transform: rotate(360deg); }
+                }
+                @keyframes slideInDown {
+                    from { opacity: 0; transform: translateY(-20px) scale(0.95); }
+                    to   { opacity: 1; transform: translateY(0) scale(1); }
                 }
             `}</style>
         </div>

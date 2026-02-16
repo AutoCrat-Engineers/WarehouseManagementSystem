@@ -9,7 +9,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Plus, Edit2, Trash2, Search, Package, Eye, ChevronDown, ChevronRight, AlertTriangle, Clock, Calendar, Download, X, XCircle, CheckCircle, Settings } from 'lucide-react';
+import { Plus, Edit2, Trash2, Search, Package, Eye, ChevronDown, ChevronRight, AlertTriangle, Clock, Calendar, Download, X, XCircle, CheckCircle, Settings, CheckCircle2, Info } from 'lucide-react';
 import { Card, Button, Badge, Input, Select, Label, Modal, LoadingSpinner, EmptyState, Textarea } from './ui/EnterpriseUI';
 import * as itemsApi from '../utils/api/itemsSupabase';
 import { getSupabaseClient } from '../utils/supabase/client';
@@ -1304,6 +1304,16 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
+  // Toast notification state (same pattern as StockMovement)
+  const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; title: string; text: string } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = useCallback((type: 'success' | 'error' | 'warning' | 'info', title: string, text: string, duration = 5000) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ type, title, text });
+    toastTimer.current = setTimeout(() => setToast(null), duration);
+  }, []);
+
   // Close dropdown on click outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -1402,14 +1412,17 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const isEditing = !!editingItem;
+    const itemName = formData.part_number || formData.item_code;
     const result = editingItem
       ? await itemsApi.updateItem(editingItem.id, formData)
       : await itemsApi.createItem(formData);
 
     if (result.error) {
-      setError(result.error);
+      showToast('error', isEditing ? 'Update Failed' : 'Creation Failed', result.error);
       return;
     }
+    showToast('success', isEditing ? 'Item Updated' : 'Item Created', `Item "${itemName}" has been ${isEditing ? 'updated' : 'created'} successfully.`);
     handleCloseModal();
     fetchItems();
   };
@@ -1442,11 +1455,13 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
 
     // HARD DELETE: removes item and all related data from the entire database
     console.log(`Permanently deleting item ${itemToDelete.item_code}, reason:`, deletionReason);
+    const itemName = itemToDelete.part_number || itemToDelete.item_code;
 
     const result = await itemsApi.deleteItem(itemToDelete.id, deletionReason);
     if (result.error) {
-      setError(result.error);
+      showToast('error', 'Deletion Failed', result.error);
     } else {
+      showToast('success', 'Item Deleted', `Item "${itemName}" has been permanently deleted.`);
       fetchItems();
     }
     setShowDeleteModal(false);
@@ -1471,6 +1486,75 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
       {error && (
         <div style={{ backgroundColor: 'var(--enterprise-error-bg)', border: '1px solid var(--enterprise-error)', borderRadius: 'var(--border-radius-md)', padding: '12px' }}>
           <p style={{ color: 'var(--enterprise-error)', fontSize: 'var(--font-size-sm)' }}>{error}</p>
+        </div>
+      )}
+
+      {/* ═══════════════ FLOATING TOAST NOTIFICATION ═══════════════ */}
+      {toast && (
+        <div style={{
+          position: 'fixed', top: '24px', right: '24px', zIndex: 10000,
+          minWidth: '360px', maxWidth: '440px',
+          padding: '16px 20px', borderRadius: '14px',
+          background: toast.type === 'success' ? 'linear-gradient(135deg, #f0fdf4, #dcfce7)'
+            : toast.type === 'error' ? 'linear-gradient(135deg, #fef2f2, #fee2e2)'
+              : toast.type === 'warning' ? 'linear-gradient(135deg, #fffbeb, #fef3c7)'
+                : 'linear-gradient(135deg, #eff6ff, #dbeafe)',
+          border: `1.5px solid ${toast.type === 'success' ? '#86efac'
+            : toast.type === 'error' ? '#fca5a5'
+              : toast.type === 'warning' ? '#fcd34d'
+                : '#93c5fd'
+            }`,
+          boxShadow: '0 10px 40px rgba(0,0,0,0.12), 0 4px 12px rgba(0,0,0,0.06)',
+          display: 'flex', alignItems: 'flex-start', gap: '12px',
+          animation: 'slideInDown 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          {/* Icon */}
+          <div style={{
+            width: '36px', height: '36px', borderRadius: '10px', flexShrink: 0,
+            background: toast.type === 'success' ? 'linear-gradient(135deg, #16a34a, #15803d)'
+              : toast.type === 'error' ? 'linear-gradient(135deg, #dc2626, #b91c1c)'
+                : toast.type === 'warning' ? 'linear-gradient(135deg, #f59e0b, #d97706)'
+                  : 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: `0 2px 8px ${toast.type === 'success' ? 'rgba(22,163,74,0.3)'
+              : toast.type === 'error' ? 'rgba(220,38,38,0.3)'
+                : toast.type === 'warning' ? 'rgba(245,158,11,0.3)'
+                  : 'rgba(37,99,235,0.3)'
+              }`,
+          }}>
+            {toast.type === 'success' && <CheckCircle2 size={18} style={{ color: '#fff' }} />}
+            {toast.type === 'error' && <XCircle size={18} style={{ color: '#fff' }} />}
+            {toast.type === 'warning' && <AlertTriangle size={18} style={{ color: '#fff' }} />}
+            {toast.type === 'info' && <Info size={18} style={{ color: '#fff' }} />}
+          </div>
+          {/* Content */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              fontSize: '13px', fontWeight: 800,
+              color: toast.type === 'success' ? '#14532d'
+                : toast.type === 'error' ? '#7f1d1d'
+                  : toast.type === 'warning' ? '#78350f'
+                    : '#1e3a5f',
+              marginBottom: '2px', letterSpacing: '-0.2px',
+            }}>{toast.title}</div>
+            <div style={{
+              fontSize: '12px', fontWeight: 500, lineHeight: '1.5',
+              color: toast.type === 'success' ? '#166534'
+                : toast.type === 'error' ? '#991b1b'
+                  : toast.type === 'warning' ? '#92400e'
+                    : '#1e40af',
+            }}>{toast.text}</div>
+          </div>
+          {/* Close */}
+          <button onClick={() => { if (toastTimer.current) clearTimeout(toastTimer.current); setToast(null); }} style={{
+            background: 'none', border: 'none', cursor: 'pointer', padding: '4px',
+            color: toast.type === 'success' ? '#16a34a'
+              : toast.type === 'error' ? '#dc2626'
+                : toast.type === 'warning' ? '#d97706'
+                  : '#2563eb',
+            borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0,
+          }}><X size={16} /></button>
         </div>
       )}
 
@@ -1814,6 +1898,10 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
             opacity: 1;
             max-height: 500px;
           }
+        }
+        @keyframes slideInDown {
+          from { opacity: 0; transform: translateY(-20px) scale(0.95); }
+          to   { opacity: 1; transform: translateY(0) scale(1); }
         }
       `}</style>
     </div>
