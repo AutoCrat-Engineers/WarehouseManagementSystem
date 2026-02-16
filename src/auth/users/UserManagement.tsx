@@ -20,7 +20,8 @@ import {
     Shield,
     UserCog,
     Settings,
-    ChevronDown
+    ChevronDown,
+    AlertTriangle
 } from 'lucide-react';
 import {
     getAllUsers,
@@ -56,6 +57,11 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showEditModal, setShowEditModal] = useState(false);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [showStatusConfirm, setShowStatusConfirm] = useState(false);
+    const [statusConfirmAction, setStatusConfirmAction] = useState<{ userId: string; newStatus: boolean; userName: string; employeeId: string; role: string; email: string } | null>(null);
+    const [deleteEmpIdInput, setDeleteEmpIdInput] = useState('');
+    const [deleteReason, setDeleteReason] = useState('');
+    const [deleteError, setDeleteError] = useState('');
     const [selectedUser, setSelectedUser] = useState<UserListItem | null>(null);
     const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
     const dropdownRef = useRef<HTMLDivElement | null>(null);
@@ -171,15 +177,30 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
         setActiveDropdown(null);
     };
 
-    const handleStatusChange = async (userId: string, isActive: boolean) => {
-        const result = await updateUserStatus(userId, isActive);
+    const openStatusConfirm = (user: UserListItem) => {
+        setStatusConfirmAction({
+            userId: user.id,
+            newStatus: !user.is_active,
+            userName: user.full_name,
+            employeeId: user.employee_id || '---',
+            role: user.role,
+            email: user.email,
+        });
+        setShowStatusConfirm(true);
+        setActiveDropdown(null);
+    };
+
+    const handleStatusChangeConfirmed = async () => {
+        if (!statusConfirmAction) return;
+        const result = await updateUserStatus(statusConfirmAction.userId, statusConfirmAction.newStatus);
         if (result.success) {
-            setSuccess(isActive ? 'User activated' : 'User deactivated');
+            setSuccess(statusConfirmAction.newStatus ? 'User activated' : 'User deactivated');
             fetchUsers();
-            setActiveDropdown(null);
         } else {
             setError(result.error || 'Failed to update status');
         }
+        setShowStatusConfirm(false);
+        setStatusConfirmAction(null);
     };
 
     const openDeleteConfirm = (user: UserListItem) => {
@@ -191,11 +212,27 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
     const handleDeleteUser = async () => {
         if (!selectedUser) return;
 
+        // Validate employee ID match
+        const expectedId = selectedUser.employee_id || '';
+        if (deleteEmpIdInput.trim() !== expectedId) {
+            setDeleteError('Employee ID does not match. Please enter the exact Employee ID to confirm deletion.');
+            return;
+        }
+
+        // Validate reason
+        if (!deleteReason.trim()) {
+            setDeleteError('Please provide a reason for deletion.');
+            return;
+        }
+
+        setDeleteError('');
         const result = await deleteUser(selectedUser.id);
         if (result.success) {
             setSuccess('User deleted successfully');
             setShowDeleteConfirm(false);
             setSelectedUser(null);
+            setDeleteEmpIdInput('');
+            setDeleteReason('');
             fetchUsers();
         } else {
             setError(result.error || 'Failed to delete user');
@@ -721,8 +758,10 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                                                                 </button>
                                                                 <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
                                                                 <button
-                                                                    onClick={() => handleStatusChange(user.id, !user.is_active)}
+                                                                    onClick={() => openStatusConfirm(user)}
                                                                     style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: user.is_active ? '#f59e0b' : '#10b981' }}
+                                                                    onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = user.is_active ? '#fffbeb' : '#ecfdf5'; }}
+                                                                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
                                                                 >
                                                                     <Power size={16} /> {user.is_active ? 'Deactivate' : 'Activate'}
                                                                 </button>
@@ -931,31 +970,268 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                 </div>
             )}
 
-            {/* Delete Confirmation Modal */}
+            {/* Enhanced Delete Confirmation Modal — Employee ID verification */}
             {showDeleteConfirm && selectedUser && (
                 <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-                    <div style={{ backgroundColor: 'white', padding: '32px', borderRadius: '20px', width: '100%', maxWidth: '450px' }}>
-                        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-                            <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: '#fef2f2', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
-                                <Trash2 size={32} style={{ color: '#ef4444' }} />
+                    <div style={{ backgroundColor: 'white', padding: '32px', borderRadius: '20px', width: '100%', maxWidth: '500px', maxHeight: '90vh', overflowY: 'auto', userSelect: 'none' }} onCopy={(e) => e.preventDefault()}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+                            <h2 style={{ fontSize: '20px', fontWeight: '700', color: '#111827', margin: 0 }}>Confirm User Deletion</h2>
+                            <button onClick={() => { setShowDeleteConfirm(false); setSelectedUser(null); setDeleteEmpIdInput(''); setDeleteReason(''); setDeleteError(''); }} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>
+                                <X size={20} style={{ color: '#6b7280' }} />
+                            </button>
+                        </div>
+
+                        {/* Warning Banner */}
+                        <div style={{
+                            background: 'linear-gradient(135deg, rgba(220,38,38,0.05) 0%, rgba(220,38,38,0.1) 100%)',
+                            border: '1px solid rgba(220,38,38,0.2)',
+                            borderRadius: '12px',
+                            padding: '16px',
+                            display: 'flex',
+                            gap: '12px',
+                            alignItems: 'flex-start',
+                            marginBottom: '20px',
+                        }}>
+                            <AlertTriangle size={24} style={{ color: '#ef4444', flexShrink: 0 }} />
+                            <div>
+                                <p style={{ fontWeight: '600', color: '#ef4444', marginBottom: '4px', fontSize: '14px' }}>
+                                    This action cannot be undone
+                                </p>
+                                <p style={{ fontSize: '13px', color: '#6b7280' }}>
+                                    You are about to <strong>permanently delete</strong> this user and <strong>all associated data</strong> from the system. Please confirm by entering the Employee ID below.
+                                </p>
                             </div>
-                            <h3 style={{ fontSize: '20px', fontWeight: '700', color: '#111827', margin: '0 0 8px' }}>Delete User</h3>
-                            <p style={{ color: '#6b7280', fontSize: '14px', margin: 0 }}>
-                                Are you sure you want to delete <strong>{selectedUser.full_name}</strong>? This action cannot be undone.
+                        </div>
+
+                        {/* User Info Display */}
+                        <div style={{
+                            background: '#f8fafc',
+                            borderRadius: '12px',
+                            padding: '16px',
+                            marginBottom: '20px',
+                        }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                <div>
+                                    <p style={{ fontSize: '11px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px', fontWeight: 600 }}>Employee ID</p>
+                                    <p style={{ fontWeight: '700', color: '#1e3a8a', fontSize: '14px' }}>{selectedUser.employee_id || '---'}</p>
+                                </div>
+                                <div>
+                                    <p style={{ fontSize: '11px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px', fontWeight: 600 }}>Full Name</p>
+                                    <p style={{ fontWeight: '600', color: '#111827', fontSize: '14px' }}>{selectedUser.full_name}</p>
+                                </div>
+                                <div>
+                                    <p style={{ fontSize: '11px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px', fontWeight: 600 }}>Role</p>
+                                    <RoleBadge role={selectedUser.role} />
+                                </div>
+                                <div>
+                                    <p style={{ fontSize: '11px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px', fontWeight: 600 }}>Email</p>
+                                    <p style={{ fontSize: '13px', color: '#6b7280', fontFamily: 'monospace' }}>{selectedUser.email}</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Employee ID Confirmation Input */}
+                        <div style={{ marginBottom: '16px' }}>
+                            <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
+                                Type Employee ID to Confirm <span style={{ color: '#ef4444' }}>*</span>
+                            </label>
+                            <input
+                                type="text"
+                                value={deleteEmpIdInput}
+                                onChange={(e) => setDeleteEmpIdInput(e.target.value)}
+                                placeholder={`Enter "${selectedUser.employee_id || '---'}" to confirm`}
+                                onPaste={(e) => e.preventDefault()}
+                                onCopy={(e) => e.preventDefault()}
+                                onCut={(e) => e.preventDefault()}
+                                onDrop={(e) => e.preventDefault()}
+                                onContextMenu={(e) => e.preventDefault()}
+                                autoComplete="off"
+                                style={{
+                                    width: '100%',
+                                    padding: '12px',
+                                    border: '1px solid #e5e7eb',
+                                    borderRadius: '10px',
+                                    fontSize: '14px',
+                                    boxSizing: 'border-box',
+                                    outline: 'none',
+                                    transition: 'border-color 0.2s',
+                                }}
+                                onFocus={(e) => { e.target.style.borderColor = '#ef4444'; e.target.style.boxShadow = '0 0 0 3px rgba(239,68,68,0.1)'; }}
+                                onBlur={(e) => { e.target.style.borderColor = '#e5e7eb'; e.target.style.boxShadow = 'none'; }}
+                            />
+                            <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>
+                                Must match exactly: <strong>{selectedUser.employee_id || '---'}</strong>
                             </p>
                         </div>
+
+                        {/* Deletion Reason */}
+                        <div style={{ marginBottom: '16px' }}>
+                            <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
+                                Reason for Deletion <span style={{ color: '#ef4444' }}>*</span>
+                            </label>
+                            <textarea
+                                value={deleteReason}
+                                onChange={(e) => setDeleteReason(e.target.value)}
+                                placeholder="Please provide the reason for deleting this user..."
+                                rows={3}
+                                style={{
+                                    width: '100%',
+                                    padding: '12px',
+                                    border: '1px solid #e5e7eb',
+                                    borderRadius: '10px',
+                                    fontSize: '14px',
+                                    boxSizing: 'border-box',
+                                    outline: 'none',
+                                    resize: 'vertical',
+                                    fontFamily: 'inherit',
+                                    transition: 'border-color 0.2s',
+                                }}
+                                onFocus={(e) => { e.target.style.borderColor = '#ef4444'; e.target.style.boxShadow = '0 0 0 3px rgba(239,68,68,0.1)'; }}
+                                onBlur={(e) => { e.target.style.borderColor = '#e5e7eb'; e.target.style.boxShadow = 'none'; }}
+                            />
+                        </div>
+
+                        {/* Error Message */}
+                        {deleteError && (
+                            <div style={{
+                                background: 'rgba(220,38,38,0.1)',
+                                border: '1px solid rgba(220,38,38,0.3)',
+                                borderRadius: '8px',
+                                padding: '12px',
+                                color: '#ef4444',
+                                fontSize: '13px',
+                                marginBottom: '16px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                            }}>
+                                <AlertCircle size={16} />
+                                {deleteError}
+                            </div>
+                        )}
+
+                        {/* Action Buttons */}
                         <div style={{ display: 'flex', gap: '12px' }}>
                             <button
-                                onClick={() => { setShowDeleteConfirm(false); setSelectedUser(null); }}
-                                style={{ flex: 1, padding: '14px', border: 'none', borderRadius: '12px', backgroundColor: '#f3f4f6', color: '#4b5563', fontWeight: '600', cursor: 'pointer' }}
+                                onClick={() => { setShowDeleteConfirm(false); setSelectedUser(null); setDeleteEmpIdInput(''); setDeleteReason(''); setDeleteError(''); }}
+                                style={{ flex: 1, padding: '14px', border: 'none', borderRadius: '12px', backgroundColor: '#f3f4f6', color: '#4b5563', fontWeight: '600', cursor: 'pointer', transition: 'all 0.2s' }}
+                                onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#e5e7eb'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#f3f4f6'; }}
                             >
                                 Cancel
                             </button>
                             <button
                                 onClick={handleDeleteUser}
-                                style={{ flex: 1, padding: '14px', border: 'none', borderRadius: '12px', backgroundColor: '#ef4444', color: 'white', fontWeight: '600', cursor: 'pointer' }}
+                                disabled={!deleteEmpIdInput.trim() || !deleteReason.trim()}
+                                style={{
+                                    flex: 1,
+                                    padding: '14px',
+                                    border: 'none',
+                                    borderRadius: '12px',
+                                    backgroundColor: !deleteEmpIdInput.trim() || !deleteReason.trim() ? '#fca5a5' : '#ef4444',
+                                    color: 'white',
+                                    fontWeight: '600',
+                                    cursor: !deleteEmpIdInput.trim() || !deleteReason.trim() ? 'not-allowed' : 'pointer',
+                                    opacity: !deleteEmpIdInput.trim() || !deleteReason.trim() ? 0.6 : 1,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '8px',
+                                    transition: 'all 0.2s',
+                                }}
                             >
+                                <Trash2 size={16} />
                                 Delete User
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Activate/Deactivate Confirmation Modal */}
+            {showStatusConfirm && statusConfirmAction && (
+                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
+                    <div style={{ backgroundColor: 'white', padding: '32px', borderRadius: '20px', width: '100%', maxWidth: '450px' }}>
+                        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+                            <div style={{
+                                width: '64px', height: '64px', borderRadius: '50%',
+                                backgroundColor: statusConfirmAction.newStatus ? '#ecfdf5' : '#fffbeb',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                margin: '0 auto 16px',
+                            }}>
+                                <Power size={32} style={{ color: statusConfirmAction.newStatus ? '#10b981' : '#f59e0b' }} />
+                            </div>
+                            <h3 style={{ fontSize: '20px', fontWeight: '700', color: '#111827', margin: '0 0 8px' }}>
+                                {statusConfirmAction.newStatus ? 'Activate' : 'Deactivate'} User?
+                            </h3>
+                            <p style={{ color: '#6b7280', fontSize: '14px', margin: '0 0 16px' }}>
+                                Are you sure you want to {statusConfirmAction.newStatus ? 'activate' : 'deactivate'} this user?
+                            </p>
+                        </div>
+
+                        {/* User Info */}
+                        <div style={{
+                            background: '#f8fafc',
+                            borderRadius: '12px',
+                            padding: '16px',
+                            marginBottom: '24px',
+                        }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                                <div>
+                                    <p style={{ fontSize: '11px', color: '#6b7280', textTransform: 'uppercase', marginBottom: '2px', fontWeight: 600 }}>Employee ID</p>
+                                    <p style={{ fontWeight: '700', color: '#1e3a8a', fontSize: '14px' }}>{statusConfirmAction.employeeId}</p>
+                                </div>
+                                <div>
+                                    <p style={{ fontSize: '11px', color: '#6b7280', textTransform: 'uppercase', marginBottom: '2px', fontWeight: 600 }}>Name</p>
+                                    <p style={{ fontWeight: '600', color: '#111827', fontSize: '14px' }}>{statusConfirmAction.userName}</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Warning for deactivation */}
+                        {!statusConfirmAction.newStatus && (
+                            <div style={{
+                                background: '#fffbeb',
+                                border: '1px solid #fde68a',
+                                borderRadius: '10px',
+                                padding: '12px',
+                                marginBottom: '20px',
+                                display: 'flex',
+                                gap: '10px',
+                                alignItems: 'flex-start',
+                            }}>
+                                <AlertTriangle size={18} style={{ color: '#f59e0b', flexShrink: 0, marginTop: '1px' }} />
+                                <p style={{ fontSize: '13px', color: '#92400e', margin: 0 }}>
+                                    Deactivated users will not be able to log in to the system until reactivated.
+                                </p>
+                            </div>
+                        )}
+
+                        <div style={{ display: 'flex', gap: '12px' }}>
+                            <button
+                                onClick={() => { setShowStatusConfirm(false); setStatusConfirmAction(null); }}
+                                style={{
+                                    flex: 1, padding: '14px', border: 'none', borderRadius: '12px',
+                                    backgroundColor: '#f3f4f6', color: '#4b5563', fontWeight: '600',
+                                    cursor: 'pointer', fontSize: '14px', transition: 'all 0.2s',
+                                }}
+                                onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#e5e7eb'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#f3f4f6'; }}
+                            >
+                                No, Cancel
+                            </button>
+                            <button
+                                onClick={handleStatusChangeConfirmed}
+                                style={{
+                                    flex: 1, padding: '14px', border: 'none', borderRadius: '12px',
+                                    backgroundColor: statusConfirmAction.newStatus ? '#10b981' : '#f59e0b',
+                                    color: 'white', fontWeight: '600', cursor: 'pointer',
+                                    fontSize: '14px', transition: 'all 0.2s',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                                }}
+                            >
+                                <Power size={16} />
+                                Yes, {statusConfirmAction.newStatus ? 'Activate' : 'Deactivate'}
                             </button>
                         </div>
                     </div>
