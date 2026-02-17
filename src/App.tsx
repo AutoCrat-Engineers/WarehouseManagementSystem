@@ -11,6 +11,7 @@ import { BlanketReleases } from './components/BlanketReleases';
 import { ForecastingModule } from './components/ForecastingModule';
 import { PlanningModule } from './components/PlanningModule';
 import { StockMovement } from './components/StockMovement';
+import { LoadingPage } from './components/LoadingPage';
 import { UserManagement } from './auth/users/UserManagement';
 import {
   LayoutDashboard,
@@ -29,6 +30,8 @@ import {
   Shield,
   Boxes
 } from 'lucide-react';
+
+declare const __APP_VERSION__: string;
 
 const supabase = getSupabaseClient();
 const logoImage = '/logo.png';
@@ -65,6 +68,27 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isMobile, setIsMobile] = useState(false);
+
+  // ============================================================================
+  // RESPONSIVE: Detect mobile/tablet screen size
+  // ============================================================================
+  useEffect(() => {
+    const checkMobile = () => {
+      const mobile = window.innerWidth < 1024;
+      setIsMobile(mobile);
+      if (mobile) setIsSidebarOpen(false);
+      else setIsSidebarOpen(true);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  const handleNavigation = (view: View) => {
+    setCurrentView(view);
+    if (isMobile) setIsSidebarOpen(false);
+  };
 
   // ============================================================================
   // INITIALIZATION & SESSION MANAGEMENT
@@ -230,36 +254,7 @@ export default function App() {
   // ============================================================================
 
   if (isLoading && !isAuthenticated) {
-    return (
-      <div style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      }}>
-        <div style={{
-          textAlign: 'center',
-          color: 'white',
-        }}>
-          <div style={{
-            width: '60px',
-            height: '60px',
-            borderRadius: '50%',
-            border: '4px solid rgba(255, 255, 255, 0.3)',
-            borderTopColor: 'white',
-            animation: 'spin 1s linear infinite',
-            margin: '0 auto 24px',
-          }} />
-          <p style={{ fontSize: '18px', fontWeight: '500' }}>Initializing System...</p>
-          <style>{`
-            @keyframes spin {
-              to { transform: rotate(360deg); }
-            }
-          `}</style>
-        </div>
-      </div>
-    );
+    return <LoadingPage message="Initializing System..." />;
   }
 
   // ============================================================================
@@ -303,13 +298,13 @@ export default function App() {
 
     switch (currentView) {
       case 'dashboard':
-        return <DashboardNew accessToken={accessToken} />;
+        return <DashboardNew accessToken={accessToken} onNavigate={(view) => setCurrentView(view as View)} />;
       case 'items':
-        return <ItemMasterSupabase />;
+        return <ItemMasterSupabase userRole={userRole} />;
       case 'inventory':
         return <InventoryGrid />;
       case 'stock-movements':
-        return <StockMovement accessToken={accessToken} />;
+        return <StockMovement accessToken={accessToken} userRole={userRole} />;
       case 'orders':
         return <BlanketOrders accessToken={accessToken} />;
       case 'releases':
@@ -340,7 +335,7 @@ export default function App() {
         }
         return <UserManagement currentUserId={user?.id || ''} />;
       default:
-        return <DashboardNew accessToken={accessToken} />;
+        return <DashboardNew accessToken={accessToken} onNavigate={(view) => setCurrentView(view as View)} />;
     }
   };
 
@@ -372,17 +367,36 @@ export default function App() {
         overflow: 'hidden',
         backgroundColor: 'var(--background-secondary)',
       }}>
+        {/* MOBILE OVERLAY */}
+        {isMobile && isSidebarOpen && (
+          <div
+            className="sidebar-overlay active"
+            onClick={() => setIsSidebarOpen(false)}
+          />
+        )}
+
         {/* SIDEBAR */}
-        <aside style={{
-          width: isSidebarOpen ? '280px' : '0',
-          backgroundColor: 'var(--card-background)',
-          borderRight: '1px solid var(--border-color)',
-          display: 'flex',
-          flexDirection: 'column',
-          transition: 'width 300ms ease',
-          overflow: 'hidden',
-          boxShadow: 'var(--shadow-lg)',
-        }}>
+        <aside
+          className={`app-sidebar${isMobile ? (isSidebarOpen ? ' open' : '') : ''}`}
+          style={{
+            width: isMobile ? '280px' : (isSidebarOpen ? '280px' : '0'),
+            backgroundColor: 'var(--card-background)',
+            borderRight: '1px solid var(--border-color)',
+            display: 'flex',
+            flexDirection: 'column',
+            transition: isMobile ? 'transform 300ms cubic-bezier(0.4, 0, 0.2, 1)' : 'width 300ms ease',
+            overflow: 'hidden',
+            boxShadow: 'var(--shadow-lg)',
+            ...(isMobile ? {
+              position: 'fixed' as const,
+              left: 0,
+              top: 0,
+              bottom: 0,
+              zIndex: 999,
+              transform: isSidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
+            } : {}),
+          }}
+        >
           {/* Logo Section */}
           <div style={{
             padding: '24px',
@@ -423,6 +437,21 @@ export default function App() {
               }}>
                 Warehouse Management System
               </p>
+              <span style={{
+                display: 'inline-block',
+                margin: '0 auto',
+                padding: '2px 10px',
+                backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                borderRadius: '12px',
+                fontSize: '11px',
+                fontWeight: '600',
+                color: 'rgba(255, 255, 255, 0.9)',
+                letterSpacing: '0.5px',
+                textAlign: 'center',
+                backdropFilter: 'blur(4px)',
+              }}>
+                v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.2.0'}
+              </span>
             </div>
           </div>
 
@@ -439,7 +468,7 @@ export default function App() {
               return (
                 <button
                   key={item.id}
-                  onClick={() => setCurrentView(item.id)}
+                  onClick={() => handleNavigation(item.id)}
                   style={{
                     width: '100%',
                     display: 'flex',
@@ -565,7 +594,7 @@ export default function App() {
           overflow: 'hidden',
         }}>
           {/* TOP BAR */}
-          <header style={{
+          <header className="app-topbar" style={{
             height: '70px',
             backgroundColor: 'var(--card-background)',
             borderBottom: '1px solid var(--border-color)',
@@ -637,12 +666,12 @@ export default function App() {
           </header>
 
           {/* CONTENT */}
-          <main style={{
+          <main className="app-main" style={{
             flex: 1,
             overflow: 'auto',
             padding: '32px',
           }}>
-            <div style={{
+            <div className="app-main-inner" style={{
               maxWidth: '1400px',
               margin: '0 auto',
             }}>

@@ -5,11 +5,11 @@
  * NO TRANSFORMATION - frontend fields match database 1:1
  * 
  * Database: id, item_code, item_name, uom, unit_price, standard_cost, lead_time_days,
- *           is_active, created_at, updated_at, master_serial_no, revision, part_number
+ *           is_active, created_at, updated_at, master_serial_no, revision, part_number, deleted_by
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Plus, Edit2, Trash2, Search, Package, Eye, ChevronDown, ChevronRight, AlertTriangle, Clock, Calendar, Download, X, CheckCircle } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Plus, Edit2, Trash2, Search, Package, Eye, ChevronDown, ChevronRight, AlertTriangle, Clock, Calendar, Download, X, XCircle, CheckCircle, Settings, CheckCircle2, Info } from 'lucide-react';
 import { Card, Button, Badge, Input, Select, Label, Modal, LoadingSpinner, EmptyState, Textarea } from './ui/EnterpriseUI';
 import * as itemsApi from '../utils/api/itemsSupabase';
 import { getSupabaseClient } from '../utils/supabase/client';
@@ -26,7 +26,7 @@ interface ViewItemDetails {
   uom: string;
   unit_price: number | null;
   standard_cost: number | null;
-  lead_time_days: number;
+  lead_time_days: string;
   is_active: boolean;
   item_created_at: string;
   item_updated_at: string;
@@ -113,7 +113,7 @@ const formDefault: itemsApi.ItemFormData = {
   uom: 'PCS',
   unit_price: null,
   standard_cost: null,
-  lead_time_days: 0,
+  lead_time_days: '',
   is_active: true,
   master_serial_no: '',
   revision: '',
@@ -225,6 +225,7 @@ interface FilterBarProps {
   onAddItem: () => void;
   onClearFilters: () => void;
   hasActiveFilters: boolean;
+  showAddItem?: boolean;
 }
 
 function FilterBar({
@@ -234,6 +235,7 @@ function FilterBar({
   onAddItem,
   onClearFilters,
   hasActiveFilters,
+  showAddItem = true,
 }: FilterBarProps) {
   return (
     <div style={{
@@ -315,8 +317,8 @@ function FilterBar({
               whiteSpace: 'nowrap',
             }}
           >
-            <X size={14} />
-            Clear
+            <XCircle size={16} />
+            Clear Filters
           </button>
         )}
 
@@ -343,28 +345,30 @@ function FilterBar({
           Export CSV
         </button>
 
-        {/* Add Item Button - Primary action */}
-        <button
-          onClick={onAddItem}
-          style={{
-            padding: '0 14px',
-            height: '36px',
-            borderRadius: '6px',
-            border: 'none',
-            background: '#1e3a8a',
-            color: 'white',
-            fontSize: '13px',
-            fontWeight: 500,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          <Plus size={14} />
-          Add Item
-        </button>
+        {/* Add Item Button - Primary action (role-gated) */}
+        {showAddItem && (
+          <button
+            onClick={onAddItem}
+            style={{
+              padding: '0 14px',
+              height: '36px',
+              borderRadius: '6px',
+              border: 'none',
+              background: '#1e3a8a',
+              color: 'white',
+              fontSize: '13px',
+              fontWeight: 500,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <Plus size={14} />
+            Add Item
+          </button>
+        )}
       </div>
     </div>
   );
@@ -384,8 +388,9 @@ function exportItemsToCSV(data: itemsApi.Item[], filename: string = 'items_expor
     'UOM',
     'Unit Price',
     'Standard Cost',
-    'Lead Time (Days)',
+    'Lead Time',
     'Status',
+    'Deleted By',
   ];
 
   const rows = data.map(item => [
@@ -399,6 +404,7 @@ function exportItemsToCSV(data: itemsApi.Item[], filename: string = 'items_expor
     item.standard_cost ?? '',
     item.lead_time_days,
     item.is_active ? 'Active' : 'Inactive',
+    item.deleted_by || '',
   ]);
 
   const csvContent = [
@@ -467,7 +473,7 @@ function DeleteConfirmModal({ isOpen, onClose, onConfirm, item }: DeleteConfirmM
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Confirm Item Deletion" maxWidth="500px">
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', userSelect: 'none' }} onCopy={(e) => e.preventDefault()}>
         {/* Warning Banner */}
         <div style={{
           background: 'linear-gradient(135deg, rgba(220,38,38,0.05) 0%, rgba(220,38,38,0.1) 100%)',
@@ -484,7 +490,7 @@ function DeleteConfirmModal({ isOpen, onClose, onConfirm, item }: DeleteConfirmM
               This action cannot be undone
             </p>
             <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--enterprise-gray-600)' }}>
-              You are about to permanently delete this item. Please confirm by entering the Part Number below.
+              You are about to <strong>permanently delete</strong> this item and <strong>all related data</strong> (inventory, warehouse stock, blanket orders, stock movements, demand forecasts, etc.) from the entire database. Please confirm by entering the Part Number below.
             </p>
           </div>
         </div>
@@ -514,10 +520,37 @@ function DeleteConfirmModal({ isOpen, onClose, onConfirm, item }: DeleteConfirmM
         {/* Part Number Confirmation Input */}
         <div>
           <Label required>Type Part Number to Confirm</Label>
-          <Input
+          <input
+            type="text"
             value={partNumberInput}
             onChange={(e) => setPartNumberInput(e.target.value)}
             placeholder={`Enter "${item.part_number}" to confirm`}
+            onPaste={(e) => e.preventDefault()}
+            onCopy={(e) => e.preventDefault()}
+            onCut={(e) => e.preventDefault()}
+            onDrop={(e) => e.preventDefault()}
+            onContextMenu={(e) => e.preventDefault()}
+            autoComplete="off"
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              fontSize: 'var(--font-size-base)',
+              fontWeight: 'var(--font-weight-normal)',
+              color: 'var(--foreground)',
+              backgroundColor: 'var(--background)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--border-radius-md)',
+              outline: 'none',
+              transition: 'all var(--transition-fast)',
+            }}
+            onFocus={(e) => {
+              e.target.style.borderColor = 'var(--enterprise-primary)';
+              e.target.style.boxShadow = '0 0 0 3px rgba(30, 58, 138, 0.1)';
+            }}
+            onBlur={(e) => {
+              e.target.style.borderColor = 'var(--border-color)';
+              e.target.style.boxShadow = 'none';
+            }}
           />
           <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--enterprise-gray-500)', marginTop: '4px' }}>
             Must match exactly: <strong>{item.part_number}</strong>
@@ -998,7 +1031,7 @@ function ItemViewModal({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
             <div><Label>Master Serial No</Label><Input value={item.master_serial_no || '-'} disabled /></div>
             <div><Label>Revision</Label><Input value={item.revision || '-'} disabled /></div>
-            <div><Label>Lead Time (Days)</Label><Input value={item.lead_time_days || '-'} disabled /></div>
+            <div><Label>Lead Time</Label><Input value={item.lead_time_days || '-'} disabled /></div>
           </div>
           <div style={{ borderTop: '1px solid var(--enterprise-gray-200)', paddingTop: '16px', marginTop: '8px' }}>
             <p style={{ fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-gray-600)', marginBottom: '12px' }}>Pricing</p>
@@ -1236,7 +1269,16 @@ function ItemViewModal({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
 
 /* ========== MAIN COMPONENT ========== */
 
-export function ItemMasterSupabase() {
+type UserRole = 'L1' | 'L2' | 'L3' | null;
+
+interface ItemMasterProps {
+  userRole?: UserRole;
+}
+
+export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
+  // RBAC helpers
+  const canAddItem = userRole === 'L2' || userRole === 'L3'; // Supervisor or Manager
+  const canEditDelete = userRole === 'L3'; // Manager only
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1253,6 +1295,35 @@ export function ItemMasterSupabase() {
   // Delete confirmation state
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<Item | null>(null);
+
+  // Pagination state - show 20 items at a time
+  const [displayCount, setDisplayCount] = useState(20);
+  const ITEMS_PER_PAGE = 20;
+
+  // Actions dropdown state (matches UserManagement pattern)
+  const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
+
+  // Toast notification state (same pattern as StockMovement)
+  const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; title: string; text: string } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = useCallback((type: 'success' | 'error' | 'warning' | 'info', title: string, text: string, duration = 5000) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ type, title, text });
+    toastTimer.current = setTimeout(() => setToast(null), duration);
+  }, []);
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (activeDropdown && dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setActiveDropdown(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [activeDropdown]);
 
   const fetchItems = useCallback(async () => {
     setError(null);
@@ -1289,30 +1360,49 @@ export function ItemMasterSupabase() {
       result = result.filter(item => item.is_active === false);
     }
 
-    // Apply search filter (case-insensitive)
+    // Apply search filter (case-insensitive) - includes part_number and master_serial_no
     if (searchTerm.trim()) {
       const search = searchTerm.toLowerCase();
       result = result.filter(item =>
         item.item_code.toLowerCase().includes(search) ||
-        (item.item_name || '').toLowerCase().includes(search)
+        (item.item_name || '').toLowerCase().includes(search) ||
+        (item.part_number || '').toLowerCase().includes(search) ||
+        (item.master_serial_no || '').toLowerCase().includes(search)
       );
     }
 
     return result;
   }, [items, cardFilter, searchTerm]);
 
-  // Check if any filters are active
-  const hasActiveFilters = searchTerm.trim() !== '' || cardFilter !== 'ALL';
+  // Paginated items - only show displayCount items
+  const displayedItems = useMemo(() => {
+    return filteredItems.slice(0, displayCount);
+  }, [filteredItems, displayCount]);
+
+  // Check if there are more items to load
+  const hasMoreItems = displayCount < filteredItems.length;
+
+  // Reset display count when filters change
+  useEffect(() => {
+    setDisplayCount(ITEMS_PER_PAGE);
+  }, [cardFilter, searchTerm]);
+
+  // Check if any CARD filters are active (not search - search has its own X button)
+  const hasActiveFilters = cardFilter !== 'ALL';
 
   // Handle card click - toggle filter
   const handleCardClick = (filter: CardFilter) => {
     setCardFilter(prev => prev === filter ? 'ALL' : filter);
   };
 
-  // Handle clear filters
+  // Handle clear filters (cards only - search has its own X button)
   const handleClearFilters = () => {
-    setSearchTerm('');
     setCardFilter('ALL');
+  };
+
+  // Handle load more
+  const handleLoadMore = () => {
+    setDisplayCount(prev => prev + ITEMS_PER_PAGE);
   };
 
   // Handle export
@@ -1322,14 +1412,17 @@ export function ItemMasterSupabase() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const isEditing = !!editingItem;
+    const itemName = formData.part_number || formData.item_code;
     const result = editingItem
       ? await itemsApi.updateItem(editingItem.id, formData)
       : await itemsApi.createItem(formData);
 
     if (result.error) {
-      setError(result.error);
+      showToast('error', isEditing ? 'Update Failed' : 'Creation Failed', result.error);
       return;
     }
+    showToast('success', isEditing ? 'Item Updated' : 'Item Created', `Item "${itemName}" has been ${isEditing ? 'updated' : 'created'} successfully.`);
     handleCloseModal();
     fetchItems();
   };
@@ -1342,7 +1435,7 @@ export function ItemMasterSupabase() {
       uom: item.uom,
       unit_price: item.unit_price ?? null,
       standard_cost: item.standard_cost ?? null,
-      lead_time_days: item.lead_time_days,
+      lead_time_days: item.lead_time_days ?? '',
       is_active: item.is_active,
       master_serial_no: item.master_serial_no || '',
       revision: item.revision || '',
@@ -1360,13 +1453,15 @@ export function ItemMasterSupabase() {
   const handleDeleteConfirm = async (deletionReason: string) => {
     if (!itemToDelete) return;
 
-    // NOTE: deletion_reason will be sent to backend when endpoint supports it
-    console.log('Deletion reason:', deletionReason);
+    // HARD DELETE: removes item and all related data from the entire database
+    console.log(`Permanently deleting item ${itemToDelete.item_code}, reason:`, deletionReason);
+    const itemName = itemToDelete.part_number || itemToDelete.item_code;
 
-    const result = await itemsApi.deleteItem(itemToDelete.id);
+    const result = await itemsApi.deleteItem(itemToDelete.id, deletionReason);
     if (result.error) {
-      setError(result.error);
+      showToast('error', 'Deletion Failed', result.error);
     } else {
+      showToast('success', 'Item Deleted', `Item "${itemName}" has been permanently deleted.`);
       fetchItems();
     }
     setShowDeleteModal(false);
@@ -1394,8 +1489,77 @@ export function ItemMasterSupabase() {
         </div>
       )}
 
+      {/* ═══════════════ FLOATING TOAST NOTIFICATION ═══════════════ */}
+      {toast && (
+        <div style={{
+          position: 'fixed', top: '24px', right: '24px', zIndex: 10000,
+          minWidth: '360px', maxWidth: '440px',
+          padding: '16px 20px', borderRadius: '14px',
+          background: toast.type === 'success' ? 'linear-gradient(135deg, #f0fdf4, #dcfce7)'
+            : toast.type === 'error' ? 'linear-gradient(135deg, #fef2f2, #fee2e2)'
+              : toast.type === 'warning' ? 'linear-gradient(135deg, #fffbeb, #fef3c7)'
+                : 'linear-gradient(135deg, #eff6ff, #dbeafe)',
+          border: `1.5px solid ${toast.type === 'success' ? '#86efac'
+            : toast.type === 'error' ? '#fca5a5'
+              : toast.type === 'warning' ? '#fcd34d'
+                : '#93c5fd'
+            }`,
+          boxShadow: '0 10px 40px rgba(0,0,0,0.12), 0 4px 12px rgba(0,0,0,0.06)',
+          display: 'flex', alignItems: 'flex-start', gap: '12px',
+          animation: 'slideInDown 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          {/* Icon */}
+          <div style={{
+            width: '36px', height: '36px', borderRadius: '10px', flexShrink: 0,
+            background: toast.type === 'success' ? 'linear-gradient(135deg, #16a34a, #15803d)'
+              : toast.type === 'error' ? 'linear-gradient(135deg, #dc2626, #b91c1c)'
+                : toast.type === 'warning' ? 'linear-gradient(135deg, #f59e0b, #d97706)'
+                  : 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: `0 2px 8px ${toast.type === 'success' ? 'rgba(22,163,74,0.3)'
+              : toast.type === 'error' ? 'rgba(220,38,38,0.3)'
+                : toast.type === 'warning' ? 'rgba(245,158,11,0.3)'
+                  : 'rgba(37,99,235,0.3)'
+              }`,
+          }}>
+            {toast.type === 'success' && <CheckCircle2 size={18} style={{ color: '#fff' }} />}
+            {toast.type === 'error' && <XCircle size={18} style={{ color: '#fff' }} />}
+            {toast.type === 'warning' && <AlertTriangle size={18} style={{ color: '#fff' }} />}
+            {toast.type === 'info' && <Info size={18} style={{ color: '#fff' }} />}
+          </div>
+          {/* Content */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              fontSize: '13px', fontWeight: 800,
+              color: toast.type === 'success' ? '#14532d'
+                : toast.type === 'error' ? '#7f1d1d'
+                  : toast.type === 'warning' ? '#78350f'
+                    : '#1e3a5f',
+              marginBottom: '2px', letterSpacing: '-0.2px',
+            }}>{toast.title}</div>
+            <div style={{
+              fontSize: '12px', fontWeight: 500, lineHeight: '1.5',
+              color: toast.type === 'success' ? '#166534'
+                : toast.type === 'error' ? '#991b1b'
+                  : toast.type === 'warning' ? '#92400e'
+                    : '#1e40af',
+            }}>{toast.text}</div>
+          </div>
+          {/* Close */}
+          <button onClick={() => { if (toastTimer.current) clearTimeout(toastTimer.current); setToast(null); }} style={{
+            background: 'none', border: 'none', cursor: 'pointer', padding: '4px',
+            color: toast.type === 'success' ? '#16a34a'
+              : toast.type === 'error' ? '#dc2626'
+                : toast.type === 'warning' ? '#d97706'
+                  : '#2563eb',
+            borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0,
+          }}><X size={16} /></button>
+        </div>
+      )}
+
       {/* Summary Cards - Responsive & Clickable (matches InventoryGrid) */}
-      <div style={{
+      <div className="summary-cards-grid" style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
         gap: '16px',
@@ -1421,9 +1585,9 @@ export function ItemMasterSupabase() {
         <SummaryCard
           label="Inactive Items"
           value={stats.inactiveCount}
-          icon={<AlertTriangle size={22} style={{ color: 'var(--enterprise-gray-500)' }} />}
-          color="var(--enterprise-gray-500)"
-          bgColor="rgba(107, 114, 128, 0.1)"
+          icon={<AlertTriangle size={22} style={{ color: '#b91c1c' }} />}
+          color="#b91c1c"
+          bgColor="rgba(185, 28, 28, 0.1)"
           isActive={cardFilter === 'INACTIVE'}
           onClick={() => handleCardClick('INACTIVE')}
         />
@@ -1437,6 +1601,7 @@ export function ItemMasterSupabase() {
         onAddItem={() => setShowModal(true)}
         onClearFilters={handleClearFilters}
         hasActiveFilters={hasActiveFilters}
+        showAddItem={canAddItem}
       />
 
       {/* Items Table - PRIMARY IDENTIFIER: Part Number */}
@@ -1450,54 +1615,162 @@ export function ItemMasterSupabase() {
                 ? "Try adjusting your search or filter criteria"
                 : "Create your first item or check sign-in and RLS on public.items"
             }
-            action={!hasActiveFilters ? { label: 'Add Item', onClick: () => setShowModal(true) } : undefined}
+            action={!hasActiveFilters && canAddItem ? { label: 'Add Item', onClick: () => setShowModal(true) } : undefined}
           />
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ backgroundColor: 'var(--table-header-bg)', borderBottom: '2px solid var(--table-border)' }}>
-                  <th style={{ ...thStyle, minWidth: '100px' }}>Item Code</th>
-                  <th style={{ ...thStyle, minWidth: '120px' }}>Part Number</th>
-                  <th style={{ ...thStyle, minWidth: '100px' }}>MSN</th>
-                  <th style={{ ...thStyle, textAlign: 'center', minWidth: '60px' }}>Rev</th>
-                  <th style={{ ...thStyle, textAlign: 'center', minWidth: '60px' }}>UOM</th>
-                  <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>Lead Time</th>
-                  <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>Status</th>
-                  <th style={{ ...thStyle, textAlign: 'center', minWidth: '200px', width: '200px' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredItems.map((item, index) => (
-                  <tr
-                    key={item.id}
-                    style={{
-                      backgroundColor: index % 2 === 0 ? 'white' : 'var(--table-stripe)',
-                      borderBottom: '1px solid var(--table-border)',
-                      transition: 'background-color var(--transition-fast)',
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'var(--table-hover)'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = index % 2 === 0 ? 'white' : 'var(--table-stripe)'; }}
-                  >
-                    <td style={{ ...tdStyle, fontWeight: 'var(--font-weight-medium)', color: 'var(--enterprise-gray-700)' }}>{item.item_code}</td>
-                    <td style={{ ...tdStyle, fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-primary)' }}>{item.part_number || '-'}</td>
-                    <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: '0.85em', color: 'var(--enterprise-gray-600)' }}>{item.master_serial_no || '-'}</td>
-                    <td style={{ ...tdStyle, textAlign: 'center' }}><Badge variant="info">{item.revision || '-'}</Badge></td>
-                    <td style={{ ...tdStyle, textAlign: 'center' }}>{item.uom}</td>
-                    <td style={{ ...tdStyle, textAlign: 'center' }}>{item.lead_time_days} days</td>
-                    <td style={{ ...tdStyle, textAlign: 'center' }}><Badge variant={item.is_active ? 'success' : 'neutral'}>{item.is_active ? 'Active' : 'Inactive'}</Badge></td>
-                    <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px' }}>
-                      <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', alignItems: 'center' }}>
-                        <Button variant="secondary" size="sm" icon={<Edit2 size={14} />} onClick={() => handleEdit(item)} style={{ minWidth: '55px' }}>Edit</Button>
-                        <Button variant="danger" size="sm" icon={<Trash2 size={14} />} onClick={() => handleDeleteClick(item)} style={{ minWidth: '65px' }}>Delete</Button>
-                        <Button variant="tertiary" size="sm" icon={<Eye size={14} />} onClick={() => handleView(item)} style={{ minWidth: '55px' }}>View</Button>
-                      </div>
-                    </td>
+          <>
+            <div className="table-responsive" style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ backgroundColor: 'var(--table-header-bg)', borderBottom: '2px solid var(--table-border)' }}>
+                    <th style={{ ...thStyle, minWidth: '100px' }}>Item Code</th>
+                    <th style={{ ...thStyle, minWidth: '120px' }}>Part Number</th>
+                    <th style={{ ...thStyle, minWidth: '100px' }}>MSN</th>
+                    <th style={{ ...thStyle, textAlign: 'center', minWidth: '60px' }}>Rev</th>
+                    <th style={{ ...thStyle, textAlign: 'center', minWidth: '60px' }}>UOM</th>
+                    <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>Lead Time</th>
+                    <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>Status</th>
+                    <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>View</th>
+                    {canEditDelete && <th style={{ ...thStyle, textAlign: 'center', minWidth: '120px' }}>Actions</th>}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {displayedItems.map((item, index) => (
+                    <tr
+                      key={item.id}
+                      style={{
+                        backgroundColor: index % 2 === 0 ? 'white' : 'var(--table-stripe)',
+                        borderBottom: '1px solid var(--table-border)',
+                        transition: 'background-color var(--transition-fast)',
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'var(--table-hover)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = index % 2 === 0 ? 'white' : 'var(--table-stripe)'; }}
+                    >
+                      <td style={{ ...tdStyle, fontWeight: 'var(--font-weight-medium)', color: 'var(--enterprise-gray-700)' }}>{item.item_code}</td>
+                      <td style={{ ...tdStyle, fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-primary)' }}>{item.part_number || '-'}</td>
+                      <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: '0.85em', color: 'var(--enterprise-gray-600)' }}>{item.master_serial_no || '-'}</td>
+                      <td style={{ ...tdStyle, textAlign: 'center' }}><Badge variant="info">{item.revision || '-'}</Badge></td>
+                      <td style={{ ...tdStyle, textAlign: 'center' }}>{item.uom}</td>
+                      <td style={{ ...tdStyle, textAlign: 'center' }}>{item.lead_time_days || '—'}</td>
+                      <td style={{ ...tdStyle, textAlign: 'center' }}><Badge variant={item.is_active ? 'success' : 'error'} style={!item.is_active ? { backgroundColor: '#fee2e2', color: '#b91c1c' } : {}}>{item.is_active ? 'Active' : 'Inactive'}</Badge></td>
+                      {/* View Button */}
+                      <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px' }}>
+                        <Button variant="tertiary" size="sm" icon={<Eye size={14} />} onClick={() => handleView(item)} style={{ minWidth: '55px' }}>View</Button>
+                      </td>
+                      {/* Actions Dropdown - L3 Manager only */}
+                      {canEditDelete && (
+                        <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px', position: 'relative' }}>
+                          <div ref={activeDropdown === item.id ? dropdownRef : null} style={{ position: 'relative', display: 'inline-block' }}>
+                            <button
+                              onClick={() => setActiveDropdown(activeDropdown === item.id ? null : item.id)}
+                              style={{
+                                padding: '8px 12px',
+                                border: '1px solid #e5e7eb',
+                                borderRadius: '8px',
+                                backgroundColor: activeDropdown === item.id ? '#f8fafc' : 'white',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                fontSize: '13px',
+                                color: '#374151',
+                                fontWeight: 500,
+                                transition: 'all 0.15s ease',
+                              }}
+                            >
+                              <Settings size={16} />
+                              Actions
+                              <ChevronDown size={14} style={{ transition: 'transform 0.2s', transform: activeDropdown === item.id ? 'rotate(180deg)' : 'rotate(0deg)' }} />
+                            </button>
+                            {activeDropdown === item.id && (
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  top: '100%',
+                                  right: '0',
+                                  marginTop: '4px',
+                                  zIndex: 50,
+                                  width: '180px',
+                                  backgroundColor: 'white',
+                                  borderRadius: '12px',
+                                  boxShadow: '0 10px 40px rgba(0,0,0,0.15)',
+                                  border: '1px solid #e5e7eb',
+                                  overflow: 'hidden',
+                                }}
+                              >
+                                <button
+                                  onClick={() => { handleEdit(item); setActiveDropdown(null); }}
+                                  style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                >
+                                  <Edit2 size={16} /> Edit Item
+                                </button>
+                                <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
+                                <button
+                                  onClick={() => { handleDeleteClick(item); setActiveDropdown(null); }}
+                                  style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#fef2f2'; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                >
+                                  <Trash2 size={16} /> Delete Item
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Load More Button - Outside scrollable area */}
+            {hasMoreItems && (
+              <div style={{
+                padding: '20px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '12px',
+                borderTop: '1px solid var(--table-border)',
+                position: 'relative',
+                zIndex: 10,
+                backgroundColor: 'white',
+              }}>
+                <p style={{
+                  fontSize: '13px',
+                  color: 'var(--enterprise-gray-500)',
+                  margin: 0,
+                }}>
+                  Showing {displayedItems.length} of {filteredItems.length} items
+                </p>
+                <Button
+                  variant="primary"
+                  onClick={handleLoadMore}
+                >
+                  Load More ({Math.min(ITEMS_PER_PAGE, filteredItems.length - displayedItems.length)} more)
+                </Button>
+              </div>
+            )}
+
+            {/* Show total when all loaded */}
+            {!hasMoreItems && displayedItems.length > 0 && (
+              <div style={{
+                padding: '16px',
+                textAlign: 'center',
+                borderTop: '1px solid var(--table-border)',
+              }}>
+                <p style={{
+                  fontSize: '13px',
+                  color: 'var(--enterprise-gray-500)',
+                }}>
+                  Showing all {filteredItems.length} items
+                </p>
+              </div>
+            )}
+          </>
         )}
       </Card>
 
@@ -1549,8 +1822,8 @@ export function ItemMasterSupabase() {
                 <Input value={formData.revision || ''} onChange={(e) => setFormData({ ...formData, revision: e.target.value })} placeholder="A / AB / 1A" required />
               </div>
               <div>
-                <Label required>Lead Time (Days)</Label>
-                <Input type="number" value={formData.lead_time_days} onChange={(e) => setFormData({ ...formData, lead_time_days: parseInt(e.target.value) || 0 })} placeholder="Enter days" required min={0} />
+                <Label required>Lead Time</Label>
+                <Input type="text" value={formData.lead_time_days} onChange={(e) => setFormData({ ...formData, lead_time_days: e.target.value })} placeholder="e.g. 15 days, 2 weeks, TBD" required />
               </div>
               <div>
                 <Label>Status</Label>
@@ -1625,6 +1898,10 @@ export function ItemMasterSupabase() {
             opacity: 1;
             max-height: 500px;
           }
+        }
+        @keyframes slideInDown {
+          from { opacity: 0; transform: translateY(-20px) scale(0.95); }
+          to   { opacity: 1; transform: translateY(0) scale(1); }
         }
       `}</style>
     </div>
