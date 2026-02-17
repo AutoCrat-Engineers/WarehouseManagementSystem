@@ -214,6 +214,16 @@ function canPartialApprove(movementType: string): boolean {
   return ['DISPATCH_TO_TRANSIT', 'TRANSFER_TO_WAREHOUSE'].includes(movementType);
 }
 
+/** Resolve warehouse label from warehouse_code using DB_CODE_MAP → LOCATIONS.
+ *  Falls back to raw warehouse name or the fallback string. */
+function resolveWarehouseLabel(warehouseCode: string | null, warehouseName: string | null, fallback = '—'): string {
+  if (warehouseCode) {
+    const locCode = DB_CODE_MAP[warehouseCode];
+    if (locCode && LOCATIONS[locCode]) return LOCATIONS[locCode].name;
+  }
+  return warehouseName || fallback;
+}
+
 // ============================================================================
 // SHARED STYLES
 // ============================================================================
@@ -340,6 +350,9 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
     toastTimer.current = setTimeout(() => setToast(null), duration);
   }, []);
 
+  // Current logged-in user name (for print slip Verified By auto-populate)
+  const [currentUserName, setCurrentUserName] = useState<string>('');
+
   const searchRef = useRef<HTMLDivElement>(null);
   const PAGE_SIZE = 20;
   const [displayCount, setDisplayCount] = useState(PAGE_SIZE);
@@ -359,8 +372,8 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
           requested_by, approval_status,
           reference_document_type, reference_document_number,
           source_warehouse_id, destination_warehouse_id,
-          source_warehouse:source_warehouse_id ( warehouse_name ),
-          destination_warehouse:destination_warehouse_id ( warehouse_name )
+          source_warehouse:source_warehouse_id ( warehouse_name, warehouse_code ),
+          destination_warehouse:destination_warehouse_id ( warehouse_name, warehouse_code )
         `)
         .order('created_at', { ascending: false })
         .limit(200);
@@ -430,10 +443,10 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
           id: h.id, movement_number: h.movement_number, movement_date: h.movement_date,
           movement_type: h.movement_type, status: correctedStatus,
           reason_description: h.reason_description, notes: h.notes, created_at: h.created_at,
-          source_warehouse: h.source_warehouse?.warehouse_name || null,
-          destination_warehouse: h.destination_warehouse?.warehouse_name || null,
-          source_warehouse_id: h.source_warehouse_id || null,
-          destination_warehouse_id: h.destination_warehouse_id || null,
+          source_warehouse: resolveWarehouseLabel(h.source_warehouse?.warehouse_code || null, h.source_warehouse?.warehouse_name || null),
+          destination_warehouse: resolveWarehouseLabel(h.destination_warehouse?.warehouse_code || null, h.destination_warehouse?.warehouse_name || null),
+          source_warehouse_id: h.source_warehouse?.warehouse_code || h.source_warehouse_id || null,
+          destination_warehouse_id: h.destination_warehouse?.warehouse_code || h.destination_warehouse_id || null,
           item_code: line?.item_code || null,
           item_name: line ? (itemInfoMap[line.item_code]?.item_name || line.item_code) : null,
           part_number: line ? (itemInfoMap[line.item_code]?.part_number || null) : null,
@@ -456,6 +469,24 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   }, [supabase]);
 
   useEffect(() => { fetchMovements(); }, [fetchMovements]);
+
+  // Fetch current logged-in user's full_name for print slip Verified By
+  useEffect(() => {
+    const fetchCurrentUser = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user?.id) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('full_name')
+            .eq('id', session.user.id)
+            .single();
+          if (profile?.full_name) setCurrentUserName(profile.full_name);
+        }
+      } catch (err) { console.error('Error fetching current user name:', err); }
+    };
+    fetchCurrentUser();
+  }, [supabase]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -887,293 +918,442 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   };
 
   // ============================================================================
-  // PRINT SLIP
+  // PRINT SLIP — Enterprise-Grade ERP Transaction Document
+  // Pure HTML table layout for bulletproof cross-browser print rendering
   // ============================================================================
 
   const handlePrintSlip = (
     m: MovementRecord,
-    statusCfg: { color: string; bg: string; label: string },
+    _statusCfg: { color: string; bg: string; label: string },
     stockTypeLabel: string,
     fromLabel: string,
     toLabel: string,
   ) => {
+    const statusLabel = m.status === 'COMPLETED' ? 'COMPLETED'
+      : m.status === 'PARTIALLY_APPROVED' ? 'PARTIALLY APPROVED'
+        : m.status === 'REJECTED' ? 'REJECTED'
+          : m.status === 'PENDING_APPROVAL' ? 'PENDING' : m.status;
+    const statusLetter = m.status === 'COMPLETED' ? 'C'
+      : m.status === 'PARTIALLY_APPROVED' ? 'P'
+        : m.status === 'REJECTED' ? 'R'
+          : m.status === 'PENDING_APPROVAL' ? 'A' : 'A';
     const statusColor = m.status === 'COMPLETED' ? '#16a34a'
-      : m.status === 'PARTIALLY_APPROVED' ? '#ea580c'
-        : '#dc2626';
-    const statusLabel = m.status === 'COMPLETED' ? 'Completed'
-      : m.status === 'PARTIALLY_APPROVED' ? 'Partially Approved'
-        : 'Rejected';
+      : m.status === 'PARTIALLY_APPROVED' ? '#7c3aed'
+        : m.status === 'REJECTED' ? '#dc2626'
+          : '#2563eb';
     const movedQty = m.approved_quantity ?? 0;
-    const rejectedQty = m.rejected_quantity ?? 0;
     const requestedQty = m.requested_quantity ?? m.quantity ?? 0;
     const movementTypeLabel = MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type;
-    const stockTypeDisplay = stockTypeLabel === 'REJECTION' ? 'From Rejection' : 'Stock In';
-    const printDate = new Date().toLocaleString('en-IN', {
+    const stockTypeDisplay = stockTypeLabel === 'REJECTION' ? 'Rejection' : 'Stock In';
+    const printTimestamp = new Date().toLocaleString('en-IN', {
       day: '2-digit', month: 'short', year: 'numeric',
       hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
     });
-    const movementDate = m.movement_date
-      ? new Date(m.movement_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+    const docDate = m.movement_date
+      ? new Date(m.movement_date + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
       : '—';
-    const createdDate = m.created_at
-      ? new Date(m.created_at).toLocaleString('en-IN', {
-        day: '2-digit', month: 'short', year: 'numeric',
-        hour: '2-digit', minute: '2-digit', hour12: true,
-      })
+    const refTypeLabel = m.reference_document_type
+      ? (REFERENCE_TYPES.find(r => r.value === m.reference_document_type)?.label || m.reference_document_type.replace(/_/g, ' '))
       : '—';
+    const reasonLabel = m.reason_code?.replace(/_/g, ' ') || '—';
 
     const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
-<title>Stock Movement Slip - ${m.movement_number}</title>
+<title>SM-${m.movement_number} | Stock Movement Slip | Autocrat Engineers</title>
 <style>
-  @page { size: A4; margin: 16mm 14mm; }
+  /* ═══════════════════════════════════════════════════════════════
+     ENTERPRISE PRINT DOCUMENT — A4 PORTRAIT
+     A4 = 210mm × 297mm
+     Margins: 12mm left/right, 10mm top, 8mm bottom
+     Printable area: 186mm × 279mm
+     ═══════════════════════════════════════════════════════════════ */
+  @page {
+    size: 210mm 297mm;
+    margin: 10mm 12mm 8mm 12mm;
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; color: #1e293b; font-size: 12px; line-height: 1.5; background: #fff; }
-  .page { max-width: 760px; margin: 0 auto; padding: 20px; }
+  html {
+    width: 210mm;
+  }
+  body {
+    font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+    color: #000;
+    font-size: 10px;
+    line-height: 1.35;
+    background: #fff;
+    width: 186mm;
+    margin: 0 auto;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
 
-  /* Header */
-  .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid #1e3a8a; padding-bottom: 14px; margin-bottom: 20px; }
-  .header-left { display: flex; align-items: center; gap: 14px; }
-  .header-left img { width: 56px; height: 56px; object-fit: contain; }
-  .org-name { font-size: 20px; font-weight: 800; color: #1e3a8a; letter-spacing: -0.3px; }
-  .org-sub { font-size: 11px; color: #64748b; font-weight: 500; margin-top: 2px; }
-  .slip-title { font-size: 16px; font-weight: 700; color: #334155; text-align: right; }
-  .slip-subtitle { font-size: 11px; color: #94a3b8; text-align: right; margin-top: 2px; }
+  /* Page container — exactly fits A4 printable area */
+  .doc {
+    width: 186mm;
+    max-width: 186mm;
+    margin: 0 auto;
+    position: relative;
+    overflow: hidden;
+  }
 
-  /* Status Banner */
-  .status-banner { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; border-radius: 8px; margin-bottom: 18px; border: 2px solid ${statusColor}30; background: ${statusColor}08; }
-  .status-label { font-size: 15px; font-weight: 800; color: ${statusColor}; display: flex; align-items: center; gap: 8px; }
-  .status-dot { width: 10px; height: 10px; border-radius: 50%; background: ${statusColor}; }
-  .movement-id { font-size: 13px; font-weight: 700; color: #475569; font-family: 'Courier New', monospace; background: #f1f5f9; padding: 4px 10px; border-radius: 4px; border: 1px solid #e2e8f0; }
+  /* AUTOCARAT ENGINEERS watermark */
+  .watermark {
+    position: fixed;
+    top: 46%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-35deg);
+    font-size: 64px;
+    font-weight: 900;
+    color: rgba(0,0,0,0.06);
+    letter-spacing: 14px;
+    text-transform: uppercase;
+    pointer-events: none;
+    z-index: 0;
+    white-space: nowrap;
+    font-family: Arial, sans-serif;
+  }
 
-  /* Details Table */
-  .details-section { margin-bottom: 18px; }
-  .section-header { font-size: 11px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.8px; padding: 8px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-bottom: none; border-radius: 6px 6px 0 0; }
-  .details-grid { border: 1px solid #e2e8f0; border-radius: 0 0 6px 6px; overflow: hidden; }
-  .detail-row { display: flex; border-bottom: 1px solid #f1f5f9; }
-  .detail-row:last-child { border-bottom: none; }
-  .detail-label { width: 170px; padding: 8px 12px; font-size: 11px; font-weight: 600; color: #64748b; background: #fafbfc; border-right: 1px solid #f1f5f9; flex-shrink: 0; }
-  .detail-value { flex: 1; padding: 8px 12px; font-size: 12px; font-weight: 600; color: #1e293b; }
+  /* Master table — controls entire document */
+  table {
+    border-collapse: collapse;
+    page-break-inside: avoid;
+    width: 100%;
+  }
+  .w100 { width: 100%; }
+  .bdr { border: 1px solid #000; }
+  .bdr-b { border-bottom: 1px solid #000; }
+  .bdr-r { border-right: 1px solid #000; }
+  .bdr-t { border-top: 1px solid #000; }
+  .no-bdr { border: none; }
 
-  /* Quantities */
-  .qty-section { display: flex; gap: 12px; margin-bottom: 18px; }
-  .qty-card { flex: 1; text-align: center; padding: 14px 10px; border-radius: 8px; border: 1px solid; }
-  .qty-card.moved { background: #f0fdf4; border-color: #bbf7d0; }
-  .qty-card.rejected { background: #fef2f2; border-color: #fecaca; }
-  .qty-card.requested { background: #eff6ff; border-color: #bfdbfe; }
-  .qty-label { font-size: 10px; font-weight: 700; color: #6b7280; letter-spacing: 0.5px; margin-bottom: 4px; }
-  .qty-value { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
-  .qty-card.moved .qty-value { color: #16a34a; }
-  .qty-card.rejected .qty-value { color: #dc2626; }
-  .qty-card.requested .qty-value { color: #2563eb; }
+  /* Cell padding presets */
+  .cp { padding: 5px 8px; }
+  .cp-sm { padding: 3px 8px; }
+  .cp-lg { padding: 8px 10px; }
 
-  /* Notes */
-  .note-box { padding: 10px 14px; border-radius: 6px; margin-bottom: 12px; border: 1px solid; }
-  .note-box.operator { background: #f0f9ff; border-color: #bae6fd; }
-  .note-box.supervisor { background: #f5f3ff; border-color: #c4b5fd; }
-  .note-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
-  .note-box.operator .note-label { color: #0369a1; }
-  .note-box.supervisor .note-label { color: #6d28d9; }
-  .note-text { font-size: 12px; color: #334155; line-height: 1.5; }
+  /* Typography */
+  .fw800 { font-weight: 800; }
+  .fw700 { font-weight: 700; }
+  .fw600 { font-weight: 600; }
+  .fw500 { font-weight: 500; }
+  .fs8 { font-size: 8px; }
+  .fs9 { font-size: 9px; }
+  .fs10 { font-size: 10px; }
+  .fs11 { font-size: 11px; }
+  .fs12 { font-size: 12px; }
+  .fs13 { font-size: 13px; }
+  .fs15 { font-size: 15px; }
+  .uc { text-transform: uppercase; }
+  .mono { font-family: 'Courier New', Courier, monospace; }
+  .tr { text-align: right; }
+  .tc { text-align: center; }
+  .tl { text-align: left; }
+  .vt { vertical-align: top; }
+  .vm { vertical-align: middle; }
+  .ls1 { letter-spacing: 0.8px; }
+  .ls2 { letter-spacing: 1.2px; }
+  .nowrap { white-space: nowrap; }
+  .uline { text-decoration: underline; }
+  .italic { font-style: italic; }
+  .c666 { color: #666; }
+  .c333 { color: #333; }
+  .c000 { color: #000; }
 
-  /* Footer */
-  .footer { margin-top: 30px; padding-top: 16px; border-top: 2px solid #e2e8f0; }
-  .sig-section { display: flex; justify-content: space-between; margin-bottom: 30px; }
-  .sig-block { width: 45%; }
-  .sig-line { border-bottom: 1px solid #94a3b8; margin-bottom: 6px; height: 40px; }
-  .sig-label { font-size: 11px; color: #64748b; font-weight: 600; }
-  .footer-meta { display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: #94a3b8; }
-  .system-gen { font-style: italic; }
+  /* Section header (black band) */
+  .sec-hdr {
+    background: #000;
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    padding: 4px 8px;
+  }
+  /* Section sub-header (light grey) */
+  .sec-sub {
+    background: #f0f0f0;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    padding: 4px 8px;
+    border-bottom: 1px solid #000;
+  }
 
-  /* Badge-like elements */
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }
-  .badge-green { background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; }
-  .badge-red { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
-  .badge-blue { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
-  .badge-orange { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
+  /* Field label */
+  .lbl {
+    font-size: 9px;
+    font-weight: 700;
+    color: #000;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    padding: 4px 8px;
+    vertical-align: top;
+    white-space: nowrap;
+  }
+  /* Field value */
+  .val {
+    font-size: 10px;
+    font-weight: 600;
+    color: #000;
+    padding: 4px 8px;
+    vertical-align: top;
+  }
 
+  /* Dotted field line for handwriting */
+  .field-line {
+    border-bottom: 1px dotted #999;
+    min-width: 120px;
+    height: 15px;
+    display: inline-block;
+    vertical-align: bottom;
+  }
+  /* Signature box */
+  .sig-box {
+    height: 50px;
+    border-bottom: 1px solid #000;
+    margin-bottom: 3px;
+  }
+  .sig-caption {
+    font-size: 8px;
+    color: #555;
+    text-align: center;
+    font-weight: 600;
+  }
+
+  /* Spacing */
+  .mb4 { margin-bottom: 4px; }
+  .mb6 { margin-bottom: 6px; }
+  .mb8 { margin-bottom: 8px; }
+  .mt4 { margin-top: 4px; }
+  .mt8 { margin-top: 8px; }
+
+  /* Print-specific overrides */
   @media print {
-    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .page { padding: 0; }
+    html, body {
+      width: 186mm;
+      height: auto;
+      margin: 0;
+      padding: 0;
+      overflow: visible;
+    }
+    .doc {
+      width: 100%;
+      max-width: 100%;
+      margin: 0;
+      page-break-after: avoid;
+    }
     .no-print { display: none !important; }
+    table { page-break-inside: avoid; }
+    /* Remove browser default headers/footers in print */
+    @page { margin: 10mm 12mm 8mm 12mm; }
   }
 </style>
-</head><body>
-<div class="page">
+</head>
+<body>
+<div class="doc">
 
-  <!-- HEADER -->
-  <div class="header">
-    <div class="header-left">
-      <img src="/logo.png" alt="Logo" onerror="this.style.display='none'" />
-      <div>
-        <div class="org-name">Autocrat Engineers</div>
-        <div class="org-sub">Warehouse Management System</div>
-      </div>
-    </div>
-    <div>
-      <div class="slip-title">Stock Movement Action Slip</div>
-      <div class="slip-subtitle">Printed: ${printDate}</div>
-    </div>
-  </div>
+  <!-- WATERMARK -->
+  <div class="watermark">AUTOCARAT ENGINEERS</div>
 
-  <!-- STATUS BANNER -->
-  <div class="status-banner">
-    <div class="status-label">
-      <div class="status-dot"></div>
-      ${statusLabel}
-    </div>
-    <div class="movement-id">${m.movement_number}</div>
-  </div>
+  <!-- ╔══════════════════════════════════════════════════════════════╗
+       ║  SECTION 1: DOCUMENT HEADER                                 ║
+       ╚══════════════════════════════════════════════════════════════╝ -->
+  <table class="w100 bdr" cellspacing="0" cellpadding="0">
+    <tr>
+      <!-- LEFT: Company Logo -->
+      <td class="vm tc" style="width:14%; padding:12px 10px;">
+        <img src="/a-logo.png" alt="AE" style="width:100px; height:auto; display:block; margin:0 auto;" onerror="this.style.display='none'" />
+      </td>
+      <!-- CENTER: Organization Details -->
+      <td class="vt" style="padding:10px 14px;">
+        <div class="fw800 uc c000" style="font-size:16px; margin-bottom:3px; letter-spacing:0.6px;">AUTOCRAT ENGINEERS</div>
+        <div class="c000" style="font-size:9px; line-height:1.5;">
+          21 &amp; 22, Phase-1, E.P.I.P, Whitefield, Bangalore - 560066, Karnataka, India<br/>
+          <span class="fw700">Tel:</span> 4333 0100 / 4333 0102 &nbsp;&nbsp;
+          <span class="fw700">Email:</span> purchasing@autocratengineers.in<br/>
+          <span class="fw700">GSTIN:</span> 29ABLPK6831H1ZB &nbsp;&nbsp;
+          <span class="fw700">PAN:</span> ABLPK6831H
+        </div>
+      </td>
+      <!-- RIGHT: Status Letter -->
+      <td class="vm tc" style="width:10%; padding:8px 6px; border-left:1px solid #000;">
+        <div style="font-size:36px; font-weight:900; color:${statusColor}; line-height:1; letter-spacing:1px;">${statusLetter}</div>
+        <div style="font-size:7px; font-weight:700; color:#555; text-transform:uppercase; letter-spacing:0.5px; margin-top:3px;">${statusLabel}</div>
+      </td>
+    </tr>
+  </table>
 
-  <!-- MOVEMENT DETAILS -->
-  <div class="details-section">
-    <div class="section-header">Movement Details</div>
-    <div class="details-grid">
-      <div class="detail-row">
-        <div class="detail-label">Movement ID</div>
-        <div class="detail-value" style="font-family: 'Courier New', monospace;">${m.movement_number}</div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-label">Movement Date</div>
-        <div class="detail-value">${movementDate}</div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-label">Created At</div>
-        <div class="detail-value">${createdDate}</div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-label">Movement Type</div>
-        <div class="detail-value"><span class="badge ${stockTypeLabel === 'STOCK_IN' ? 'badge-green' : 'badge-red'}">${movementTypeLabel}</span></div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-label">Stock Type</div>
-        <div class="detail-value"><span class="badge ${stockTypeLabel === 'STOCK_IN' ? 'badge-blue' : 'badge-orange'}">${stockTypeDisplay}</span></div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-label">Final Status</div>
-        <div class="detail-value" style="font-weight: 800; color: ${statusColor};">${statusLabel}</div>
-      </div>
-    </div>
-  </div>
+  <!-- Document Title -->
+  <table class="w100 bdr" cellspacing="0" cellpadding="0" style="border-top:none;">
+    <tr>
+      <td class="tc" style="padding:6px 10px;">
+        <div class="fs15 fw800 uc uline c000" style="letter-spacing:2px; display:inline-block;">STOCK MOVEMENT</div>
+      </td>
+    </tr>
+  </table>
 
-  <!-- ITEM DETAILS -->
-  <div class="details-section">
-    <div class="section-header">Item Details</div>
-    <div class="details-grid">
-      <div class="detail-row">
-        <div class="detail-label">MSN</div>
-        <div class="detail-value">${m.master_serial_no || '—'}</div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-label">Part Number</div>
-        <div class="detail-value" style="font-weight: 700;">${m.part_number || '—'}</div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-label">Description</div>
-        <div class="detail-value">${m.item_name || '—'}</div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-label">Item Code</div>
-        <div class="detail-value" style="font-family: 'Courier New', monospace;">${m.item_code || '—'}</div>
-      </div>
-    </div>
-  </div>
+  <!-- ╔══════════════════════════════════════════════════════════════╗
+       ║  SECTION 1B: DOCUMENT CONTROL (Two-column layout)           ║
+       ╚══════════════════════════════════════════════════════════════╝ -->
+  <table class="w100 bdr" cellspacing="0" cellpadding="0" style="border-top:none;">
+    <tr>
+      <td class="lbl bdr-b bdr-r cp-sm" style="width:18%;">Movement Type</td>
+      <td class="val bdr-b bdr-r cp-sm fw600" style="width:32%;">${movementTypeLabel}</td>
+      <td class="lbl bdr-b bdr-r cp-sm" style="width:18%;">Document No.</td>
+      <td class="val bdr-b cp-sm mono fw800" style="width:32%;">${m.movement_number}</td>
+    </tr>
+    <tr>
+      <td class="lbl bdr-r cp-sm">Stock Category</td>
+      <td class="val bdr-r cp-sm fw600">${stockTypeDisplay}</td>
+      <td class="lbl bdr-r cp-sm">Document Date</td>
+      <td class="val cp-sm fw600">${docDate}</td>
+    </tr>
+  </table>
 
-  <!-- ROUTE & REFERENCE -->
-  <div class="details-section">
-    <div class="section-header">Route & Reference</div>
-    <div class="details-grid">
-      <div class="detail-row">
-        <div class="detail-label">From Warehouse</div>
-        <div class="detail-value">${fromLabel}</div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-label">To Warehouse</div>
-        <div class="detail-value">${toLabel}</div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-label">Reference Type</div>
-        <div class="detail-value">${m.reference_document_type?.replace(/_/g, ' ') || '—'}</div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-label">Reference ID</div>
-        <div class="detail-value">${m.reference_document_number || '—'}</div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-label">Reason Code</div>
-        <div class="detail-value"><span class="badge" style="background:#f1f5f9;color:#334155;border:1px solid #e2e8f0;font-family:monospace;">${m.reason_code?.replace(/_/g, ' ') || '—'}</span></div>
-      </div>
-    </div>
-  </div>
+  <!-- ╔══════════════════════════════════════════════════════════════╗
+       ║  SECTION 2: TRANSACTION DETAILS (Single consolidated block) ║
+       ╚══════════════════════════════════════════════════════════════╝ -->
+  <table class="w100 bdr mt4" cellspacing="0" cellpadding="0">
+    <tr><td colspan="4" class="sec-hdr">Transaction Details</td></tr>
+    <tr>
+      <td class="lbl bdr-b bdr-r cp-sm" style="width:18%;">From Location</td>
+      <td class="val bdr-b bdr-r cp-sm fw700" style="width:32%;">${fromLabel}</td>
+      <td class="lbl bdr-b bdr-r cp-sm" style="width:18%;">To Location</td>
+      <td class="val bdr-b cp-sm fw700" style="width:32%;">${toLabel}</td>
+    </tr>
+    <tr>
+      <td class="lbl bdr-b bdr-r cp-sm">Reference Type</td>
+      <td class="val bdr-b bdr-r cp-sm">${refTypeLabel}</td>
+      <td class="lbl bdr-b bdr-r cp-sm">Reference ID</td>
+      <td class="val bdr-b cp-sm mono fw700">${m.reference_document_number || '—'}</td>
+    </tr>
+    <tr>
+      <td class="lbl bdr-b bdr-r cp-sm">Reason / Purpose</td>
+      <td class="val bdr-b bdr-r cp-sm mono">${reasonLabel}</td>
+      <td class="lbl bdr-b bdr-r cp-sm">Requested By</td>
+      <td class="val bdr-b cp-sm">${m.requested_by_name || 'Operator'}</td>
+    </tr>
+    <tr>
+      <td colspan="4" class="cp-sm fs9 italic c333 tc bdr-b" style="padding:4px 8px; background:#fafafa;">
+        This document serves as official proof of stock movement executed against the above reference.
+      </td>
+    </tr>
+  </table>
 
-  <!-- QUANTITIES -->
-  <div class="qty-section">
-    <div class="qty-card requested">
-      <div class="qty-label">REQUESTED</div>
-      <div class="qty-value">${requestedQty.toLocaleString()}</div>
-    </div>
-    <div class="qty-card moved">
-      <div class="qty-label">MOVED / APPROVED</div>
-      <div class="qty-value">${movedQty.toLocaleString()}</div>
-    </div>
-    <div class="qty-card rejected">
-      <div class="qty-label">REJECTED</div>
-      <div class="qty-value">${rejectedQty.toLocaleString()}</div>
-    </div>
-  </div>
+  <!-- ╔══════════════════════════════════════════════════════════════╗
+       ║  SECTION 3: ITEM SCHEDULE                                   ║
+       ╚══════════════════════════════════════════════════════════════╝ -->
+  <table class="w100 bdr mt4" cellspacing="0" cellpadding="0">
+    <tr><td colspan="8" class="sec-hdr">Item Schedule</td></tr>
+    <tr style="background:#f0f0f0;">
+      <th class="fs8 fw800 uc ls1 bdr-b bdr-r cp-sm tc" style="width:5%;">Sl.</th>
+      <th class="fs8 fw800 uc ls1 bdr-b bdr-r cp-sm tl" style="width:13%;">Item Code</th>
+      <th class="fs8 fw800 uc ls1 bdr-b bdr-r cp-sm tl" style="width:13%;">Part Number</th>
+      <th class="fs8 fw800 uc ls1 bdr-b bdr-r cp-sm tl" style="width:23%;">Description</th>
+      <th class="fs8 fw800 uc ls1 bdr-b bdr-r cp-sm tc" style="width:7%;">UOM</th>
+      <th class="fs8 fw800 uc ls1 bdr-b bdr-r cp-sm tr" style="width:11%;">Req. Qty</th>
+      <th class="fs8 fw800 uc ls1 bdr-b bdr-r cp-sm tr" style="width:11%;">Appr. Qty</th>
+      <th class="fs8 fw800 uc ls1 bdr-b cp-sm tl" style="width:17%;">Batch / MSN</th>
+    </tr>
+    <tr>
+      <td class="bdr-b bdr-r cp-sm tc fs10">1</td>
+      <td class="bdr-b bdr-r cp-sm mono fs10">${m.item_code || '—'}</td>
+      <td class="bdr-b bdr-r cp-sm fw700 fs10">${m.part_number || '—'}</td>
+      <td class="bdr-b bdr-r cp-sm fs10">${m.item_name || '—'}</td>
+      <td class="bdr-b bdr-r cp-sm tc fs10">NOS</td>
+      <td class="bdr-b bdr-r cp-sm tr mono fw700 fs10">${requestedQty.toLocaleString()}</td>
+      <td class="bdr-b bdr-r cp-sm tr mono fw700 fs10">${movedQty.toLocaleString()}</td>
+      <td class="bdr-b cp-sm mono fs9">${m.master_serial_no || '—'}</td>
+    </tr>
+    <!-- Blank rows for manual additions -->
+    <tr><td class="bdr-b bdr-r cp-sm tc">&nbsp;</td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b cp-sm"></td></tr>
+    <tr><td class="bdr-b bdr-r cp-sm tc">&nbsp;</td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b cp-sm"></td></tr>
+    <tr><td class="bdr-r cp-sm tc">&nbsp;</td><td class="bdr-r cp-sm"></td><td class="bdr-r cp-sm"></td><td class="bdr-r cp-sm"></td><td class="bdr-r cp-sm"></td><td class="bdr-r cp-sm"></td><td class="bdr-r cp-sm"></td><td class="cp-sm"></td></tr>
+  </table>
 
-  <!-- PERSONNEL -->
-  <div class="details-section">
-    <div class="section-header">Personnel</div>
-    <div class="details-grid">
-      <div class="detail-row">
-        <div class="detail-label">Requested By</div>
-        <div class="detail-value">${m.requested_by_name || m.requested_by || 'Operator'}</div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-label">Action Taken By</div>
-        <div class="detail-value">Supervisor / Manager</div>
-      </div>
-    </div>
-  </div>
+  <!-- ╔══════════════════════════════════════════════════════════════╗
+       ║  SECTION 4: SUMMARY + REMARKS (side by side)               ║
+       ╚══════════════════════════════════════════════════════════════╝ -->
+  <table class="w100 bdr mt4" cellspacing="0" cellpadding="0">
+    <tr>
+      <!-- LEFT: Supervisor Note -->
+      <td class="vt bdr-r" style="width:60%;">
+        <table class="w100" cellspacing="0" cellpadding="0" style="border:none;">
+          <tr><td class="sec-sub">Supervisor Note</td></tr>
+          <tr><td class="cp vt" style="font-size:10px; line-height:1.5;">
+            ${m.supervisor_note || '&nbsp;'}
+          </td></tr>
+        </table>
+      </td>
+      <!-- RIGHT: Summary Totals -->
+      <td class="vt" style="width:40%;">
+        <table class="w100" cellspacing="0" cellpadding="0" style="border:none;">
+          <tr><td class="sec-sub" colspan="2">Summary</td></tr>
+          <tr><td class="lbl bdr-b bdr-r cp-sm" style="width:55%;">Total Line Items</td><td class="val bdr-b cp-sm tr mono fw800">1</td></tr>
+          <tr><td class="lbl bdr-b bdr-r cp-sm">Total Requested Qty</td><td class="val bdr-b cp-sm tr mono fw800">${requestedQty.toLocaleString()}</td></tr>
+          <tr><td class="lbl bdr-r cp-sm" style="background:#f0f0f0;">Total Approved Qty</td><td class="val cp-sm tr mono fw800 fs11" style="background:#f0f0f0;">${movedQty.toLocaleString()}</td></tr>
+        </table>
+      </td>
+    </tr>
+  </table>
 
-  <!-- NOTES -->
-  ${m.reason_description ? `
-  <div class="note-box operator">
-    <div class="note-label">Operator Note</div>
-    <div class="note-text">${m.reason_description}</div>
-  </div>` : ''}
+  <!-- ╔══════════════════════════════════════════════════════════════╗
+       ║  SECTION 5: AUTHORIZATION                                   ║
+       ╚══════════════════════════════════════════════════════════════╝ -->
+  <table class="w100 bdr mt4" cellspacing="0" cellpadding="0">
+    <tr><td colspan="2" class="sec-hdr">Authorization</td></tr>
+    <tr>
+      <!-- Verified By (auto-populated from current session user) -->
+      <td class="vt bdr-r" style="width:50%; padding:10px 14px;">
+        <div class="fs9 fw800 uc tc ls1 c000" style="padding-bottom:4px; margin-bottom:8px; border-bottom:1px solid #ccc;">Verified By</div>
+        <table class="w100" cellspacing="0" cellpadding="0" style="border:none;">
+          <tr><td class="fs9 fw700" style="width:70px; padding:3px 0;">Name</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px; font-weight:600;">${currentUserName || 'System User'}</td></tr>
+          <tr><td class="fs9 fw700" style="padding:3px 0;">Designation</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px; font-weight:500;">Supervisor</td></tr>
+          <tr><td class="fs9 fw700" style="padding:3px 0;">Date</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px; font-weight:500;">${printTimestamp.split(',')[0]}</td></tr>
+        </table>
+        <div class="sig-box" style="margin-top:8px; height:60px;"></div>
+        <div class="sig-caption">Signature</div>
+      </td>
+      <!-- Authorized By -->
+      <td class="vt" style="width:50%; padding:10px 14px;">
+        <div class="fs9 fw800 uc tc ls1 c000" style="padding-bottom:4px; margin-bottom:8px; border-bottom:1px solid #ccc;">Authorized By</div>
+        <table class="w100" cellspacing="0" cellpadding="0" style="border:none;">
+          <tr><td class="fs9 fw700" style="width:70px; padding:3px 0;">Name</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px;">&nbsp;</td></tr>
+          <tr><td class="fs9 fw700" style="padding:3px 0;">Designation</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px;">Manager</td></tr>
+          <tr><td class="fs9 fw700" style="padding:3px 0;">Date</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px;">&nbsp;</td></tr>
+        </table>
+        <div class="sig-box" style="margin-top:8px; height:60px;"></div>
+        <div class="sig-caption">Signature</div>
+      </td>
+    </tr>
+  </table>
 
-  ${m.supervisor_note ? `
-  <div class="note-box supervisor">
-    <div class="note-label">Supervisor Note</div>
-    <div class="note-text">${m.supervisor_note}</div>
-  </div>` : ''}
-
-  <!-- FOOTER -->
-  <div class="footer">
-    <div class="sig-section">
-      <div class="sig-block">
-        <div class="sig-line"></div>
-        <div class="sig-label">Authorized Signature (Supervisor / Manager)</div>
-      </div>
-      <div class="sig-block">
-        <div class="sig-line"></div>
-        <div class="sig-label">Received By</div>
-      </div>
-    </div>
-    <div class="footer-meta">
-      <span class="system-gen">System Generated Slip — Autocrat Engineers WMS</span>
-      <span>Printed: ${printDate}</span>
-    </div>
-  </div>
+  <!-- ╔══════════════════════════════════════════════════════════════╗
+       ║  SECTION 6: FOOTER                                          ║
+       ╚══════════════════════════════════════════════════════════════╝ -->
+  <table class="w100 mt8" cellspacing="0" cellpadding="0" style="border-top:1.5px solid #000;">
+    <tr>
+      <td class="tc cp-sm fs9 fw700 c000 bdr-b" style="padding:5px 8px;">
+        This is an official system-generated document and forms part of inventory audit records.
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:3px 8px;">
+        <table class="w100" cellspacing="0" cellpadding="0" style="border:none;">
+          <tr>
+            <td class="tl fs8 c666">Printed On: ${printTimestamp}</td>
+            <td class="tc fs8 c666">Document Classification: ORIGINAL</td>
+            <td class="tr fs8 c666">Page 1 of 1</td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
 
 </div>
-
-<script>
-  window.onload = function() { window.print(); };
-<\/script>
+<script>window.onload = function() { window.print(); };<\/script>
 </body></html>`;
 
     const printWindow = window.open('', '_blank', 'width=850,height=1100');
@@ -1486,13 +1666,13 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
                           {m.movement_type === 'REJECTION_DISPOSAL' ? 'Production Warehouse'
                             : m.movement_type === 'PRODUCTION_RECEIPT' ? 'Production'
                               : m.movement_type === 'CUSTOMER_RETURN' ? 'Customer'
-                                : (m.source_warehouse || '—')}
+                                : resolveWarehouseLabel(m.source_warehouse_id, m.source_warehouse)}
                         </td>
                         <td style={{ ...tdStyle, fontSize: '13px' }}>
                           {m.movement_type === 'REJECTION_DISPOSAL' ? 'Production Floor (Disposal)'
                             : m.movement_type === 'PRODUCTION_RECEIPT' ? 'Production Warehouse'
                               : m.movement_type === 'CUSTOMER_SALE' ? 'Customer'
-                                : (m.destination_warehouse || '—')}
+                                : resolveWarehouseLabel(m.destination_warehouse_id, m.destination_warehouse)}
                         </td>
                         <td style={{ ...tdStyle, textAlign: 'center' }}>{getStatusBadge(m.status, m)}</td>
                       </tr>
@@ -1866,12 +2046,12 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
             reviewMovement.movement_type === 'REJECTION_DISPOSAL' ? 'Production Warehouse'
               : reviewMovement.movement_type === 'PRODUCTION_RECEIPT' ? 'Production'
                 : reviewMovement.movement_type === 'CUSTOMER_RETURN' ? 'Customer'
-                  : (reviewMovement.source_warehouse || 'External');
+                  : resolveWarehouseLabel(reviewMovement.source_warehouse_id, reviewMovement.source_warehouse, 'External');
           const toLabel =
             reviewMovement.movement_type === 'REJECTION_DISPOSAL' ? 'Production Floor (Disposal)'
               : reviewMovement.movement_type === 'PRODUCTION_RECEIPT' ? 'Production Warehouse'
                 : reviewMovement.movement_type === 'CUSTOMER_SALE' ? 'Customer'
-                  : (reviewMovement.destination_warehouse || 'External');
+                  : resolveWarehouseLabel(reviewMovement.destination_warehouse_id, reviewMovement.destination_warehouse, 'External');
           const requestedQty = reviewMovement.requested_quantity ?? reviewMovement.quantity ?? 0;
           const movedQty = reviewMovement.approved_quantity ?? 0;
           const rejectedQty = reviewMovement.rejected_quantity ?? 0;
