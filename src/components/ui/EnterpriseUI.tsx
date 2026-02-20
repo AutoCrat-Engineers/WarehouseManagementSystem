@@ -2,7 +2,7 @@ import React, { CSSProperties } from 'react';
 
 // Enterprise Card Component
 interface CardProps {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   hover?: boolean;
   className?: string;
   style?: CSSProperties;

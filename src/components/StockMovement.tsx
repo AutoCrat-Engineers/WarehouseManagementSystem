@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { Card, Button, Badge, Modal, LoadingSpinner, EmptyState } from './ui/EnterpriseUI';
 import { getSupabaseClient } from '../utils/supabase/client';
+import { createPackingFromMovementApproval, createPackingFromMovementRejection } from './packing/packingService';
 
 // ============================================================================
 // TYPES
@@ -184,7 +185,7 @@ const REFERENCE_TYPES = [
 const STATUS_CONFIG: Record<string, { color: string; bg: string; label: string }> = {
   DRAFT: { color: '#6b7280', bg: '#f9fafb', label: 'Draft' },
   PENDING_APPROVAL: { color: '#d97706', bg: '#fffbeb', label: 'Pending' },
-  APPROVED: { color: '#16a34a', bg: '#f0fdf4', label: 'Completed' },  // legacy records
+  APPROVED: { color: '#16a34a', bg: '#f0fdf4', label: 'Completed' },  // stock moved on approval
   IN_PROGRESS: { color: '#2563eb', bg: '#eff6ff', label: 'In Progress' },
   PARTIALLY_APPROVED: { color: '#2563eb', bg: '#eff6ff', label: 'Partial' },
   REJECTED: { color: '#dc2626', bg: '#fef2f2', label: 'Rejected' },
@@ -796,8 +797,13 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
         supervisor_note: supervisorNote, approved_by: userId,
       });
 
-      // STOCK UPDATES — only if approved (fully or partially)
-      if (action !== 'REJECTED' && finalApproved > 0) {
+      // ==================================================================
+      // STOCK UPDATES — IMMEDIATE for ALL movement types EXCEPT
+      // PRODUCTION_RECEIPT (stock moves via Packing module transfers)
+      // ==================================================================
+      const skipImmediateStock = reviewMovement.movement_type === 'PRODUCTION_RECEIPT';
+
+      if (action !== 'REJECTED' && finalApproved > 0 && !skipImmediateStock) {
         const srcId = reviewMovement.source_warehouse_id;
         const dstId = reviewMovement.destination_warehouse_id;
         const itemCode = reviewMovement.item_code;
@@ -805,13 +811,12 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
         const movType = reviewMovement.movement_type;
         const isDisposal = OUT_ONLY_MOVEMENT_TYPES.includes(movType);
 
-        // Determine which sides are external (no stock operations needed for external entities)
-        // External SOURCE: stock comes from outside — only INCREMENT destination, no source deduction
-        const hasExternalSource = ['PRODUCTION_RECEIPT', 'CUSTOMER_RETURN'].includes(movType);
-        // External DESTINATION: stock goes outside — only DECREMENT source, no destination increment
+        // External SOURCE: stock comes from outside — only INCREMENT destination
+        const hasExternalSource = ['CUSTOMER_RETURN'].includes(movType);
+        // External DESTINATION: stock goes outside — only DECREMENT source
         const hasExternalDest = ['CUSTOMER_SALE', 'RETURN_TO_PRODUCTION'].includes(movType) || isDisposal;
 
-        // Decrement source — SKIP if source is external (stock comes from outside)
+        // Decrement source — SKIP if source is external
         if (!hasExternalSource && srcId && itemCode) {
           const { data: ss } = await supabase.from('inv_warehouse_stock')
             .select('id, quantity_on_hand').eq('warehouse_id', srcId)
@@ -831,7 +836,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
             });
           }
         }
-        // Increment destination — SKIP if destination is external (stock goes outside)
+        // Increment destination — SKIP if destination is external
         if (!hasExternalDest && dstId && itemCode) {
           const { data: ds } = await supabase.from('inv_warehouse_stock')
             .select('id, quantity_on_hand').eq('warehouse_id', dstId)
@@ -847,17 +852,54 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
         }
       }
 
+      // ==================================================================
+      // PACKING REQUEST — auto-create for PRODUCTION_RECEIPT only
+      // v5: Stock does NOT move on approval. Packing module handles
+      //     stock transfer from Production → Prod WHSE when operator
+      //     explicitly packs boxes and triggers the transfer.
+      // ==================================================================
+      if (reviewMovement.movement_type === 'PRODUCTION_RECEIPT') {
+        try {
+          const itemCode = reviewMovement.item_code || '';
+          const operatorId = reviewMovement.requested_by || userId || '';
+          if (action === 'REJECTED') {
+            await createPackingFromMovementRejection(
+              reviewMovement.id, reviewMovement.movement_number,
+              itemCode, reqQty, operatorId, userId || '',
+              supervisorNote, reviewMovement.reason_description || null,
+            );
+          } else {
+            await createPackingFromMovementApproval(
+              reviewMovement.id, reviewMovement.movement_number,
+              itemCode, finalApproved, operatorId, userId || '',
+              supervisorNote, reviewMovement.reason_description || null,
+            );
+          }
+        } catch (packErr: any) {
+          console.error('Packing request creation failed (non-blocking):', packErr);
+        }
+      }
+
       setShowReviewModal(false);
       fetchMovements();
 
-      // Show success toast with action-specific message
+      // Show success toast
       const movNum = reviewMovement.movement_number;
       if (action === 'REJECTED') {
         showToast('error', 'Movement Rejected', `Movement ${movNum} has been rejected. No stock has been moved.`);
       } else if (action === 'PARTIALLY_APPROVED') {
-        showToast('info', 'Partially Approved', `Movement ${movNum} partially approved — ${approvedQty} units moved, ${(reviewMovement.requested_quantity ?? 0) - approvedQty} units rejected.`);
+        const pMsg = reviewMovement.movement_type === 'PRODUCTION_RECEIPT'
+          ? ` Stock pending packing. Packing request created.`
+          : ` ${approvedQty} units moved.`;
+        showToast('info', 'Partially Approved', `Movement ${movNum} partially approved — ${approvedQty} units approved, ${(reviewMovement.requested_quantity ?? 0) - approvedQty} units rejected.${pMsg}`);
       } else {
-        showToast('success', 'Movement Completed', `Movement ${movNum} fully approved — ${reviewMovement.requested_quantity ?? 0} units moved successfully.`);
+        const extra = reviewMovement.movement_type === 'PRODUCTION_RECEIPT'
+          ? ' Packing request created. Stock will transfer to Prod WHSE via packing.'
+          : '';
+        const stockMsg = reviewMovement.movement_type === 'PRODUCTION_RECEIPT'
+          ? `${reviewMovement.requested_quantity ?? 0} units approved`
+          : `${reviewMovement.requested_quantity ?? 0} units moved successfully`;
+        showToast('success', 'Movement Completed', `Movement ${movNum} fully approved — ${stockMsg}.${extra}`);
       }
     } catch (err: any) {
       console.error('Approval error:', err);
