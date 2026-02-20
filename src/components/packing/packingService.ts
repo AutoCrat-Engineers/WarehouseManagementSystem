@@ -131,44 +131,45 @@ export async function fetchPackingRequests(onlyMine: boolean = false): Promise<P
     if (error) throw error;
     const rows = data || [];
 
-    // Enrich with profiles + items (including revision)
+    // Collect IDs for parallel enrichment
     const userIds = [...new Set(rows.flatMap((r: any) => [r.created_by, r.approved_by].filter(Boolean)))];
     const itemCodes = [...new Set(rows.map((r: any) => r.item_code).filter(Boolean))];
     const requestIds = rows.map((r: any) => r.id);
 
-    let nameMap: Record<string, string> = {};
-    if (userIds.length) {
-        const { data: profiles } = await supabase.from('profiles').select('id, full_name').in('id', userIds);
-        (profiles || []).forEach((p: any) => { nameMap[p.id] = p.full_name; });
-    }
+    // ── PARALLEL ENRICHMENT — all 3 queries run simultaneously ──
+    const [profilesResult, itemsResult, boxesResult] = await Promise.all([
+        userIds.length
+            ? supabase.from('profiles').select('id, full_name').in('id', userIds)
+            : Promise.resolve({ data: [] as any[] }),
+        itemCodes.length
+            ? supabase.from('items').select('item_code, item_name, part_number, master_serial_no, revision').in('item_code', itemCodes)
+            : Promise.resolve({ data: [] as any[] }),
+        requestIds.length
+            ? supabase.from('packing_boxes').select('packing_request_id, box_qty, sticker_printed, is_transferred').in('packing_request_id', requestIds)
+            : Promise.resolve({ data: [] as any[] }),
+    ]);
 
-    let itemMap: Record<string, { item_name: string; part_number: string | null; master_serial_no: string | null; revision: string | null }> = {};
-    if (itemCodes.length) {
-        const { data: items } = await supabase
-            .from('items')
-            .select('item_code, item_name, part_number, master_serial_no, revision')
-            .in('item_code', itemCodes);
-        (items || []).forEach((i: any) => {
-            itemMap[i.item_code] = {
-                item_name: i.item_name,
-                part_number: i.part_number,
-                master_serial_no: i.master_serial_no,
-                revision: i.revision || null,
-            };
-        });
-    }
+    const nameMap: Record<string, string> = {};
+    (profilesResult.data || []).forEach((p: any) => { nameMap[p.id] = p.full_name; });
 
-    // Aggregate box data per request
-    let boxAgg: Record<string, { sum: number; count: number; allPrinted: boolean }> = {};
-    if (requestIds.length) {
-        const { data: boxes } = await supabase.from('packing_boxes').select('packing_request_id, box_qty, sticker_printed').in('packing_request_id', requestIds);
-        (boxes || []).forEach((b: any) => {
-            if (!boxAgg[b.packing_request_id]) boxAgg[b.packing_request_id] = { sum: 0, count: 0, allPrinted: true };
-            boxAgg[b.packing_request_id].sum += Number(b.box_qty);
-            boxAgg[b.packing_request_id].count += 1;
-            if (!b.sticker_printed) boxAgg[b.packing_request_id].allPrinted = false;
-        });
-    }
+    const itemMap: Record<string, { item_name: string; part_number: string | null; master_serial_no: string | null; revision: string | null }> = {};
+    (itemsResult.data || []).forEach((i: any) => {
+        itemMap[i.item_code] = {
+            item_name: i.item_name,
+            part_number: i.part_number,
+            master_serial_no: i.master_serial_no,
+            revision: i.revision || null,
+        };
+    });
+
+    const boxAgg: Record<string, { sum: number; count: number; allPrinted: boolean; transferredSum: number }> = {};
+    (boxesResult.data || []).forEach((b: any) => {
+        if (!boxAgg[b.packing_request_id]) boxAgg[b.packing_request_id] = { sum: 0, count: 0, allPrinted: true, transferredSum: 0 };
+        boxAgg[b.packing_request_id].sum += Number(b.box_qty);
+        boxAgg[b.packing_request_id].count += 1;
+        if (!b.sticker_printed) boxAgg[b.packing_request_id].allPrinted = false;
+        if (b.is_transferred) boxAgg[b.packing_request_id].transferredSum += Number(b.box_qty);
+    });
 
     return rows.map((r: any) => ({
         ...r,
@@ -181,7 +182,8 @@ export async function fetchPackingRequests(onlyMine: boolean = false): Promise<P
         boxes_packed_qty: boxAgg[r.id]?.sum || 0,
         boxes_count: boxAgg[r.id]?.count || 0,
         all_stickers_printed: boxAgg[r.id]?.allPrinted ?? true,
-        transferred_qty: r.transferred_qty || 0,
+        // Use actual transferred qty from boxes (source of truth), not the stored field
+        transferred_qty: boxAgg[r.id]?.transferredSum ?? (r.transferred_qty || 0),
     }));
 }
 
@@ -390,8 +392,6 @@ export async function transferPackedStock(
 
     // Calculate transfer quantity
     const transferQty = eligibleBoxes.reduce((sum: number, b: any) => sum + Number(b.box_qty), 0);
-    const previousTransferred = Number(req.transferred_qty || 0);
-    const newTotalTransferred = previousTransferred + transferQty;
 
     // Perform stock movement: PRODUCTION → PROD WHSE
     // Get warehouse IDs from the movement header
@@ -457,12 +457,17 @@ export async function transferPackedStock(
         }).eq('id', box.id);
     }
 
-    // Check if all boxes are packed and transferred
+    // Re-fetch ALL boxes to compute the TRUE cumulative transferred qty from the source of truth
     const { data: allBoxes } = await supabase.from('packing_boxes')
         .select('box_qty, is_transferred').eq('packing_request_id', requestId);
     const totalBoxQty = (allBoxes || []).reduce((s: number, b: any) => s + Number(b.box_qty), 0);
     const allTransferred = (allBoxes || []).every((b: any) => b.is_transferred);
+    // Cumulative transferred qty = sum of ALL transferred boxes (source of truth)
+    const cumulativeTransferredQty = (allBoxes || [])
+        .filter((b: any) => b.is_transferred)
+        .reduce((s: number, b: any) => s + Number(b.box_qty), 0);
     const isComplete = allTransferred && totalBoxQty >= Number(req.total_packed_qty);
+    const newTotalTransferred = cumulativeTransferredQty;
 
     // Update request transferred qty and status
     const newStatus = isComplete ? 'COMPLETED' : 'PARTIALLY_TRANSFERRED';
@@ -535,9 +540,12 @@ export async function completePacking(requestId: string) {
         // Trigger final transfer
         await transferPackedStock(requestId, untransferred.map((b: any) => b.id));
     } else {
-        // All already transferred — just mark complete
+        // All already transferred — mark complete and sync transferred_qty to actual total
+        const actualTransferredQty = boxes.reduce((s: number, b: any) => s + Number(b.box_qty), 0);
         const { error } = await supabase.from('packing_requests').update({
-            status: 'COMPLETED', completed_at: new Date().toISOString(),
+            status: 'COMPLETED',
+            completed_at: new Date().toISOString(),
+            transferred_qty: actualTransferredQty,  // Sync to actual total from boxes
         }).eq('id', requestId);
         if (error) throw error;
 
