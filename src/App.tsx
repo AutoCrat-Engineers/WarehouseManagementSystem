@@ -11,6 +11,7 @@ import { BlanketReleases } from './components/BlanketReleases';
 import { ForecastingModule } from './components/ForecastingModule';
 import { PlanningModule } from './components/PlanningModule';
 import { StockMovement } from './components/StockMovement';
+import { PackingModule } from './components/packing';
 import { LoadingPage } from './components/LoadingPage';
 import { UserManagement } from './auth/users/UserManagement';
 import {
@@ -39,7 +40,7 @@ const logoImage = '/logo.png';
 // User role type for RBAC
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
-type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'users';
+type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'packing' | 'users';
 
 interface MenuItem {
   id: View;
@@ -53,6 +54,7 @@ const menuItems: MenuItem[] = [
   { id: 'items', label: 'Item Master', icon: Package, description: 'FG Catalog' },
   { id: 'inventory', label: 'Inventory', icon: Boxes, description: 'Multi-Warehouse Stock' },
   { id: 'stock-movements', label: 'Stock Movements', icon: ArrowRightLeft, description: 'Audit Trail' },
+  { id: 'packing', label: 'Packing', icon: Package, description: 'FG Packing Workflow' },
   { id: 'orders', label: 'Blanket Orders', icon: FileText, description: 'Customer Orders' },
   { id: 'releases', label: 'Blanket Releases', icon: Calendar, description: 'Delivery Schedule' },
   { id: 'forecast', label: 'Forecasting', icon: TrendingUp, description: 'Demand Prediction' },
@@ -305,6 +307,8 @@ export default function App() {
         return <InventoryGrid />;
       case 'stock-movements':
         return <StockMovement accessToken={accessToken} userRole={userRole} />;
+      case 'packing':
+        return <PackingModule accessToken={accessToken} userRole={userRole} />;
       case 'orders':
         return <BlanketOrders accessToken={accessToken} />;
       case 'releases':
