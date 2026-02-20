@@ -10,7 +10,7 @@ interface LoadingPageProps {
     minDuration?: number;
 }
 
-export function LoadingPage({ minDuration = 4000 }: LoadingPageProps) {
+export function LoadingPage({ minDuration = 1500 }: LoadingPageProps) {
     const [progress, setProgress] = useState(0);
 
     useEffect(() => {
