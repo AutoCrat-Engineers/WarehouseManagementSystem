@@ -1,13 +1,15 @@
 /**
- * PackingDetail — Box-level packing with per-box PKG IDs and stock transfer (v5).
+ * PackingDetail — Box-level packing with per-box PKG IDs and stock transfer (v6).
  *
- * Architecture (v5):
+ * Architecture:
  *   - Movement # is the primary reference
  *   - Each BOX gets a unique Packing ID (PKG-XXXXXXXX)
  *   - Stock does NOT move on approval — only on explicit operator action
  *   - "Move Packed Stock" — partial transfer of printed boxes to Prod WHSE
  *   - "Complete Packing" → validates all boxes + triggers stock transfer
  *   - Transfer status shown per box (Transferred / Pending)
+ *   - Sticky header bar for easy navigation
+ *   - Document Details in section-wise layout
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card } from '../ui/EnterpriseUI';
@@ -58,52 +60,42 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                 .single();
             if (reqErr || !reqRow) throw new Error(reqErr?.message || 'Packing request not found');
 
-            // Enrich with item info (including revision)
-            let itemName = reqRow.item_code;
-            let partNumber: string | null = null;
-            let masterSerialNo: string | null = null;
-            let revision: string | null = null;
-            const { data: itemData } = await supabase
-                .from('items')
-                .select('item_name, part_number, master_serial_no, revision')
-                .eq('item_code', reqRow.item_code)
-                .single();
-            if (itemData) {
-                itemName = itemData.item_name || reqRow.item_code;
-                partNumber = itemData.part_number || null;
-                masterSerialNo = itemData.master_serial_no || null;
-                revision = itemData.revision || null;
-            }
+            // ── PARALLEL: Run all 4 enrichment queries simultaneously ──
+            const userIds = [reqRow.created_by, reqRow.approved_by].filter(Boolean);
+            const [itemResult, profilesResult, boxesData, auditData] = await Promise.all([
+                supabase.from('items')
+                    .select('item_name, part_number, master_serial_no, revision')
+                    .eq('item_code', reqRow.item_code)
+                    .single(),
+                userIds.length
+                    ? supabase.from('profiles').select('id, full_name').in('id', userIds)
+                    : Promise.resolve({ data: [] as any[] }),
+                svc.fetchBoxesForRequest(requestId),
+                svc.fetchAuditLogs(requestId),
+            ]);
 
-            // Enrich with profile names
+            // Build enriched request
+            const itemData = itemResult.data;
             let createdByName = '';
             let approvedByName = '';
-            const userIds = [reqRow.created_by, reqRow.approved_by].filter(Boolean);
-            if (userIds.length) {
-                const { data: profiles } = await supabase.from('profiles').select('id, full_name').in('id', userIds);
-                (profiles || []).forEach((p: any) => {
-                    if (p.id === reqRow.created_by) createdByName = p.full_name;
-                    if (p.id === reqRow.approved_by) approvedByName = p.full_name;
-                });
-            }
+            (profilesResult.data || []).forEach((p: any) => {
+                if (p.id === reqRow.created_by) createdByName = p.full_name;
+                if (p.id === reqRow.approved_by) approvedByName = p.full_name;
+            });
 
             const enrichedReq: PackingRequest = {
                 ...reqRow,
-                item_name: itemName,
-                part_number: partNumber,
-                master_serial_no: masterSerialNo,
-                revision: revision,
+                item_name: itemData?.item_name || reqRow.item_code,
+                part_number: itemData?.part_number || null,
+                master_serial_no: itemData?.master_serial_no || null,
+                revision: itemData?.revision || null,
                 created_by_name: createdByName,
                 approved_by_name: approvedByName,
                 transferred_qty: reqRow.transferred_qty || 0,
             };
             setRequest(enrichedReq);
-
-            const b = await svc.fetchBoxesForRequest(requestId);
-            setBoxes(b);
-
-            const a = await svc.fetchAuditLogs(requestId);
-            setAuditLogs(a);
+            setBoxes(boxesData);
+            setAuditLogs(auditData);
         } catch (err: any) {
             console.error('PackingDetail loadData error:', err);
             setMessage({ type: 'error', text: err.message || 'Failed to load data' });
@@ -129,7 +121,8 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
     const remaining = totalQty - totalBoxQty;
     const isFullyPacked = remaining === 0 && boxes.length > 0;
     const allStickersPrinted = boxes.length > 0 && boxes.every(b => b.sticker_printed);
-    const transferredQty = Number(request?.transferred_qty || 0);
+    // Compute transferred qty from ACTUAL boxes (source of truth), not the stored field which may be stale
+    const transferredQty = boxes.filter(b => b.is_transferred).reduce((s, b) => s + Number(b.box_qty), 0);
     const untransferredBoxes = boxes.filter(b => b.sticker_printed && !b.is_transferred);
     const untransferredQty = untransferredBoxes.reduce((s, b) => s + Number(b.box_qty), 0);
     const hasUntransferred = untransferredBoxes.length > 0;
@@ -277,6 +270,11 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
         textTransform: 'uppercase' as const, letterSpacing: '0.5px',
         background: '#f9fafb', borderBottom: '2px solid #e5e7eb',
     };
+    const sectionTitleStyle: React.CSSProperties = {
+        fontSize: 11, fontWeight: 700, color: '#6b7280',
+        textTransform: 'uppercase' as const, letterSpacing: '1px', marginBottom: 12,
+        paddingBottom: 8, borderBottom: '1px solid #e5e7eb',
+    };
     const labelStyle: React.CSSProperties = {
         fontSize: 11, fontWeight: 700, color: '#6b7280',
         textTransform: 'uppercase' as const, letterSpacing: '0.5px', marginBottom: 2,
@@ -327,13 +325,34 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
 
     return (
         <div>
-            {/* Header Bar — Movement # as primary identifier */}
+            {/* ──────────────────────────────────────────────────────────
+                STICKY HEADER BAR
+                ─ margin-top: -32px → fills <main>'s 32px padding zone
+                ─ padding-top: 48px → 32px to fill gap + 16px real spacing
+                ─ top: -32px → hides the filler above viewport when stuck
+                ─ Same width as content below (no horizontal stretch)
+               ────────────────────────────────────────────────────────── */}
             <div style={{
-                display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20,
-                paddingBottom: 16, borderBottom: '2px solid #e5e7eb', flexWrap: 'wrap',
+                position: 'sticky', top: -28, zIndex: 100,
+                background: '#ffffff',
+                borderBottom: '2px solid #e5e7eb',
+                borderRadius: '0 0 12px 12px',
+                padding: '28px 16px 14px',
+                margin: '-28px 0 20px',
+                display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.06)',
             }}>
-                <button onClick={onBack} style={{ ...btnBase, fontWeight: 700, color: '#1e3a8a' }}>
-                    &larr; Back
+                <button onClick={onBack} style={{
+                    ...btnBase, fontWeight: 700, color: '#1e3a8a',
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    padding: '8px 14px', borderRadius: 6,
+                    border: '1px solid #dbeafe', background: '#eff6ff',
+                    transition: 'all 0.15s',
+                }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="15 18 9 12 15 6" />
+                    </svg>
+                    Back
                 </button>
                 <div style={{ flex: 1, minWidth: 200 }}>
                     <div style={{ fontSize: 18, fontWeight: 800, color: '#111827', letterSpacing: '-0.3px' }}>
@@ -344,9 +363,9 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                     </div>
                 </div>
                 <span style={{
-                    padding: '5px 14px', borderRadius: 3, fontSize: 12,
+                    padding: '6px 16px', borderRadius: 4, fontSize: 12,
                     fontWeight: 700, color: statusCfg.color, backgroundColor: statusCfg.bg,
-                    border: `1px solid ${statusCfg.color}20`,
+                    border: `1px solid ${statusCfg.color}22`,
                 }}>
                     {statusCfg.label.toUpperCase()}
                 </span>
@@ -411,36 +430,79 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                 </div>
             )}
 
-            {/* Document Details Section */}
+            {/* ──────────────────────────────────────────────────────────
+                DOCUMENT DETAILS — Section-wise layout
+               ────────────────────────────────────────────────────────── */}
             {!isRejected && (
                 <Card>
                     <div style={{
-                        fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 12,
+                        fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 16,
                         textTransform: 'uppercase', letterSpacing: '0.5px',
-                        paddingBottom: 8, borderBottom: '1px solid #e5e7eb',
+                        paddingBottom: 8, borderBottom: '2px solid #e5e7eb',
                     }}>
                         DOCUMENT DETAILS
                     </div>
-                    <div style={{
-                        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                        gap: '14px 24px',
-                    }}>
-                        <div><div style={labelStyle}>Movement No</div><div style={{ ...valueStyle, fontFamily: 'monospace', color: '#1e3a8a' }}>{request.movement_number}</div></div>
-                        <div><div style={labelStyle}>Item Code</div><div style={valueStyle}>{request.item_code}</div></div>
-                        <div><div style={labelStyle}>Description</div><div style={valueStyle}>{request.item_name || '—'}</div></div>
-                        <div><div style={labelStyle}>Part Number</div><div style={valueStyle}>{request.part_number || '—'}</div></div>
-                        <div><div style={labelStyle}>MSL No</div><div style={valueStyle}>{request.master_serial_no || '—'}</div></div>
-                        <div><div style={labelStyle}>Revision</div><div style={{ ...valueStyle, color: request.revision ? '#7c3aed' : '#9ca3af' }}>{request.revision || '—'}</div></div>
-                        <div><div style={labelStyle}>Approved Qty</div><div style={{ ...valueStyle, fontSize: 18, color: '#1e3a8a' }}>{totalQty} PCS</div></div>
-                        <div><div style={labelStyle}>Requested By</div><div style={valueStyle}>{request.created_by_name || '—'}</div></div>
-                        <div><div style={labelStyle}>Approved By</div><div style={valueStyle}>{request.approved_by_name || '—'}</div></div>
-                        <div><div style={labelStyle}>Created</div><div style={valueStyle}>{new Date(request.created_at).toLocaleString('en-IN')}</div></div>
-                        {request.supervisor_remarks && (
-                            <div style={{ gridColumn: '1 / -1' }}>
-                                <div style={labelStyle}>Supervisor Remarks</div>
-                                <div style={{ ...valueStyle, fontStyle: 'italic', color: '#374151' }}>"{request.supervisor_remarks}"</div>
+
+                    {/* Section 1: Item Information — 5 columns */}
+                    <div style={{ marginBottom: 20 }}>
+                        <div style={sectionTitleStyle}>Item Information</div>
+                        <div style={{
+                            display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)',
+                            gap: '14px 24px',
+                        }}>
+                            <div>
+                                <div style={labelStyle}>Item Code</div>
+                                <div style={valueStyle}>{request.item_code}</div>
                             </div>
-                        )}
+                            <div>
+                                <div style={labelStyle}>Description</div>
+                                <div style={valueStyle}>{request.item_name || '—'}</div>
+                            </div>
+                            <div>
+                                <div style={labelStyle}>Part Number</div>
+                                <div style={valueStyle}>{request.part_number || '—'}</div>
+                            </div>
+                            <div>
+                                <div style={labelStyle}>MSL No</div>
+                                <div style={valueStyle}>{request.master_serial_no || '—'}</div>
+                            </div>
+                            <div>
+                                <div style={labelStyle}>Revision</div>
+                                <div style={{ ...valueStyle, color: request.revision ? '#7c3aed' : '#9ca3af' }}>{request.revision || '—'}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Section 2: Approval & Authorization — 5 columns */}
+                    <div>
+                        <div style={sectionTitleStyle}>Approval & Authorization</div>
+                        <div style={{
+                            display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)',
+                            gap: '14px 24px',
+                        }}>
+                            <div>
+                                <div style={labelStyle}>Requested By</div>
+                                <div style={valueStyle}>{request.created_by_name || '—'}</div>
+                            </div>
+                            <div>
+                                <div style={labelStyle}>Created</div>
+                                <div style={valueStyle}>{new Date(request.created_at).toLocaleString('en-IN')}</div>
+                            </div>
+                            <div>
+                                <div style={labelStyle}>Approved By</div>
+                                <div style={valueStyle}>{request.approved_by_name || '—'}</div>
+                            </div>
+                            <div>
+                                <div style={labelStyle}>Approved Qty</div>
+                                <div style={{ ...valueStyle, fontSize: 18, color: '#1e3a8a' }}>{totalQty} PCS</div>
+                            </div>
+                            <div>
+                                <div style={labelStyle}>Supervisor Remarks</div>
+                                <div style={{ ...valueStyle, fontStyle: request.supervisor_remarks ? 'italic' : 'normal', color: request.supervisor_remarks ? '#374151' : '#9ca3af' }}>
+                                    {request.supervisor_remarks ? `"${request.supervisor_remarks}"` : '—'}
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </Card>
             )}
@@ -618,11 +680,24 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                         </div>
                     ) : (
                         <div style={{ overflowX: 'auto' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                                <colgroup>
+                                    <col style={{ width: '7%' }} />
+                                    <col style={{ width: '16%' }} />
+                                    <col style={{ width: '11%' }} />
+                                    <col style={{ width: '10%' }} />
+                                    <col style={{ width: '13%' }} />
+                                    <col style={{ width: '22%' }} />
+                                    <col style={{ width: '21%' }} />
+                                </colgroup>
                                 <thead>
                                     <tr>
                                         {['Box #', 'Packing ID', 'Quantity', 'Sticker', 'Transfer', 'Created', 'Actions'].map(h => (
-                                            <th key={h} style={headerCellStyle}>{h}</th>
+                                            <th key={h} style={{
+                                                ...headerCellStyle,
+                                                padding: '10px 12px',
+                                                textAlign: h === 'Actions' ? 'center' : 'left',
+                                            }}>{h}</th>
                                         ))}
                                     </tr>
                                 </thead>
@@ -634,42 +709,49 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                                                 onMouseEnter={e => (e.currentTarget.style.background = '#fafafa')}
                                                 onMouseLeave={e => (e.currentTarget.style.background = '')}
                                             >
-                                                <td style={{ ...cellStyle, fontWeight: 800, fontSize: 15, color: '#1e3a8a' }}>
+                                                <td style={{ ...cellStyle, fontWeight: 800, fontSize: 15, color: '#1e3a8a', padding: '10px 12px' }}>
                                                     #{box.box_number}
                                                 </td>
-                                                <td style={{ ...cellStyle, fontWeight: 700, fontSize: 12, color: '#7c3aed', fontFamily: 'monospace' }}>
+                                                <td style={{ ...cellStyle, fontWeight: 700, fontSize: 12, color: '#7c3aed', fontFamily: 'monospace', padding: '10px 12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                     {pkgId}
                                                 </td>
-                                                <td style={{ ...cellStyle, fontWeight: 600, fontSize: 14 }}>
+                                                <td style={{ ...cellStyle, fontWeight: 600, fontSize: 14, padding: '10px 12px' }}>
                                                     {box.box_qty} PCS
                                                 </td>
-                                                <td style={cellStyle}>
+                                                <td style={{ ...cellStyle, padding: '10px 12px' }}>
                                                     <span style={{
-                                                        padding: '2px 8px', borderRadius: 3, fontSize: 11, fontWeight: 700,
+                                                        padding: '3px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700,
                                                         color: box.sticker_printed ? '#16a34a' : '#d97706',
                                                         backgroundColor: box.sticker_printed ? '#f0fdf4' : '#fffbeb',
                                                     }}>
                                                         {box.sticker_printed ? 'Printed' : 'Pending'}
                                                     </span>
                                                 </td>
-                                                <td style={cellStyle}>
+                                                <td style={{ ...cellStyle, padding: '10px 12px' }}>
                                                     <span style={{
-                                                        padding: '2px 8px', borderRadius: 3, fontSize: 11, fontWeight: 700,
+                                                        padding: '3px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700,
                                                         color: box.is_transferred ? '#16a34a' : '#6b7280',
                                                         backgroundColor: box.is_transferred ? '#f0fdf4' : '#f9fafb',
                                                     }}>
                                                         {box.is_transferred ? 'In Prod WHSE' : 'In Production'}
                                                     </span>
                                                 </td>
-                                                <td style={{ ...cellStyle, fontSize: 12, color: '#6b7280' }}>
+                                                <td style={{ ...cellStyle, fontSize: 12, color: '#6b7280', padding: '10px 12px' }}>
                                                     {new Date(box.created_at).toLocaleString('en-IN')}
                                                 </td>
-                                                <td style={cellStyle}>
-                                                    <div style={{ display: 'flex', gap: 6 }}>
+                                                <td style={{ ...cellStyle, padding: '10px 12px', textAlign: 'center' }}>
+                                                    <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
                                                         {(canPack || isCompleted) && (
                                                             <button onClick={() => handlePrintSticker(box)}
-                                                                style={btnBase}>
-                                                                Print Sticker
+                                                                style={{
+                                                                    ...btnBase,
+                                                                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                                                                    padding: '6px 12px', borderRadius: 5,
+                                                                    border: '1px solid #dbeafe', background: '#eff6ff',
+                                                                    color: '#1e3a8a', fontWeight: 600, fontSize: 12,
+                                                                    transition: 'all 0.15s',
+                                                                }}>
+                                                                🖨️ Print
                                                             </button>
                                                         )}
                                                         {canPack && isOperator && !box.sticker_printed && !box.is_transferred && (
@@ -686,13 +768,13 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                                 </tbody>
                                 <tfoot>
                                     <tr style={{ background: '#f9fafb', borderTop: '2px solid #e5e7eb' }}>
-                                        <td style={{ ...cellStyle, fontWeight: 700, fontSize: 12 }}>TOTAL</td>
-                                        <td style={cellStyle}></td>
-                                        <td style={{ ...cellStyle, fontWeight: 700, fontSize: 14 }}>{totalBoxQty} PCS</td>
-                                        <td style={{ ...cellStyle, fontSize: 12, fontWeight: 600 }}>
+                                        <td style={{ ...cellStyle, fontWeight: 700, fontSize: 12, padding: '10px 12px' }}>TOTAL</td>
+                                        <td style={{ ...cellStyle, padding: '10px 12px' }}></td>
+                                        <td style={{ ...cellStyle, fontWeight: 700, fontSize: 14, padding: '10px 12px' }}>{totalBoxQty} PCS</td>
+                                        <td style={{ ...cellStyle, fontSize: 12, fontWeight: 600, padding: '10px 12px' }}>
                                             {boxes.filter(b => b.sticker_printed).length} / {boxes.length} printed
                                         </td>
-                                        <td style={{ ...cellStyle, fontSize: 12, fontWeight: 600 }}>
+                                        <td style={{ ...cellStyle, fontSize: 12, fontWeight: 600, padding: '10px 12px' }}>
                                             {boxes.filter(b => b.is_transferred).length} / {boxes.length} transferred
                                         </td>
                                         <td colSpan={2}></td>
