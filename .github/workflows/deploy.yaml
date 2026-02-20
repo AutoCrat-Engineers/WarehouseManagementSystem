@@ -1,28 +1,64 @@
-deploy:
-  needs: build-test
-  runs-on: ubuntu-latest
+name: Build, Test, Deploy (deploy/test-1)
 
-  steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+on:
+  push:
+    branches:
+      - deploy/test-1
 
-    - name: Login to Docker Hub
-      run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+jobs:
 
-    - name: Build Docker image
-      run: docker build -t shravanaweb/wms:latest .
+  build-test:
+    runs-on: ubuntu-latest
 
-    - name: Push Docker image
-      run: docker push shravanaweb/wms:latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Deploy on EC2
-      uses: appleboy/ssh-action@v1
-      with:
-        host: ${{ secrets.EC2_HOST }}
-        username: ubuntu
-        key: ${{ secrets.EC2_KEY }}
-        script: |
-          docker pull shravanaweb/wms:latest
-          docker stop wms || true
-          docker rm wms || true
-          docker run -d -p 80:3000 --name wms shravanaweb/wms:latest
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test --if-present
+
+      - name: Build app
+        run: npm run build
+
+  deploy:
+    needs: build-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Build Docker image
+        run: docker build -t shravanaweb/wms:latest .
+
+      - name: Push Docker image
+        run: docker push shravanaweb/wms:latest
+
+      - name: Deploy on EC2
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_KEY }}
+          script: |
+            docker pull shravanaweb/wms:latest
+            docker stop wms || true
+            docker rm wms || true
+            docker system prune -af || true
+            docker run -d \
+              --name wms \
+              --restart unless-stopped \
+              -p 80:3000 \
+              shravanaweb/wms:latest
