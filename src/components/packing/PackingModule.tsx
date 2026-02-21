@@ -133,6 +133,24 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
 
     useEffect(() => { loadRequests(); }, [loadRequests]);
 
+    // Real-time subscription: auto-refresh on packing request changes
+    useEffect(() => {
+        const channel = supabase
+            .channel('packing-requests-realtime')
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'packing_requests' },
+                () => {
+                    loadRequests();
+                }
+            )
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }, [supabase, loadRequests]);
+
     useEffect(() => {
         const fetchUser = async () => {
             const { data: { session } } = await supabase.auth.getSession();
@@ -485,7 +503,8 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'spin 1s linear infinite', display: 'block', margin: '0 auto 12px' }}>
                             <path d="M21 12a9 9 0 1 1-6.219-8.56" />
                         </svg>
-                        Loading packing requests...
+                        <p style={{ fontSize: '15px', fontWeight: 600, color: '#1f2937', margin: '0 0 4px 0' }}>Loading Packing Requests…</p>
+                        <p style={{ fontSize: '13px', color: '#6b7280', margin: 0 }}>Fetching latest data from the server</p>
                     </div>
                 ) : filtered.length === 0 ? (
                     <div style={{ padding: 60, textAlign: 'center', color: '#9ca3af' }}>
