@@ -14,6 +14,7 @@ import { StockMovement } from './components/StockMovement';
 import { PackingModule } from './components/packing';
 import { LoadingPage } from './components/LoadingPage';
 import { UserManagement } from './auth/users/UserManagement';
+import { NotificationBell } from './components/notifications/NotificationBell';
 import {
   LayoutDashboard,
   Package,
@@ -655,17 +656,29 @@ export default function App() {
               )}
             </div>
 
-            <div style={{
-              padding: '6px 12px',
-              backgroundColor: '#dcfce7',
-              borderRadius: 'var(--border-radius-md)',
-              fontSize: '11px',
-              fontWeight: '600',
-              color: '#15803d',
-              textTransform: 'uppercase',
-              letterSpacing: '0.5px',
-            }}>
-              ✓ Authenticated
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              {/* Notification Bell */}
+              {user?.id && (
+                <NotificationBell
+                  userId={user.id}
+                  onNavigate={(module) => {
+                    setCurrentView(module as View);
+                  }}
+                />
+              )}
+
+              <div style={{
+                padding: '6px 12px',
+                backgroundColor: '#dcfce7',
+                borderRadius: 'var(--border-radius-md)',
+                fontSize: '11px',
+                fontWeight: '600',
+                color: '#15803d',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+              }}>
+                ✓ Authenticated
+              </div>
             </div>
           </header>
 
