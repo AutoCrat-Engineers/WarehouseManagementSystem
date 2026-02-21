@@ -28,7 +28,7 @@ import {
     X,
     XCircle,
 } from 'lucide-react';
-import { Card, Button, Badge, LoadingSpinner, EmptyState, Modal } from './ui/EnterpriseUI';
+import { Card, Button, Badge, LoadingSpinner, EmptyState, Modal, ModuleLoader } from './ui/EnterpriseUI';
 import { useAllItemsStockDashboard, useItemStockDistribution } from '../hooks/useInventory';
 import type { ItemStockDashboard, ItemStockDistribution, StockStatus } from '../types/inventory';
 
@@ -805,24 +805,7 @@ export function InventoryGrid() {
 
     // Loading state
     if (loading && items.length === 0) {
-        return (
-            <div style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '60px',
-            }}>
-                <LoadingSpinner size={48} />
-                <p style={{
-                    marginTop: '16px',
-                    color: 'var(--enterprise-gray-600)',
-                    fontSize: '14px',
-                }}>
-                    Loading inventory data...
-                </p>
-            </div>
-        );
+        return <ModuleLoader moduleName="Inventory Grid" icon={<Package size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
     }
 
     // Error state

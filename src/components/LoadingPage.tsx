@@ -8,9 +8,10 @@ import React, { useEffect, useState } from 'react';
 
 interface LoadingPageProps {
     minDuration?: number;
+    message?: string;
 }
 
-export function LoadingPage({ minDuration = 1500 }: LoadingPageProps) {
+export function LoadingPage({ minDuration = 1500, message }: LoadingPageProps) {
     const [progress, setProgress] = useState(0);
 
     useEffect(() => {
@@ -77,11 +78,22 @@ export function LoadingPage({ minDuration = 1500 }: LoadingPageProps) {
                 fontSize: '26px',
                 fontWeight: 600,
                 color: '#1e293b',
-                marginBottom: '50px',
+                marginBottom: message ? '8px' : '50px',
                 letterSpacing: '-0.5px',
             }}>
                 Warehouse Management System
             </h1>
+            {message && (
+                <p style={{
+                    fontSize: '16px',
+                    fontWeight: 500,
+                    color: '#64748b',
+                    marginBottom: '42px',
+                    letterSpacing: '0.2px',
+                }}>
+                    {message}
+                </p>
+            )}
 
             {/* Main Animation Container - Full Width */}
             <div style={{

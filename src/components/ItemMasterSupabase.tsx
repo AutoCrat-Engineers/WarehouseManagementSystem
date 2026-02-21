@@ -10,7 +10,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Plus, Edit2, Trash2, Search, Package, Eye, ChevronDown, ChevronRight, AlertTriangle, Clock, Calendar, Download, X, XCircle, CheckCircle, Settings, CheckCircle2, Info } from 'lucide-react';
-import { Card, Button, Badge, Input, Select, Label, Modal, LoadingSpinner, EmptyState, Textarea } from './ui/EnterpriseUI';
+import { Card, Button, Badge, Input, Select, Label, Modal, LoadingSpinner, EmptyState, Textarea, ModuleLoader } from './ui/EnterpriseUI';
 import * as itemsApi from '../utils/api/itemsSupabase';
 import { getSupabaseClient } from '../utils/supabase/client';
 
@@ -1479,7 +1479,7 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
     setFormData(formDefault);
   };
 
-  if (loading) return <LoadingSpinner />;
+  if (loading) return <ModuleLoader moduleName="Item Master" icon={<Package size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>

@@ -31,9 +31,10 @@ import {
   CalendarDays,
   Printer,
 } from 'lucide-react';
-import { Card, Button, Badge, Modal, LoadingSpinner, EmptyState } from './ui/EnterpriseUI';
+import { Card, Button, Badge, Modal, LoadingSpinner, EmptyState, ModuleLoader } from './ui/EnterpriseUI';
 import { getSupabaseClient } from '../utils/supabase/client';
 import { createPackingFromMovementApproval, createPackingFromMovementRejection } from './packing/packingService';
+import { notifyOnRequestCreated, notifyOnRequestDecision } from '../utils/notifications/notificationService';
 
 // ============================================================================
 // TYPES
@@ -365,6 +366,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   const fetchMovements = useCallback(async () => {
     setLoading(true);
     try {
+      // STEP 1: Fetch headers (must be first — everything depends on it)
       const { data: headers, error: headErr } = await supabase
         .from('inv_movement_headers')
         .select(`
@@ -381,22 +383,38 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
       if (headErr) throw headErr;
 
       const headerIds = (headers || []).map((h: any) => h.id);
-      let linesMap: Record<string, { item_code: string; actual_quantity: number; requested_quantity: number; approved_quantity: number }> = {};
-      if (headerIds.length > 0) {
-        const { data: lines } = await supabase
-          .from('inv_movement_lines')
-          .select('header_id, item_code, actual_quantity, requested_quantity, approved_quantity')
-          .in('header_id', headerIds);
-        (lines || []).forEach((l: any) => {
-          if (!linesMap[l.header_id]) linesMap[l.header_id] = {
-            item_code: l.item_code,
-            actual_quantity: l.actual_quantity || 0,
-            requested_quantity: l.requested_quantity || 0,
-            approved_quantity: l.approved_quantity || 0,
-          };
-        });
-      }
+      const userIds = [...new Set((headers || []).map((h: any) => h.requested_by).filter(Boolean))];
 
+      // STEP 2: Fetch lines + profiles IN PARALLEL (both depend only on headers)
+      const [linesResult, profilesResult] = await Promise.all([
+        headerIds.length > 0
+          ? supabase.from('inv_movement_lines')
+            .select('header_id, item_code, actual_quantity, requested_quantity, approved_quantity')
+            .in('header_id', headerIds)
+          : Promise.resolve({ data: [] }),
+        userIds.length > 0
+          ? supabase.from('profiles').select('id, full_name').in('id', userIds)
+          : Promise.resolve({ data: [] }),
+      ]);
+
+      // Build lines map
+      let linesMap: Record<string, { item_code: string; actual_quantity: number; requested_quantity: number; approved_quantity: number }> = {};
+      ((linesResult as any).data || []).forEach((l: any) => {
+        if (!linesMap[l.header_id]) linesMap[l.header_id] = {
+          item_code: l.item_code,
+          actual_quantity: l.actual_quantity || 0,
+          requested_quantity: l.requested_quantity || 0,
+          approved_quantity: l.approved_quantity || 0,
+        };
+      });
+
+      // Build user name map
+      let userNameMap: Record<string, string> = {};
+      ((profilesResult as any).data || []).forEach((p: any) => {
+        if (p.full_name) userNameMap[p.id] = p.full_name;
+      });
+
+      // STEP 3: Fetch item details (depends on lines data)
       const itemCodes = [...new Set(Object.values(linesMap).map(l => l.item_code))];
       let itemInfoMap: Record<string, { item_name: string; part_number: string | null; master_serial_no: string | null }> = {};
       if (itemCodes.length > 0) {
@@ -407,19 +425,6 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
             part_number: i.part_number || null,
             master_serial_no: i.master_serial_no || null,
           };
-        });
-      }
-
-      // Batch-resolve requested_by UUIDs → full_name from profiles table
-      const userIds = [...new Set((headers || []).map((h: any) => h.requested_by).filter(Boolean))];
-      let userNameMap: Record<string, string> = {};
-      if (userIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from('profiles')
-          .select('id, full_name')
-          .in('id', userIds);
-        (profiles || []).forEach((p: any) => {
-          if (p.full_name) userNameMap[p.id] = p.full_name;
         });
       }
 
@@ -470,6 +475,25 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   }, [supabase]);
 
   useEffect(() => { fetchMovements(); }, [fetchMovements]);
+
+  // Real-time subscription: auto-refresh on approval/status changes
+  useEffect(() => {
+    const channel = supabase
+      .channel('stock-movements-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'inv_movement_headers' },
+        () => {
+          // Auto-refresh when any movement header is inserted, updated, or deleted
+          fetchMovements();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [supabase, fetchMovements]);
 
   // Fetch current logged-in user's full_name for print slip Verified By
   useEffect(() => {
@@ -690,6 +714,16 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
       setFormMessage({ type: 'success', text: `Request ${movNum} submitted for approval.` });
       showToast('success', 'Request Submitted', `Movement ${movNum} has been submitted for supervisor approval.`);
       fetchMovements();
+
+      // ── NOTIFICATION: Notify supervisors (L2/L3) about new request ──
+      notifyOnRequestCreated(
+        movNum,
+        selectedItem.item_name || selectedItem.item_code,
+        quantity,
+        userId || '',
+        header.id,
+      ).catch(err => console.error('Notification send failed (non-blocking):', err));
+
       setTimeout(() => closeModal(), 1500);
     } catch (err: any) {
       console.error('Submit error:', err);
@@ -900,6 +934,20 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
           ? `${reviewMovement.requested_quantity ?? 0} units approved`
           : `${reviewMovement.requested_quantity ?? 0} units moved successfully`;
         showToast('success', 'Movement Completed', `Movement ${movNum} fully approved — ${stockMsg}.${extra}`);
+      }
+
+      // ── NOTIFICATION: Notify the operator about the decision ──
+      if (reviewMovement.requested_by) {
+        notifyOnRequestDecision(
+          reviewMovement.movement_number,
+          reviewMovement.item_name || reviewMovement.item_code || 'Unknown item',
+          action,
+          finalApproved,
+          reqQty,
+          reviewMovement.requested_by,
+          userId || '',
+          reviewMovement.id,
+        ).catch(err => console.error('Notification send failed (non-blocking):', err));
       }
     } catch (err: any) {
       console.error('Approval error:', err);
@@ -1631,7 +1679,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
 
       {/* ─── MOVEMENT RECORDS TABLE ─── */}
       {loading ? (
-        <div style={{ textAlign: 'center', padding: '60px' }}><LoadingSpinner /></div>
+        <ModuleLoader moduleName="Stock Movements" icon={<ArrowRightLeft size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
       ) : movements.length === 0 ? (
         <EmptyState
           icon={<ArrowRightLeft size={48} style={{ color: 'var(--enterprise-gray-400)' }} />}
