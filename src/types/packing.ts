@@ -147,8 +147,8 @@ export const PACKING_STATUS_CONFIG: Record<PackingRequestStatus, {
         label: 'Cancelled',
     },
     PACKING_IN_PROGRESS: {
-        color: '#7c3aed',
-        bg: '#f5f3ff',
+        color: '#d97706',
+        bg: '#fffbeb',
         label: 'In Progress',
     },
     PARTIALLY_TRANSFERRED: {
