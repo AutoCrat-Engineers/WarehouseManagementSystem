@@ -184,9 +184,9 @@ interface InputProps {
   placeholder?: string;
   required?: boolean;
   disabled?: boolean;
-  min?: number;
-  max?: number;
-  step?: number;
+  min?: string | number;
+  max?: string | number;
+  step?: string | number;
   style?: CSSProperties;
 }
 
