@@ -55,6 +55,7 @@ interface PackingSpec {
     outer_box_length_mm: number;
     outer_box_width_mm: number;
     outer_box_height_mm: number;
+    outer_box_quantity: number;
     outer_box_gross_weight_kg: number;
     is_active: boolean;
     created_at: string;
@@ -63,6 +64,7 @@ interface PackingSpec {
     item_name?: string;
     master_serial_no?: string;
     part_number?: string;
+    revision?: string;
 }
 
 interface PackingFormData {
@@ -74,6 +76,7 @@ interface PackingFormData {
     outer_box_length_mm: number;
     outer_box_width_mm: number;
     outer_box_height_mm: number;
+    outer_box_quantity: number;
     outer_box_gross_weight_kg: number;
 }
 
@@ -103,11 +106,35 @@ function toKg(val: number, from: WeightUnit): number {
     return +(val / WEIGHT_FACTORS[from]).toFixed(4);
 }
 
+// ============================================================================
+// BOX WEIGHT AUTO-CALCULATORS
+// ============================================================================
+// Inner box = corrugated cardboard (3-ply): ~0.55 kg/m² surface area
+// Outer box = wooden plywood (12mm):       ~7.2  kg/m² surface area
+// Surface area of a box = 2 * (L×W + W×H + L×H)
+// ============================================================================
+
+const CARTON_DENSITY_KG_M2 = 0.55;   // corrugated cardboard
+const PLYWOOD_DENSITY_KG_M2 = 7.2;   // 12mm plywood
+
+function calcBoxWeight(l_mm: number, w_mm: number, h_mm: number, density: number): number {
+    if (l_mm <= 0 || w_mm <= 0 || h_mm <= 0) return 0;
+    const surfaceArea_m2 = 2 * (l_mm * w_mm + w_mm * h_mm + l_mm * h_mm) / 1_000_000;
+    return +(surfaceArea_m2 * density).toFixed(4);
+}
+
+function calcCartonWeight(l: number, w: number, h: number): number {
+    return calcBoxWeight(l, w, h, CARTON_DENSITY_KG_M2);
+}
+function calcPlywoodWeight(l: number, w: number, h: number): number {
+    return calcBoxWeight(l, w, h, PLYWOOD_DENSITY_KG_M2);
+}
+
 const formDefault: PackingFormData = {
     inner_box_length_mm: 0, inner_box_width_mm: 0, inner_box_height_mm: 0,
     inner_box_quantity: 0, inner_box_net_weight_kg: 0,
     outer_box_length_mm: 0, outer_box_width_mm: 0, outer_box_height_mm: 0,
-    outer_box_gross_weight_kg: 0,
+    outer_box_quantity: 0, outer_box_gross_weight_kg: 0,
 };
 
 // ============================================================================
@@ -231,7 +258,8 @@ function ViewModal({ isOpen, onClose, spec, item }: {
                     <div><Label>Item Code</Label><Input value={spec.item_code} disabled /></div>
                     <div><Label>Part Number</Label><Input value={spec.part_number || '—'} disabled /></div>
                     <div><Label>MSN</Label><Input value={spec.master_serial_no || '—'} disabled /></div>
-                    <div><Label>Description</Label><Input value={spec.item_name || '—'} disabled /></div>
+                    <div><Label>Revision</Label><Input value={spec.revision || '—'} disabled /></div>
+                    <div style={{ gridColumn: '1 / -1' }}><Label>Description</Label><Input value={spec.item_name || '—'} disabled /></div>
                 </div>
                 <div style={{ marginTop: '10px' }}>
                     <Label>Status</Label>
@@ -253,7 +281,7 @@ function ViewModal({ isOpen, onClose, spec, item }: {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
                     <div style={detailCard}><p style={lblStyle}>Size (L × W × H)</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{fmtSize(spec.inner_box_length_mm, spec.inner_box_width_mm, spec.inner_box_height_mm)}</p></div>
                     <div style={detailCard}><p style={lblStyle}>Quantity</p><p style={{ fontWeight: 700, color: 'var(--enterprise-info, #3b82f6)', fontSize: '18px' }}>{spec.inner_box_quantity}</p></div>
-                    <div style={detailCard}><p style={lblStyle}>Net Weight</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{convertWeight(spec.inner_box_net_weight_kg, wu)} {WEIGHT_LABELS[wu]}</p></div>
+                    <div style={detailCard}><p style={lblStyle}>Carton Box Weight</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{convertWeight(spec.inner_box_net_weight_kg, wu)} {WEIGHT_LABELS[wu]}</p></div>
                 </div>
             </div>
 
@@ -262,9 +290,10 @@ function ViewModal({ isOpen, onClose, spec, item }: {
                 <p style={{ fontSize: '12px', fontWeight: 700, color: 'rgb(168,85,247)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <Package size={14} /> Outer Box
                 </p>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
                     <div style={detailCard}><p style={lblStyle}>Size (L × W × H)</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{fmtSize(spec.outer_box_length_mm, spec.outer_box_width_mm, spec.outer_box_height_mm)}</p></div>
-                    <div style={detailCard}><p style={lblStyle}>Gross Weight</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{convertWeight(spec.outer_box_gross_weight_kg, wu)} {WEIGHT_LABELS[wu]}</p></div>
+                    <div style={detailCard}><p style={lblStyle}>Quantity</p><p style={{ fontWeight: 700, color: 'rgb(168,85,247)', fontSize: '18px' }}>{spec.outer_box_quantity}</p></div>
+                    <div style={detailCard}><p style={lblStyle}>Plywood Box Weight</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{convertWeight(spec.outer_box_gross_weight_kg, wu)} {WEIGHT_LABELS[wu]}</p></div>
                 </div>
             </div>
 
@@ -341,7 +370,7 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
             const supabase = getSupabaseClient();
             const { data, error: e } = await supabase
                 .from('packing_specifications')
-                .select('*, items!inner(item_name, master_serial_no, part_number)')
+                .select('*, items!inner(item_name, master_serial_no, part_number, revision)')
                 .order('created_at', { ascending: false });
             if (e) throw e;
             const mapped: PackingSpec[] = (data || []).map((r: any) => ({
@@ -349,6 +378,7 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                 item_name: r.items?.item_name,
                 master_serial_no: r.items?.master_serial_no,
                 part_number: r.items?.part_number,
+                revision: r.items?.revision,
             }));
             setSpecs(mapped);
         } catch (err: any) {
@@ -427,9 +457,10 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
         // Validation
         const { inner_box_length_mm, inner_box_width_mm, inner_box_height_mm, inner_box_quantity,
             inner_box_net_weight_kg, outer_box_length_mm, outer_box_width_mm, outer_box_height_mm,
-            outer_box_gross_weight_kg } = formData;
+            outer_box_quantity, outer_box_gross_weight_kg } = formData;
         const allValues = [inner_box_length_mm, inner_box_width_mm, inner_box_height_mm, inner_box_quantity,
-            inner_box_net_weight_kg, outer_box_length_mm, outer_box_width_mm, outer_box_height_mm, outer_box_gross_weight_kg];
+            inner_box_net_weight_kg, outer_box_length_mm, outer_box_width_mm, outer_box_height_mm,
+            outer_box_quantity, outer_box_gross_weight_kg];
         if (allValues.some(v => v < 0)) { showToast('error', 'Validation Error', 'Negative values are not allowed.'); return; }
         if (allValues.some(v => v === 0)) { showToast('warning', 'Warning', 'Some values are zero. Please verify all fields.'); }
 
@@ -485,7 +516,8 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
             inner_box_height_mm: spec.inner_box_height_mm, inner_box_quantity: spec.inner_box_quantity,
             inner_box_net_weight_kg: spec.inner_box_net_weight_kg,
             outer_box_length_mm: spec.outer_box_length_mm, outer_box_width_mm: spec.outer_box_width_mm,
-            outer_box_height_mm: spec.outer_box_height_mm, outer_box_gross_weight_kg: spec.outer_box_gross_weight_kg,
+            outer_box_height_mm: spec.outer_box_height_mm, outer_box_quantity: spec.outer_box_quantity,
+            outer_box_gross_weight_kg: spec.outer_box_gross_weight_kg,
         });
         setInnerFormLU('mm'); setInnerFormWU('kg');
         setOuterFormLU('mm'); setOuterFormWU('kg');
@@ -718,9 +750,8 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                                     <th style={{ ...thStyle, minWidth: '180px' }}>Item Details</th>
                                     <th style={{ ...thStyle, minWidth: '140px' }}>Inner Box Size</th>
                                     <th style={{ ...thStyle, textAlign: 'center', minWidth: '60px' }}>Inner Qty</th>
-                                    <th style={{ ...thStyle, textAlign: 'right', minWidth: '100px' }}>Inner Net Wt</th>
                                     <th style={{ ...thStyle, minWidth: '140px' }}>Outer Box Size</th>
-                                    <th style={{ ...thStyle, textAlign: 'right', minWidth: '110px' }}>Outer Gross Wt</th>
+                                    <th style={{ ...thStyle, textAlign: 'center', minWidth: '60px' }}>Outer Qty</th>
                                     <th style={{ ...thStyle, textAlign: 'center', minWidth: '80px' }}>Status</th>
                                     <th style={{ ...thStyle, textAlign: 'center', minWidth: '70px' }}>View</th>
                                     {canAction && <th style={{ ...thStyle, textAlign: 'center', minWidth: '110px' }}>Action</th>}
@@ -743,9 +774,8 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                                             </td>
                                             <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: '12px' }}>{fmtSz(s.inner_box_length_mm, s.inner_box_width_mm, s.inner_box_height_mm)} {LENGTH_LABELS[tableLU]}</td>
                                             <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 700, color: 'var(--enterprise-info, #3b82f6)' }}>{s.inner_box_quantity}</td>
-                                            <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600 }}>{convertWeight(s.inner_box_net_weight_kg, tableWU)} {WEIGHT_LABELS[tableWU]}</td>
                                             <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: '12px' }}>{fmtSz(s.outer_box_length_mm, s.outer_box_width_mm, s.outer_box_height_mm)} {LENGTH_LABELS[tableLU]}</td>
-                                            <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600 }}>{convertWeight(s.outer_box_gross_weight_kg, tableWU)} {WEIGHT_LABELS[tableWU]}</td>
+                                            <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 700, color: 'rgb(168,85,247)' }}>{s.outer_box_quantity}</td>
                                             <td style={{ ...tdStyle, textAlign: 'center' }}><Badge variant={s.is_active ? 'success' : 'error'} style={!s.is_active ? { backgroundColor: '#fee2e2', color: '#b91c1c' } : {}}>{s.is_active ? 'Active' : 'Inactive'}</Badge></td>
                                             {/* View — ALL roles */}
                                             <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px' }}>
@@ -768,33 +798,41 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                                                             Actions
                                                             <ChevronDown size={14} style={{ transition: 'transform 0.2s', transform: activeDropdown === s.id ? 'rotate(180deg)' : 'rotate(0deg)' }} />
                                                         </button>
-                                                        {activeDropdown === s.id && (
-                                                            <div
-                                                                style={{
-                                                                    position: 'absolute', top: '100%', right: '0', marginTop: '4px', zIndex: 50,
-                                                                    width: '200px', backgroundColor: 'white', borderRadius: '12px',
-                                                                    boxShadow: '0 10px 40px rgba(0,0,0,0.15)', border: '1px solid #e5e7eb', overflow: 'hidden',
-                                                                }}
-                                                            >
-                                                                <button
-                                                                    onClick={() => { openEdit(s); setActiveDropdown(null); }}
-                                                                    style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
-                                                                    onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
-                                                                    onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                                        {activeDropdown === s.id && (() => {
+                                                            const isLastRows = idx >= displayed.length - 2;
+                                                            return (
+                                                                <div
+                                                                    style={{
+                                                                        position: 'absolute',
+                                                                        ...(isLastRows
+                                                                            ? { bottom: '100%', marginBottom: '4px' }
+                                                                            : { top: '100%', marginTop: '4px' }
+                                                                        ),
+                                                                        right: '0', zIndex: 50,
+                                                                        width: '160px', backgroundColor: 'white', borderRadius: '12px',
+                                                                        boxShadow: '0 10px 40px rgba(0,0,0,0.15)', border: '1px solid #e5e7eb', overflow: 'hidden',
+                                                                    }}
                                                                 >
-                                                                    <Edit3 size={16} /> Edit Specification
-                                                                </button>
-                                                                <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
-                                                                <button
-                                                                    onClick={() => { handleDeleteClick(s); setActiveDropdown(null); }}
-                                                                    style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
-                                                                    onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#fef2f2'; }}
-                                                                    onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-                                                                >
-                                                                    <Trash2 size={16} /> Delete Specification
-                                                                </button>
-                                                            </div>
-                                                        )}
+                                                                    <button
+                                                                        onClick={() => { openEdit(s); setActiveDropdown(null); }}
+                                                                        style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
+                                                                        onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
+                                                                        onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                                                    >
+                                                                        <Edit3 size={16} /> Edit
+                                                                    </button>
+                                                                    <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
+                                                                    <button
+                                                                        onClick={() => { handleDeleteClick(s); setActiveDropdown(null); }}
+                                                                        style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
+                                                                        onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#fef2f2'; }}
+                                                                        onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                                                    >
+                                                                        <Trash2 size={16} /> Delete
+                                                                    </button>
+                                                                </div>
+                                                            );
+                                                        })()}
                                                     </div>
                                                 </td>
                                             )}
@@ -921,13 +959,13 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                                     </div>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-                                    <div><Label required>Length ({LENGTH_LABELS[innerFormLU]})</Label><Input value={getInnerLenDisplay('inner_box_length_mm') || ''} onChange={e => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setInnerLenField('inner_box_length_mm', parseFloat(v) || 0); }} placeholder="e.g. 100" /></div>
-                                    <div><Label required>Width ({LENGTH_LABELS[innerFormLU]})</Label><Input value={getInnerLenDisplay('inner_box_width_mm') || ''} onChange={e => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setInnerLenField('inner_box_width_mm', parseFloat(v) || 0); }} placeholder="e.g. 70" /></div>
-                                    <div><Label required>Height ({LENGTH_LABELS[innerFormLU]})</Label><Input value={getInnerLenDisplay('inner_box_height_mm') || ''} onChange={e => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setInnerLenField('inner_box_height_mm', parseFloat(v) || 0); }} placeholder="e.g. 50" /></div>
+                                    <div><Label required>Length ({LENGTH_LABELS[innerFormLU]})</Label><Input type="number" step="any" min={0} value={getInnerLenDisplay('inner_box_length_mm') || ''} onChange={e => setInnerLenField('inner_box_length_mm', parseFloat(e.target.value) || 0)} placeholder="e.g. 100" /></div>
+                                    <div><Label required>Width ({LENGTH_LABELS[innerFormLU]})</Label><Input type="number" step="any" min={0} value={getInnerLenDisplay('inner_box_width_mm') || ''} onChange={e => setInnerLenField('inner_box_width_mm', parseFloat(e.target.value) || 0)} placeholder="e.g. 70" /></div>
+                                    <div><Label required>Height ({LENGTH_LABELS[innerFormLU]})</Label><Input type="number" step="any" min={0} value={getInnerLenDisplay('inner_box_height_mm') || ''} onChange={e => setInnerLenField('inner_box_height_mm', parseFloat(e.target.value) || 0)} placeholder="e.g. 50" /></div>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
-                                    <div><Label required>Quantity per Box</Label><Input value={formData.inner_box_quantity || ''} onChange={e => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setFormData(p => ({ ...p, inner_box_quantity: parseInt(v) || 0 })); }} placeholder="e.g. 450" /></div>
-                                    <div><Label required>Net Weight ({WEIGHT_LABELS[innerFormWU]})</Label><Input value={getInnerWtDisplay('inner_box_net_weight_kg') || ''} onChange={e => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setInnerWtField('inner_box_net_weight_kg', parseFloat(v) || 0); }} placeholder="e.g. 0.5" /></div>
+                                    <div><Label required>Quantity per Box</Label><Input type="number" min={0} value={formData.inner_box_quantity || ''} onChange={e => setFormData(p => ({ ...p, inner_box_quantity: parseInt(e.target.value) || 0 }))} placeholder="e.g. 450" /></div>
+                                    <div><Label required>Net Weight ({WEIGHT_LABELS[innerFormWU]})</Label><Input type="number" step="any" min={0} value={getInnerWtDisplay('inner_box_net_weight_kg') || ''} onChange={e => setInnerWtField('inner_box_net_weight_kg', parseFloat(e.target.value) || 0)} placeholder="e.g. 0.5" /></div>
                                 </div>
                             </div>
 
@@ -943,13 +981,13 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                                     </div>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-                                    <div><Label required>Length ({LENGTH_LABELS[outerFormLU]})</Label><Input value={getOuterLenDisplay('outer_box_length_mm') || ''} onChange={e => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setOuterLenField('outer_box_length_mm', parseFloat(v) || 0); }} placeholder="e.g. 1000" /></div>
-                                    <div><Label required>Width ({LENGTH_LABELS[outerFormLU]})</Label><Input value={getOuterLenDisplay('outer_box_width_mm') || ''} onChange={e => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setOuterLenField('outer_box_width_mm', parseFloat(v) || 0); }} placeholder="e.g. 700" /></div>
-                                    <div><Label required>Height ({LENGTH_LABELS[outerFormLU]})</Label><Input value={getOuterLenDisplay('outer_box_height_mm') || ''} onChange={e => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setOuterLenField('outer_box_height_mm', parseFloat(v) || 0); }} placeholder="e.g. 500" /></div>
+                                    <div><Label required>Length ({LENGTH_LABELS[outerFormLU]})</Label><Input type="number" step="any" min={0} value={getOuterLenDisplay('outer_box_length_mm') || ''} onChange={e => setOuterLenField('outer_box_length_mm', parseFloat(e.target.value) || 0)} placeholder="e.g. 1000" /></div>
+                                    <div><Label required>Width ({LENGTH_LABELS[outerFormLU]})</Label><Input type="number" step="any" min={0} value={getOuterLenDisplay('outer_box_width_mm') || ''} onChange={e => setOuterLenField('outer_box_width_mm', parseFloat(e.target.value) || 0)} placeholder="e.g. 700" /></div>
+                                    <div><Label required>Height ({LENGTH_LABELS[outerFormLU]})</Label><Input type="number" step="any" min={0} value={getOuterLenDisplay('outer_box_height_mm') || ''} onChange={e => setOuterLenField('outer_box_height_mm', parseFloat(e.target.value) || 0)} placeholder="e.g. 500" /></div>
                                 </div>
-                                <div style={{ marginTop: '12px' }}>
-                                    <Label required>Gross Weight ({WEIGHT_LABELS[outerFormWU]})</Label>
-                                    <Input value={getOuterWtDisplay('outer_box_gross_weight_kg') || ''} onChange={e => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setOuterWtField('outer_box_gross_weight_kg', parseFloat(v) || 0); }} placeholder="e.g. 50" />
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
+                                    <div><Label required>Quantity per Box</Label><Input type="number" min={0} value={formData.outer_box_quantity || ''} onChange={e => setFormData(p => ({ ...p, outer_box_quantity: parseInt(e.target.value) || 0 }))} placeholder="e.g. 1200" /></div>
+                                    <div><Label required>Gross Weight ({WEIGHT_LABELS[outerFormWU]})</Label><Input type="number" step="any" min={0} value={getOuterWtDisplay('outer_box_gross_weight_kg') || ''} onChange={e => setOuterWtField('outer_box_gross_weight_kg', parseFloat(e.target.value) || 0)} placeholder="e.g. 50" /></div>
                                 </div>
                             </div>
 
