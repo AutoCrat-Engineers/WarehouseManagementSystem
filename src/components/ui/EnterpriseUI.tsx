@@ -2,7 +2,7 @@ import React, { CSSProperties } from 'react';
 
 // Enterprise Card Component
 interface CardProps {
-  children?: React.ReactNode;
+  children: React.ReactNode;
   hover?: boolean;
   className?: string;
   style?: CSSProperties;
@@ -181,14 +181,12 @@ interface InputProps {
   type?: string;
   value: string | number;
   onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  onBlur?: (e: React.FocusEvent<HTMLInputElement>) => void;
-  onFocus?: (e: React.FocusEvent<HTMLInputElement>) => void;
   placeholder?: string;
   required?: boolean;
   disabled?: boolean;
-  min?: string | number;
-  max?: string | number;
-  step?: string | number;
+  min?: number;
+  max?: number;
+  step?: number;
   style?: CSSProperties;
 }
 
@@ -196,8 +194,6 @@ export function Input({
   type = 'text',
   value,
   onChange,
-  onBlur: onBlurProp,
-  onFocus: onFocusProp,
   placeholder,
   required = false,
   disabled = false,
@@ -219,8 +215,8 @@ export function Input({
       min={min}
       max={max}
       step={step}
-      onFocus={(e) => { setIsFocused(true); onFocusProp?.(e); }}
-      onBlur={(e) => { setIsFocused(false); onBlurProp?.(e); }}
+      onFocus={() => setIsFocused(true)}
+      onBlur={() => setIsFocused(false)}
       style={{
         width: '100%',
         padding: '8px 12px',
@@ -369,7 +365,7 @@ export function Label({ children, required = false, style = {} }: LabelProps) {
 interface ModalProps {
   isOpen: boolean;
   onClose: () => void;
-  title: React.ReactNode;
+  title: string;
   children: React.ReactNode;
   maxWidth?: string;
 }
@@ -430,16 +426,14 @@ export function Modal({ isOpen, onClose, title, children, maxWidth = '600px' }: 
 }
 
 // Enterprise Loading Spinner
-export function LoadingSpinner({ size = 48, message }: { size?: number; message?: string }) {
+export function LoadingSpinner({ size = 48 }: { size?: number }) {
   return (
     <div
       style={{
         display: 'flex',
-        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
         minHeight: '200px',
-        gap: '16px',
       }}
     >
       <div
@@ -452,223 +446,11 @@ export function LoadingSpinner({ size = 48, message }: { size?: number; message?
           animation: 'spin 1s linear infinite',
         }}
       />
-      {message && (
-        <p style={{
-          fontSize: '14px',
-          fontWeight: 500,
-          color: 'var(--enterprise-gray-600)',
-          margin: 0,
-        }}>
-          {message}
-        </p>
-      )}
       <style>{`
         @keyframes spin {
           to { transform: rotate(360deg); }
         }
       `}</style>
-    </div>
-  );
-}
-
-// Module-specific Premium Loading State
-// Shows a branded loader with module name, shimmer skeletons, and fade-in animation
-interface ModuleLoaderProps {
-  moduleName: string;
-  icon?: React.ReactNode;
-}
-
-export function ModuleLoader({ moduleName, icon }: ModuleLoaderProps) {
-  return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '24px',
-      animation: 'moduleLoaderFadeIn 0.3s ease-out',
-    }}>
-      <style>{`
-        @keyframes moduleLoaderFadeIn {
-          from { opacity: 0; transform: translateY(8px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes moduleLoaderSpin {
-          to { transform: rotate(360deg); }
-        }
-        @keyframes moduleLoaderShimmer {
-          0% { background-position: -200% 0; }
-          100% { background-position: 200% 0; }
-        }
-        @keyframes moduleLoaderPulse {
-          0%, 100% { opacity: 0.6; }
-          50% { opacity: 1; }
-        }
-      `}</style>
-
-      {/* Summary Card Skeletons */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
-        {[0, 1, 2, 3].map(i => (
-          <div key={i} style={{
-            backgroundColor: 'var(--card-background, white)',
-            border: '1px solid var(--enterprise-gray-200, #e5e7eb)',
-            borderRadius: '12px',
-            padding: '20px 24px',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-          }}>
-            <div style={{
-              height: '12px',
-              width: '60%',
-              borderRadius: '6px',
-              marginBottom: '12px',
-              background: 'linear-gradient(90deg, var(--enterprise-gray-100, #f3f4f6) 25%, var(--enterprise-gray-200, #e5e7eb) 50%, var(--enterprise-gray-100, #f3f4f6) 75%)',
-              backgroundSize: '200% 100%',
-              animation: `moduleLoaderShimmer 1.5s ease-in-out infinite`,
-              animationDelay: `${i * 0.15}s`,
-            }} />
-            <div style={{
-              height: '28px',
-              width: '40%',
-              borderRadius: '6px',
-              background: 'linear-gradient(90deg, var(--enterprise-gray-100, #f3f4f6) 25%, var(--enterprise-gray-200, #e5e7eb) 50%, var(--enterprise-gray-100, #f3f4f6) 75%)',
-              backgroundSize: '200% 100%',
-              animation: `moduleLoaderShimmer 1.5s ease-in-out infinite`,
-              animationDelay: `${i * 0.15 + 0.1}s`,
-            }} />
-          </div>
-        ))}
-      </div>
-
-      {/* Filter Bar Skeleton */}
-      <div style={{
-        backgroundColor: 'var(--card-background, white)',
-        border: '1px solid var(--enterprise-gray-200, #e5e7eb)',
-        borderRadius: '12px',
-        padding: '16px 20px',
-        display: 'flex',
-        gap: '12px',
-        alignItems: 'center',
-      }}>
-        <div style={{
-          height: '36px',
-          flex: 1,
-          maxWidth: '300px',
-          borderRadius: '8px',
-          background: 'linear-gradient(90deg, var(--enterprise-gray-100, #f3f4f6) 25%, var(--enterprise-gray-200, #e5e7eb) 50%, var(--enterprise-gray-100, #f3f4f6) 75%)',
-          backgroundSize: '200% 100%',
-          animation: 'moduleLoaderShimmer 1.5s ease-in-out infinite 0.2s',
-        }} />
-        {[0, 1, 2].map(i => (
-          <div key={i} style={{
-            height: '36px',
-            width: '100px',
-            borderRadius: '8px',
-            background: 'linear-gradient(90deg, var(--enterprise-gray-100, #f3f4f6) 25%, var(--enterprise-gray-200, #e5e7eb) 50%, var(--enterprise-gray-100, #f3f4f6) 75%)',
-            backgroundSize: '200% 100%',
-            animation: `moduleLoaderShimmer 1.5s ease-in-out infinite ${0.3 + i * 0.1}s`,
-          }} />
-        ))}
-      </div>
-
-      {/* Table Skeleton + Loading Message */}
-      <div style={{
-        backgroundColor: 'var(--card-background, white)',
-        border: '1px solid var(--enterprise-gray-200, #e5e7eb)',
-        borderRadius: '12px',
-        overflow: 'hidden',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-      }}>
-        {/* Table Header Skeleton */}
-        <div style={{
-          display: 'flex',
-          gap: '0',
-          padding: '14px 20px',
-          backgroundColor: 'var(--enterprise-gray-50, #f9fafb)',
-          borderBottom: '2px solid var(--enterprise-gray-200, #e5e7eb)',
-        }}>
-          {[120, 90, 180, 150, 80, 110].map((w, i) => (
-            <div key={i} style={{
-              height: '12px',
-              width: `${w}px`,
-              marginRight: '24px',
-              borderRadius: '4px',
-              background: 'linear-gradient(90deg, var(--enterprise-gray-200, #e5e7eb) 25%, var(--enterprise-gray-300, #d1d5db) 50%, var(--enterprise-gray-200, #e5e7eb) 75%)',
-              backgroundSize: '200% 100%',
-              animation: `moduleLoaderShimmer 1.5s ease-in-out infinite ${0.4 + i * 0.08}s`,
-            }} />
-          ))}
-        </div>
-
-        {/* Loading Indicator */}
-        <div style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '60px 20px',
-          gap: '16px',
-        }}>
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: '56px',
-            height: '56px',
-            borderRadius: '16px',
-            backgroundColor: 'rgba(30, 58, 138, 0.06)',
-            animation: 'moduleLoaderPulse 2s ease-in-out infinite',
-          }}>
-            {icon || (
-              <div style={{
-                width: '28px',
-                height: '28px',
-                border: '3px solid var(--enterprise-gray-200, #e5e7eb)',
-                borderTopColor: 'var(--enterprise-primary, #1e3a8a)',
-                borderRadius: '50%',
-                animation: 'moduleLoaderSpin 0.8s linear infinite',
-              }} />
-            )}
-          </div>
-          <div style={{ textAlign: 'center' }}>
-            <p style={{
-              fontSize: '15px',
-              fontWeight: 600,
-              color: 'var(--enterprise-gray-800, #1f2937)',
-              margin: '0 0 4px 0',
-            }}>
-              Loading {moduleName}…
-            </p>
-            <p style={{
-              fontSize: '13px',
-              color: 'var(--enterprise-gray-500, #6b7280)',
-              margin: 0,
-            }}>
-              Fetching latest data from the server
-            </p>
-          </div>
-        </div>
-
-        {/* Row Skeletons */}
-        {[0, 1, 2, 3, 4].map(i => (
-          <div key={i} style={{
-            display: 'flex',
-            gap: '0',
-            padding: '14px 20px',
-            borderTop: '1px solid var(--enterprise-gray-100, #f3f4f6)',
-            opacity: 1 - i * 0.15,
-          }}>
-            {[100, 70, 160, 130, 60, 90].map((w, j) => (
-              <div key={j} style={{
-                height: '14px',
-                width: `${w}px`,
-                marginRight: '24px',
-                borderRadius: '4px',
-                background: 'linear-gradient(90deg, var(--enterprise-gray-100, #f3f4f6) 25%, var(--enterprise-gray-200, #e5e7eb) 50%, var(--enterprise-gray-100, #f3f4f6) 75%)',
-                backgroundSize: '200% 100%',
-                animation: `moduleLoaderShimmer 1.5s ease-in-out infinite ${0.5 + i * 0.1 + j * 0.05}s`,
-              }} />
-            ))}
-          </div>
-        ))}
-      </div>
     </div>
   );
 }

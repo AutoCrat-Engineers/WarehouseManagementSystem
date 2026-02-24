@@ -11,10 +11,8 @@ import { BlanketReleases } from './components/BlanketReleases';
 import { ForecastingModule } from './components/ForecastingModule';
 import { PlanningModule } from './components/PlanningModule';
 import { StockMovement } from './components/StockMovement';
-import { PackingModule, PackingDetails, PackingListInvoice, PackingListSubInvoice } from './components/packing';
 import { LoadingPage } from './components/LoadingPage';
 import { UserManagement } from './auth/users/UserManagement';
-import { NotificationBell } from './components/notifications/NotificationBell';
 import {
   LayoutDashboard,
   Package,
@@ -27,16 +25,10 @@ import {
   ChevronLeft,
   ArrowRightLeft,
   ChevronRight,
-  ChevronDown,
   AlertCircle,
   Users,
   Shield,
-  Boxes,
-  Printer,
-  ClipboardList,
-  List,
-  FileCheck,
-  FileMinus
+  Boxes
 } from 'lucide-react';
 
 declare const __APP_VERSION__: string;
@@ -47,34 +39,20 @@ const logoImage = '/logo.png';
 // User role type for RBAC
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
-type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'packing' | 'packing-sticker' | 'packing-details' | 'packing-list-invoice' | 'packing-list-sub-invoice' | 'users';
+type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'users';
 
 interface MenuItem {
   id: View;
   label: string;
   icon: React.ElementType;
   description: string;
-  hasSubmenu?: boolean;
 }
-
-// All packing sub-views (used to determine if packing accordion is active)
-const PACKING_SUB_VIEWS: View[] = ['packing', 'packing-sticker', 'packing-details', 'packing-list-invoice', 'packing-list-sub-invoice'];
-
-// Meta for packing sub-views (displayed in the header bar)
-const PACKING_VIEW_META: Record<string, { label: string; description: string }> = {
-  'packing': { label: 'Packing', description: 'FG Packing Workflow' },
-  'packing-sticker': { label: 'Packing — Sticker Generation', description: 'FG Sticker Generation' },
-  'packing-details': { label: 'Packing — Details', description: 'Packing Specifications' },
-  'packing-list-invoice': { label: 'Packing List — Against Invoice', description: 'Packing by Invoice' },
-  'packing-list-sub-invoice': { label: 'Packing List — Against Sub Invoice', description: 'Packing by Sub Invoice' },
-};
 
 const menuItems: MenuItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, description: 'Overview & KPIs' },
   { id: 'items', label: 'Item Master', icon: Package, description: 'FG Catalog' },
   { id: 'inventory', label: 'Inventory', icon: Boxes, description: 'Multi-Warehouse Stock' },
   { id: 'stock-movements', label: 'Stock Movements', icon: ArrowRightLeft, description: 'Audit Trail' },
-  { id: 'packing', label: 'Packing', icon: Package, description: 'FG Packing Workflow', hasSubmenu: true },
   { id: 'orders', label: 'Blanket Orders', icon: FileText, description: 'Customer Orders' },
   { id: 'releases', label: 'Blanket Releases', icon: Calendar, description: 'Delivery Schedule' },
   { id: 'forecast', label: 'Forecasting', icon: TrendingUp, description: 'Demand Prediction' },
@@ -91,9 +69,6 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isMobile, setIsMobile] = useState(false);
-  // SAP-style accordion states
-  const [packingMenuOpen, setPackingMenuOpen] = useState(false);
-  const [packingListOpen, setPackingListOpen] = useState(false);
 
   // ============================================================================
   // RESPONSIVE: Detect mobile/tablet screen size
@@ -330,15 +305,6 @@ export default function App() {
         return <InventoryGrid />;
       case 'stock-movements':
         return <StockMovement accessToken={accessToken} userRole={userRole} />;
-      case 'packing':
-      case 'packing-sticker':
-        return <PackingModule accessToken={accessToken} userRole={userRole} />;
-      case 'packing-details':
-        return <PackingDetails accessToken={accessToken} userRole={userRole} onNavigate={(v) => setCurrentView(v as View)} />;
-      case 'packing-list-invoice':
-        return <PackingListInvoice accessToken={accessToken} userRole={userRole} onNavigate={(v) => setCurrentView(v as View)} />;
-      case 'packing-list-sub-invoice':
-        return <PackingListSubInvoice accessToken={accessToken} userRole={userRole} onNavigate={(v) => setCurrentView(v as View)} />;
       case 'orders':
         return <BlanketOrders accessToken={accessToken} />;
       case 'releases':
@@ -391,11 +357,7 @@ export default function App() {
   // Log current role for debugging
   console.log('🔄 Current userRole state:', userRole);
 
-  // Resolve the current menu item — for packing sub-views, show packing meta
-  const packingMeta = PACKING_VIEW_META[currentView];
-  const currentMenuItem = packingMeta
-    ? { id: currentView as View, label: packingMeta.label, icon: Package, description: packingMeta.description }
-    : getMenuItems().find(item => item.id === currentView);
+  const currentMenuItem = getMenuItems().find(item => item.id === currentView);
 
   return (
     <ErrorBoundary>
@@ -488,7 +450,7 @@ export default function App() {
                 textAlign: 'center',
                 backdropFilter: 'blur(4px)',
               }}>
-                v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.3.0'}
+                v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.2.0'}
               </span>
             </div>
           </div>
@@ -501,199 +463,47 @@ export default function App() {
           }}>
             {getMenuItems().map((item) => {
               const Icon = item.icon;
-              const isPackingItem = item.hasSubmenu && item.id === 'packing';
-              const isActive = isPackingItem
-                ? PACKING_SUB_VIEWS.includes(currentView)
-                : currentView === item.id;
+              const isActive = currentView === item.id;
 
-              // ─── SAP-STYLE PACKING ACCORDION ───
-              if (isPackingItem) {
-                const isStickerActive = currentView === 'packing' || currentView === 'packing-sticker';
-                const isDetailsActive = currentView === 'packing-details';
-                const isListInvActive = currentView === 'packing-list-invoice';
-                const isListSubInvActive = currentView === 'packing-list-sub-invoice';
-                const isPackingListActive = isListInvActive || isListSubInvActive;
-
-                return (
-                  <div key={item.id}>
-                    {/* Parent: Packing */}
-                    <button
-                      onClick={() => {
-                        setPackingMenuOpen(!packingMenuOpen);
-                        if (!packingMenuOpen) setPackingListOpen(false);
-                      }}
-                      style={{
-                        width: '100%', display: 'flex', alignItems: 'center', gap: '12px',
-                        padding: '12px 24px', border: 'none',
-                        backgroundColor: isActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                        borderLeft: isActive ? '3px solid var(--enterprise-primary)' : '3px solid transparent',
-                        color: isActive ? 'var(--enterprise-primary)' : 'var(--enterprise-gray-600)',
-                        textAlign: 'left', cursor: 'pointer', transition: 'all 200ms ease',
-                        fontWeight: isActive ? '600' : '500', fontSize: '14px',
-                      }}
-                      onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'var(--enterprise-gray-50)'; }}
-                      onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = isActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent'; }}
-                    >
-                      <Icon size={20} strokeWidth={isActive ? 2.5 : 2} />
-                      <div style={{ flex: 1 }}>
-                        <div>{item.label}</div>
-                        <div style={{ fontSize: '11px', color: 'var(--enterprise-gray-500)', fontWeight: '400' }}>
-                          {item.description}
-                        </div>
-                      </div>
-                      <ChevronDown
-                        size={16}
-                        style={{
-                          transition: 'transform 250ms ease',
-                          transform: packingMenuOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-                          color: isActive ? 'var(--enterprise-primary)' : 'var(--enterprise-gray-400)',
-                        }}
-                      />
-                    </button>
-
-                    {/* ─── Level-1 Sub-items ─── */}
-                    <div style={{
-                      maxHeight: packingMenuOpen ? '400px' : '0',
-                      overflow: 'hidden',
-                      transition: 'max-height 300ms ease',
-                      backgroundColor: 'rgba(30, 58, 138, 0.02)',
-                    }}>
-                      {/* 1. Generate Sticker */}
-                      <button
-                        onClick={() => handleNavigation('packing-sticker')}
-                        style={{
-                          width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
-                          padding: '9px 24px 9px 44px', border: 'none',
-                          backgroundColor: isStickerActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                          borderLeft: isStickerActive ? '3px solid #1e3a8a' : '3px solid transparent',
-                          color: isStickerActive ? '#1e3a8a' : 'var(--enterprise-gray-600)',
-                          textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                          fontWeight: isStickerActive ? '600' : '400', fontSize: '13px',
-                        }}
-                        onMouseEnter={(e) => { if (!isStickerActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                        onMouseLeave={(e) => { if (!isStickerActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
-                      >
-                        <Printer size={15} strokeWidth={isStickerActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isStickerActive ? 1 : 0.6 }} />
-                        <span>Sticker Generation</span>
-                      </button>
-
-                      {/* 2. Packing Details */}
-                      <button
-                        onClick={() => handleNavigation('packing-details')}
-                        style={{
-                          width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
-                          padding: '9px 24px 9px 44px', border: 'none',
-                          backgroundColor: isDetailsActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                          borderLeft: isDetailsActive ? '3px solid #1e3a8a' : '3px solid transparent',
-                          color: isDetailsActive ? '#1e3a8a' : 'var(--enterprise-gray-600)',
-                          textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                          fontWeight: isDetailsActive ? '600' : '400', fontSize: '13px',
-                        }}
-                        onMouseEnter={(e) => { if (!isDetailsActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                        onMouseLeave={(e) => { if (!isDetailsActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
-                      >
-                        <ClipboardList size={15} strokeWidth={isDetailsActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isDetailsActive ? 1 : 0.6 }} />
-                        <span>Packing Details</span>
-                      </button>
-
-                      {/* 3. Packing List (expandable — Level 2) */}
-                      <button
-                        onClick={() => setPackingListOpen(!packingListOpen)}
-                        style={{
-                          width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
-                          padding: '9px 24px 9px 44px', border: 'none',
-                          backgroundColor: isPackingListActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                          borderLeft: isPackingListActive ? '3px solid #1e3a8a' : '3px solid transparent',
-                          color: isPackingListActive ? '#1e3a8a' : 'var(--enterprise-gray-600)',
-                          textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                          fontWeight: isPackingListActive ? '600' : '400', fontSize: '13px',
-                        }}
-                        onMouseEnter={(e) => { if (!isPackingListActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                        onMouseLeave={(e) => { if (!isPackingListActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
-                      >
-                        <List size={15} strokeWidth={isPackingListActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isPackingListActive ? 1 : 0.6 }} />
-                        <span style={{ flex: 1 }}>Packing List</span>
-                        <ChevronDown
-                          size={14}
-                          style={{
-                            transition: 'transform 250ms ease',
-                            transform: packingListOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-                            color: isPackingListActive ? '#1e3a8a' : '#9ca3af',
-                          }}
-                        />
-                      </button>
-
-                      {/* ─── Level-2: Packing List sub-items ─── */}
-                      <div style={{
-                        maxHeight: packingListOpen ? '200px' : '0',
-                        overflow: 'hidden',
-                        transition: 'max-height 250ms ease',
-                        backgroundColor: 'rgba(30, 58, 138, 0.02)',
-                      }}>
-                        {/* Against Invoice */}
-                        <button
-                          onClick={() => handleNavigation('packing-list-invoice')}
-                          style={{
-                            width: '100%', display: 'flex', alignItems: 'center', gap: '9px',
-                            padding: '8px 24px 8px 62px', border: 'none',
-                            backgroundColor: isListInvActive ? 'rgba(30, 58, 138, 0.1)' : 'transparent',
-                            borderLeft: isListInvActive ? '3px solid #1e3a8a' : '3px solid transparent',
-                            color: isListInvActive ? '#1e3a8a' : 'var(--enterprise-gray-500)',
-                            textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                            fontWeight: isListInvActive ? '600' : '400', fontSize: '12px',
-                          }}
-                          onMouseEnter={(e) => { if (!isListInvActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                          onMouseLeave={(e) => { if (!isListInvActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
-                        >
-                          <FileCheck size={14} strokeWidth={isListInvActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isListInvActive ? 1 : 0.55 }} />
-                          <span>Against Invoice</span>
-                        </button>
-
-                        {/* Against Sub Invoice */}
-                        <button
-                          onClick={() => handleNavigation('packing-list-sub-invoice')}
-                          style={{
-                            width: '100%', display: 'flex', alignItems: 'center', gap: '9px',
-                            padding: '8px 24px 8px 62px', border: 'none',
-                            backgroundColor: isListSubInvActive ? 'rgba(30, 58, 138, 0.1)' : 'transparent',
-                            borderLeft: isListSubInvActive ? '3px solid #1e3a8a' : '3px solid transparent',
-                            color: isListSubInvActive ? '#1e3a8a' : 'var(--enterprise-gray-500)',
-                            textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                            fontWeight: isListSubInvActive ? '600' : '400', fontSize: '12px',
-                          }}
-                          onMouseEnter={(e) => { if (!isListSubInvActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                          onMouseLeave={(e) => { if (!isListSubInvActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
-                        >
-                          <FileMinus size={14} strokeWidth={isListSubInvActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isListSubInvActive ? 1 : 0.55 }} />
-                          <span>Against Sub Invoice</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              }
-
-              // ─── REGULAR MENU ITEMS ───
               return (
                 <button
                   key={item.id}
                   onClick={() => handleNavigation(item.id)}
                   style={{
-                    width: '100%', display: 'flex', alignItems: 'center', gap: '12px',
-                    padding: '12px 24px', border: 'none',
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    padding: '12px 24px',
+                    border: 'none',
                     backgroundColor: isActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
                     borderLeft: isActive ? '3px solid var(--enterprise-primary)' : '3px solid transparent',
                     color: isActive ? 'var(--enterprise-primary)' : 'var(--enterprise-gray-600)',
-                    textAlign: 'left', cursor: 'pointer', transition: 'all 200ms ease',
-                    fontWeight: isActive ? '600' : '500', fontSize: '14px',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    transition: 'all 200ms ease',
+                    fontWeight: isActive ? '600' : '500',
+                    fontSize: '14px',
                   }}
-                  onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'var(--enterprise-gray-50)'; }}
-                  onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
+                  onMouseEnter={(e) => {
+                    if (!isActive) {
+                      e.currentTarget.style.backgroundColor = 'var(--enterprise-gray-50)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isActive) {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }
+                  }}
                 >
                   <Icon size={20} strokeWidth={isActive ? 2.5 : 2} />
                   <div style={{ flex: 1 }}>
                     <div>{item.label}</div>
-                    <div style={{ fontSize: '11px', color: 'var(--enterprise-gray-500)', fontWeight: '400' }}>
+                    <div style={{
+                      fontSize: '11px',
+                      color: 'var(--enterprise-gray-500)',
+                      fontWeight: '400',
+                    }}>
                       {item.description}
                     </div>
                   </div>
@@ -841,29 +651,17 @@ export default function App() {
               )}
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              {/* Notification Bell */}
-              {user?.id && (
-                <NotificationBell
-                  userId={user.id}
-                  onNavigate={(module) => {
-                    setCurrentView(module as View);
-                  }}
-                />
-              )}
-
-              <div style={{
-                padding: '6px 12px',
-                backgroundColor: '#dcfce7',
-                borderRadius: 'var(--border-radius-md)',
-                fontSize: '11px',
-                fontWeight: '600',
-                color: '#15803d',
-                textTransform: 'uppercase',
-                letterSpacing: '0.5px',
-              }}>
-                ✓ Authenticated
-              </div>
+            <div style={{
+              padding: '6px 12px',
+              backgroundColor: '#dcfce7',
+              borderRadius: 'var(--border-radius-md)',
+              fontSize: '11px',
+              fontWeight: '600',
+              color: '#15803d',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+            }}>
+              ✓ Authenticated
             </div>
           </header>
 

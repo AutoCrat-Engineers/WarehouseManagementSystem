@@ -76,7 +76,6 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
     const [deleteError, setDeleteError] = useState('');
     const [selectedUser, setSelectedUser] = useState<UserListItem | null>(null);
     const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
-    const [dropdownDirection, setDropdownDirection] = useState<'up' | 'down'>('down');
     const dropdownRef = useRef<HTMLDivElement | null>(null);
 
     // Create user form state
@@ -652,8 +651,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                 {loading ? (
                     <div style={{ padding: '80px', textAlign: 'center' }}>
                         <Loader2 size={36} style={{ animation: 'spin 1s linear infinite', color: '#3b82f6' }} />
-                        <p style={{ marginTop: '16px', color: '#1f2937', fontSize: '15px', fontWeight: 600 }}>Loading User Management…</p>
-                        <p style={{ marginTop: '4px', color: '#6b7280', fontSize: '13px' }}>Fetching latest data from the server</p>
+                        <p style={{ marginTop: '16px', color: '#64748b', fontSize: '14px' }}>Loading users...</p>
                     </div>
                 ) : filteredUsers.length === 0 ? (
                     <div style={{ padding: '80px', textAlign: 'center' }}>
@@ -732,17 +730,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                                                 {user.id !== currentUserId && (
                                                     <div ref={activeDropdown === user.id ? dropdownRef : null} style={{ position: 'relative', display: 'inline-block' }}>
                                                         <button
-                                                            onClick={(e) => {
-                                                                if (activeDropdown === user.id) {
-                                                                    setActiveDropdown(null);
-                                                                } else {
-                                                                    // Detect if we should open upward
-                                                                    const rect = e.currentTarget.getBoundingClientRect();
-                                                                    const spaceBelow = window.innerHeight - rect.bottom;
-                                                                    setDropdownDirection(spaceBelow < 220 ? 'up' : 'down');
-                                                                    setActiveDropdown(user.id);
-                                                                }
-                                                            }}
+                                                            onClick={() => setActiveDropdown(activeDropdown === user.id ? null : user.id)}
                                                             style={{ padding: '8px 12px', border: '1px solid #e5e7eb', borderRadius: '8px', backgroundColor: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', color: '#374151' }}
                                                         >
                                                             <Settings size={16} />
@@ -753,17 +741,14 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                                                             <div
                                                                 style={{
                                                                     position: 'absolute',
-                                                                    ...(dropdownDirection === 'up'
-                                                                        ? { bottom: '100%', marginBottom: '4px' }
-                                                                        : { top: '100%', marginTop: '4px' }),
+                                                                    top: '100%',
                                                                     right: '0',
+                                                                    marginTop: '4px',
                                                                     zIndex: 50,
                                                                     width: '180px',
                                                                     backgroundColor: 'white',
                                                                     borderRadius: '12px',
-                                                                    boxShadow: dropdownDirection === 'up'
-                                                                        ? '0 -10px 40px rgba(0,0,0,0.15)'
-                                                                        : '0 10px 40px rgba(0,0,0,0.15)',
+                                                                    boxShadow: '0 10px 40px rgba(0,0,0,0.15)',
                                                                     border: '1px solid #e5e7eb',
                                                                     overflow: 'hidden',
                                                                 }}
