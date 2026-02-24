@@ -11,6 +11,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
+import { Printer } from 'lucide-react';
 import type { StickerData } from '../../types/packing';
 
 interface StickerPrintProps {
@@ -207,7 +208,7 @@ export function StickerPrint({ sticker, onClose, onPrinted }: StickerPrintProps)
                     margin: '0 0 20px', fontSize: 16, fontWeight: 700, color: '#111',
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 }}>
-                    <span>📦 Sticker Preview</span>
+                    <span>Sticker Preview</span>
                     <span style={{
                         fontSize: 11, fontFamily: 'Courier New, monospace', color: '#000',
                         background: '#f5f5f5', padding: '4px 10px', borderRadius: 4,
@@ -344,7 +345,7 @@ export function StickerPrint({ sticker, onClose, onPrinted }: StickerPrintProps)
                         transition: 'all 0.15s',
                         boxShadow: '0 2px 4px rgba(30,58,138,0.3)',
                         opacity: qrDataUrl ? 1 : 0.5,
-                    }} disabled={!qrDataUrl}>🖨️ Print Sticker</button>
+                    }} disabled={!qrDataUrl}><Printer size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Print Sticker</button>
                 </div>
             </div>
         </div>

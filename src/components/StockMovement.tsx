@@ -32,6 +32,12 @@ import {
   Printer,
 } from 'lucide-react';
 import { Card, Button, Badge, Modal, LoadingSpinner, EmptyState, ModuleLoader } from './ui/EnterpriseUI';
+import {
+  SummaryCard, SummaryCardsGrid,
+  FilterBar, ActionBar,
+  SearchBox, StatusFilter, DateRangeFilter,
+  ExportCSVButton, ClearFiltersButton, AddButton,
+} from './ui/SharedComponents';
 import { getSupabaseClient } from '../utils/supabase/client';
 import { createPackingFromMovementApproval, createPackingFromMovementRejection } from './packing/packingService';
 import { notifyOnRequestCreated, notifyOnRequestDecision } from '../utils/notifications/notificationService';
@@ -126,7 +132,7 @@ interface WarehouseStock {
 // ============================================================================
 
 const LOCATIONS: Record<LocationCode, { name: string; icon: React.ElementType; color: string }> = {
-  PW: { name: 'Production Warehouse', icon: Warehouse, color: '#6366f1' },
+  PW: { name: 'FI Warehouse', icon: Warehouse, color: '#6366f1' },
   IT: { name: 'In-Transit', icon: Truck, color: '#f59e0b' },
   SV: { name: 'S&V Warehouse', icon: MapPin, color: '#10b981' },
   US: { name: 'US Warehouse', icon: MapPin, color: '#3b82f6' },
@@ -134,7 +140,7 @@ const LOCATIONS: Record<LocationCode, { name: string; icon: React.ElementType; c
 };
 
 const VALID_ROUTES: MovementRoute[] = [
-  { from: 'PRODUCTION', to: 'PW', movementType: 'PRODUCTION_RECEIPT', flow: 'FORWARD', label: 'Production → PW' },
+  { from: 'PRODUCTION', to: 'PW', movementType: 'PRODUCTION_RECEIPT', flow: 'FORWARD', label: 'Production → FI Warehouse' },
   { from: 'PW', to: 'IT', movementType: 'DISPATCH_TO_TRANSIT', flow: 'FORWARD', label: 'PW → In-Transit' },
   { from: 'IT', to: 'SV', movementType: 'TRANSFER_TO_WAREHOUSE', flow: 'FORWARD', label: 'In-Transit → S&V' },
   { from: 'IT', to: 'US', movementType: 'TRANSFER_TO_WAREHOUSE', flow: 'FORWARD', label: 'In-Transit → US' },
@@ -178,7 +184,7 @@ const DB_CODE_MAP: Record<string, LocationCode> = {
 const REFERENCE_TYPES = [
   { value: 'DELIVERY_NOTE', label: 'Delivery Note' },
   { value: 'RETURN_NOTE', label: 'Return Note' },
-  { value: 'PRODUCTION_ORDER', label: 'Production Order' },
+  { value: 'WORK_ORDER', label: 'Work Order' },
   { value: 'TRANSFER_ORDER', label: 'Transfer Order' },
   { value: 'ADJUSTMENT_MEMO', label: 'Adjustment Memo' },
 ];
@@ -247,46 +253,6 @@ const tdStyle: React.CSSProperties = {
 };
 
 // ============================================================================
-// SUMMARY CARD (same pattern as ItemMaster)
-// ============================================================================
-
-interface SummaryCardProps {
-  label: string;
-  value: number;
-  icon: React.ReactNode;
-  color: string;
-  bgColor: string;
-  isActive?: boolean;
-  onClick?: () => void;
-}
-
-function SummaryCard({ label, value, icon, color, bgColor, isActive = false, onClick }: SummaryCardProps) {
-  return (
-    <div onClick={onClick} style={{ cursor: onClick ? 'pointer' : 'default', transition: 'all 0.2s ease' }}>
-      <Card style={{
-        border: isActive ? `2px solid ${color}` : '1px solid var(--enterprise-gray-200)',
-        boxShadow: isActive ? `0 0 0 3px ${bgColor}` : 'var(--shadow-sm)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div>
-            <p style={{ fontSize: '12px', color: 'var(--enterprise-gray-600)', fontWeight: 500, marginBottom: '6px' }}>
-              {label}
-            </p>
-            <p style={{ fontSize: '1.75rem', fontWeight: 700, color }}>{value}</p>
-          </div>
-          <div style={{
-            width: '44px', height: '44px', borderRadius: '8px', backgroundColor: bgColor,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            {icon}
-          </div>
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-// ============================================================================
 // MAIN COMPONENT
 // ============================================================================
 
@@ -322,6 +288,12 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   const [quantity, setQuantity] = useState<number>(0);
   const [note, setNote] = useState('');
   const [notePrefix, setNotePrefix] = useState('');  // Non-removable auto-message prefix
+
+  // Production Receipt box-based entry
+  const [boxCount, setBoxCount] = useState<number>(0);
+  const [innerBoxQty, setInnerBoxQty] = useState<number>(0);
+  const [loadingPackingSpec, setLoadingPackingSpec] = useState(false);
+  const [packingSpecError, setPackingSpecError] = useState<string | null>(null);
   const noteRef = useRef<HTMLTextAreaElement>(null);
   const [submitting, setSubmitting] = useState(false);
   const [formMessage, setFormMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -583,6 +555,47 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
     finally { setLoadingStocks(false); }
   }, [supabase]);
 
+  // Fetch packing spec for an item (inner_box_quantity)
+  const fetchPackingSpec = useCallback(async (itemCode: string) => {
+    setLoadingPackingSpec(true);
+    setPackingSpecError(null);
+    setInnerBoxQty(0);
+    try {
+      const { data, error } = await supabase
+        .from('packing_specifications')
+        .select('inner_box_quantity')
+        .eq('item_code', itemCode)
+        .eq('is_active', true)
+        .single();
+      if (error || !data) {
+        setPackingSpecError('No packing specification found for this item. Please add one in Packing Details first.');
+        setInnerBoxQty(0);
+      } else {
+        setInnerBoxQty(data.inner_box_quantity || 0);
+        if (data.inner_box_quantity <= 0) {
+          setPackingSpecError('Inner box quantity is 0. Please update the packing specification.');
+        }
+      }
+    } catch {
+      setPackingSpecError('Failed to fetch packing specification.');
+      setInnerBoxQty(0);
+    } finally {
+      setLoadingPackingSpec(false);
+    }
+  }, [supabase]);
+
+  // Auto-fetch packing spec when route is PRODUCTION_RECEIPT and item is selected
+  useEffect(() => {
+    if (selectedRoute?.movementType === 'PRODUCTION_RECEIPT' && selectedItem) {
+      fetchPackingSpec(selectedItem.item_code);
+    } else {
+      // Reset box-based fields when switching away from production receipt
+      setBoxCount(0);
+      setInnerBoxQty(0);
+      setPackingSpecError(null);
+    }
+  }, [selectedRoute, selectedItem, fetchPackingSpec]);
+
   const handleSelectItem = (item: ItemResult) => {
     setSelectedItem(item);
     setSearchQuery(item.part_number || item.item_code);
@@ -591,6 +604,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
     setSelectedWarehouse(''); setStockType(''); setSelectedRoute(null);
     setQuantity(0); setNote(''); setFormMessage(null);
     setSelectedCategory(''); setReferenceType(''); setReferenceId('');
+    setBoxCount(0); setInnerBoxQty(0); setPackingSpecError(null);
   };
 
   const getStockForLocation = (locCode: LocationCode): number => {
@@ -622,6 +636,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
     setSelectedRoute(null); setAvailableRoutes([]); setQuantity(0);
     setNote(''); setNotePrefix(''); setFormMessage(null);
     setSelectedCategory(''); setReferenceType(''); setReferenceId('');
+    setBoxCount(0); setInnerBoxQty(0); setPackingSpecError(null);
   };
 
   const openModal = () => { resetForm(); setShowModal(true); };
@@ -632,9 +647,13 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   // ============================================================================
 
   const handleSubmitRequest = async () => {
-    if (!selectedItem || !stockType || !selectedWarehouse || !selectedRoute || quantity <= 0) {
-      setFormMessage({ type: 'error', text: 'Please fill all required fields.' });
-      showToast('error', 'Validation Error', 'Please fill all required fields.'); return;
+    // For PRODUCTION_RECEIPT, calculate quantity from boxes × inner qty
+    const isProductionReceipt = selectedRoute?.movementType === 'PRODUCTION_RECEIPT';
+    const finalQty = isProductionReceipt ? (boxCount * innerBoxQty) : quantity;
+
+    if (!selectedItem || !stockType || !selectedWarehouse || !selectedRoute || finalQty <= 0) {
+      setFormMessage({ type: 'error', text: isProductionReceipt ? 'Please fill all required fields. Ensure box count and inner qty are valid.' : 'Please fill all required fields.' });
+      showToast('error', 'Validation Error', isProductionReceipt ? 'Ensure box count and packing spec are valid.' : 'Please fill all required fields.'); return;
     }
     if (!selectedCategory) {
       setFormMessage({ type: 'error', text: 'Please select a reason category.' });
@@ -643,6 +662,15 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
     if (!note.trim()) {
       setFormMessage({ type: 'error', text: 'Note is required.' });
       showToast('error', 'Validation Error', 'Note is required.'); return;
+    }
+    if (!referenceType) {
+      setFormMessage({ type: 'error', text: 'Reference Type is required.' });
+      showToast('error', 'Validation Error', 'Please select a Reference Type.'); return;
+    }
+    const effectiveRefId = referenceType === 'WORK_ORDER' ? referenceId.replace(/^AE\/WO\/D\//, '').trim() : referenceId.trim();
+    if (!effectiveRefId) {
+      setFormMessage({ type: 'error', text: 'Reference ID is required.' });
+      showToast('error', 'Validation Error', 'Please enter a Reference ID.'); return;
     }
 
     // STOCK VALIDATION at request time — block if source warehouse has no/insufficient stock
@@ -657,9 +685,9 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
           showToast('error', 'Insufficient Stock', `Source warehouse "${LOCATIONS[selectedRoute.from as LocationCode]?.name}" has 0 stock for this item.`);
           return;
         }
-        if (quantity > availableStock) {
-          setFormMessage({ type: 'error', text: `Requested quantity (${quantity}) exceeds available stock (${availableStock}) in "${LOCATIONS[selectedRoute.from as LocationCode]?.name}".` });
-          showToast('warning', 'Stock Warning', `Requested quantity (${quantity}) exceeds available stock (${availableStock}) in "${LOCATIONS[selectedRoute.from as LocationCode]?.name}".`);
+        if (finalQty > availableStock) {
+          setFormMessage({ type: 'error', text: `Requested quantity (${finalQty}) exceeds available stock (${availableStock}) in "${LOCATIONS[selectedRoute.from as LocationCode]?.name}".` });
+          showToast('warning', 'Stock Warning', `Requested quantity (${finalQty}) exceeds available stock (${availableStock}) in "${LOCATIONS[selectedRoute.from as LocationCode]?.name}".`);
           return;
         }
       }
@@ -699,7 +727,9 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
         reason_description: note,
         reference_document_type: referenceType || null,
         reference_document_number: referenceId || null,
-        notes: `${selectedRoute.label} | Requested Qty: ${quantity} | Stock Type: ${stockType}`,
+        notes: isProductionReceipt
+          ? `${selectedRoute.label} | Boxes: ${boxCount} × ${innerBoxQty} PCS/box = ${finalQty} PCS | Stock Type: ${stockType}`
+          : `${selectedRoute.label} | Requested Qty: ${finalQty} | Stock Type: ${stockType}`,
         requested_by: userId,
         created_by: userId,
       }).select().single();
@@ -708,7 +738,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
       // Create movement line
       await supabase.from('inv_movement_lines').insert({
         header_id: header.id, line_number: 1, item_code: selectedItem.item_code,
-        requested_quantity: quantity, line_status: 'PENDING_APPROVAL', created_by: userId,
+        requested_quantity: finalQty, line_status: 'PENDING_APPROVAL', created_by: userId,
       });
 
       setFormMessage({ type: 'success', text: `Request ${movNum} submitted for approval.` });
@@ -719,7 +749,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
       notifyOnRequestCreated(
         movNum,
         selectedItem.item_name || selectedItem.item_code,
-        quantity,
+        finalQty,
         userId || '',
         header.id,
       ).catch(err => console.error('Notification send failed (non-blocking):', err));
@@ -889,7 +919,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
       // ==================================================================
       // PACKING REQUEST — auto-create for PRODUCTION_RECEIPT only
       // v5: Stock does NOT move on approval. Packing module handles
-      //     stock transfer from Production → Prod WHSE when operator
+      //     stock transfer from Production → FI Warehouse when operator
       //     explicitly packs boxes and triggers the transfer.
       // ==================================================================
       if (reviewMovement.movement_type === 'PRODUCTION_RECEIPT') {
@@ -928,7 +958,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
         showToast('info', 'Partially Approved', `Movement ${movNum} partially approved — ${approvedQty} units approved, ${(reviewMovement.requested_quantity ?? 0) - approvedQty} units rejected.${pMsg}`);
       } else {
         const extra = reviewMovement.movement_type === 'PRODUCTION_RECEIPT'
-          ? ' Packing request created. Stock will transfer to Prod WHSE via packing.'
+          ? ' Packing request created. Stock will transfer to FI Warehouse via packing.'
           : '';
         const stockMsg = reviewMovement.movement_type === 'PRODUCTION_RECEIPT'
           ? `${reviewMovement.requested_quantity ?? 0} units approved`
@@ -1508,7 +1538,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   return (
     <div>
       {/* ─── SUMMARY CARDS ─── */}
-      <div className="summary-cards-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '20px' }}>
+      <SummaryCardsGrid columns={4}>
         <SummaryCard
           label="Total Movements" value={totalMovements}
           icon={<ArrowRightLeft size={22} style={{ color: '#1e3a8a' }} />}
@@ -1533,149 +1563,57 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
           color="#dc2626" bgColor="rgba(220,38,38,0.1)"
           isActive={filterStatus === 'REJECTED'} onClick={() => setFilterStatus('REJECTED')}
         />
-      </div>
+      </SummaryCardsGrid>
 
       {/* ─── FILTER BAR ─── */}
-      <div className="filter-bar" style={{
-        display: 'flex', alignItems: 'center', marginBottom: '16px', gap: '12px', flexWrap: 'wrap',
-        background: 'white', padding: '10px 16px', borderRadius: '8px', border: '1px solid var(--enterprise-gray-200)',
-      }}>
-        {/* Search */}
-        <div style={{
-          display: 'flex', alignItems: 'center', background: 'var(--enterprise-gray-50)',
-          border: '1px solid var(--enterprise-gray-300)', borderRadius: '6px', padding: '8px 12px', flex: 1, minWidth: '260px',
-        }}>
-          <Search size={18} style={{ color: 'var(--enterprise-gray-400)', marginRight: '10px', flexShrink: 0 }} />
-          <input
-            type="text" placeholder="Search by movement #, part number, MSN, warehouse..."
-            value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
-            style={{ border: 'none', outline: 'none', flex: 1, fontSize: '13px', color: 'var(--enterprise-gray-800)', background: 'transparent', minWidth: '180px' }}
-          />
-          {searchTerm && (
-            <button onClick={() => setSearchTerm('')} style={{ background: 'var(--enterprise-gray-200)', border: 'none', cursor: 'pointer', padding: '4px', display: 'flex', alignItems: 'center', borderRadius: '4px', marginLeft: '8px' }}>
-              <X size={14} style={{ color: 'var(--enterprise-gray-600)' }} />
-            </button>
-          )}
-        </div>
+      <FilterBar>
+        <SearchBox
+          value={searchTerm}
+          onChange={setSearchTerm}
+          placeholder="Search by movement #, part number, MSN, warehouse..."
+        />
 
         {/* Status Filter */}
-        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{
-          padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--enterprise-gray-300)',
-          fontSize: '13px', fontWeight: 500, cursor: 'pointer', background: 'white',
-        }}>
-          <option value="ALL">All Status</option>
-          <option value="PENDING_APPROVAL">Pending</option>
-          <option value="PARTIALLY_APPROVED">Partial</option>
-          <option value="COMPLETED">Completed</option>
-          <option value="REJECTED">Rejected</option>
-        </select>
+        <StatusFilter
+          value={filterStatus}
+          onChange={setFilterStatus}
+          options={[
+            { value: 'ALL', label: 'All Status' },
+            { value: 'PENDING_APPROVAL', label: 'Pending' },
+            { value: 'PARTIALLY_APPROVED', label: 'Partial' },
+            { value: 'COMPLETED', label: 'Completed' },
+            { value: 'REJECTED', label: 'Rejected' },
+          ]}
+        />
 
         {/* Stock Type Filter */}
-        <select value={filterStockType} onChange={e => setFilterStockType(e.target.value)} style={{
-          padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--enterprise-gray-300)',
-          fontSize: '13px', fontWeight: 500, cursor: 'pointer', background: 'white',
-        }}>
-          <option value="ALL">All Stock Type</option>
-          <option value="STOCK_IN">Stock In</option>
-          <option value="REJECTION">Rejection</option>
-        </select>
+        <StatusFilter
+          value={filterStockType}
+          onChange={setFilterStockType}
+          options={[
+            { value: 'ALL', label: 'All Stock Type' },
+            { value: 'STOCK_IN', label: 'Stock In' },
+            { value: 'REJECTION', label: 'Rejection' },
+          ]}
+        />
 
         {/* Date Range Filter */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: '0px',
-          height: '36px', borderRadius: '6px',
-          border: `1px solid ${(filterDateFrom || filterDateTo) ? '#93c5fd' : 'var(--enterprise-gray-300)'}`,
-          background: (filterDateFrom || filterDateTo) ? '#eff6ff' : 'white',
-          transition: 'background 0.2s, border-color 0.2s',
-          flexShrink: 0, overflow: 'hidden',
-        }}>
-          {/* From date */}
-          <div
-            style={{
-              position: 'relative', display: 'inline-flex', alignItems: 'center', gap: '5px',
-              padding: '0 12px', height: '100%', cursor: 'pointer',
-              transition: 'background 0.15s ease',
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = filterDateFrom ? '#dbeafe' : '#f3f4f6'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-          >
-            <CalendarDays size={14} style={{ color: filterDateFrom ? '#2563eb' : '#9ca3af', flexShrink: 0, pointerEvents: 'none' }} />
-            <span style={{ fontSize: '13px', fontWeight: 500, color: filterDateFrom ? 'var(--enterprise-gray-700)' : 'var(--enterprise-gray-500)', pointerEvents: 'none', whiteSpace: 'nowrap' }}>
-              {filterDateFrom ? filterDateFrom.split('-').reverse().join('-') : 'From'}
-            </span>
-            <input
-              type="date" value={filterDateFrom}
-              onChange={e => setFilterDateFrom(e.target.value)}
-              title="From date"
-              style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }}
-            />
-          </div>
-          <div style={{ width: '1px', height: '18px', background: '#d1d5db', flexShrink: 0 }} />
-          {/* To date */}
-          <div
-            style={{
-              position: 'relative', display: 'inline-flex', alignItems: 'center', gap: '5px',
-              padding: '0 12px', height: '100%', cursor: 'pointer',
-              transition: 'background 0.15s ease',
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = filterDateTo ? '#dbeafe' : '#f3f4f6'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-          >
-            <CalendarDays size={14} style={{ color: filterDateTo ? '#2563eb' : '#9ca3af', flexShrink: 0, pointerEvents: 'none' }} />
-            <span style={{ fontSize: '13px', fontWeight: 500, color: filterDateTo ? 'var(--enterprise-gray-700)' : 'var(--enterprise-gray-500)', pointerEvents: 'none', whiteSpace: 'nowrap' }}>
-              {filterDateTo ? filterDateTo.split('-').reverse().join('-') : 'To'}
-            </span>
-            <input
-              type="date" value={filterDateTo}
-              onChange={e => setFilterDateTo(e.target.value)}
-              title="To date"
-              style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }}
-            />
-          </div>
-          {(filterDateFrom || filterDateTo) && (
-            <button
-              onClick={() => { setFilterDateFrom(''); setFilterDateTo(''); }}
-              style={{
-                background: 'none', border: 'none', cursor: 'pointer', padding: '6px 10px',
-                display: 'flex', alignItems: 'center', borderRadius: '0', flexShrink: 0,
-                height: '100%', transition: 'background 0.15s ease',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.background = '#fee2e2'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-              title="Clear date filter"
-            >
-              <X size={14} style={{ color: '#dc2626' }} />
-            </button>
-          )}
-        </div>
+        <DateRangeFilter
+          dateFrom={filterDateFrom}
+          dateTo={filterDateTo}
+          onDateFromChange={setFilterDateFrom}
+          onDateToChange={setFilterDateTo}
+        />
 
         {/* Right actions */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+        <ActionBar>
           {(searchTerm || filterType !== 'ALL' || filterStatus !== 'ALL' || filterStockType !== 'ALL' || filterDateFrom || filterDateTo) && (
-            <button onClick={() => { setSearchTerm(''); setFilterType('ALL'); setFilterStatus('ALL'); setFilterStockType('ALL'); setFilterDateFrom(''); setFilterDateTo(''); }} style={{
-              padding: '0 12px', height: '36px', borderRadius: '6px', border: '1px solid #dc2626',
-              background: 'white', color: '#dc2626', fontSize: '13px', fontWeight: 500, cursor: 'pointer',
-              display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap',
-            }}>
-              <XCircle size={16} /> Clear
-            </button>
+            <ClearFiltersButton onClick={() => { setSearchTerm(''); setFilterType('ALL'); setFilterStatus('ALL'); setFilterStockType('ALL'); setFilterDateFrom(''); setFilterDateTo(''); }} />
           )}
-          <button onClick={handleExport} style={{
-            padding: '0 14px', height: '36px', borderRadius: '6px', border: '1px solid var(--enterprise-gray-300)',
-            background: 'white', color: 'var(--enterprise-gray-700)', fontSize: '13px', fontWeight: 500, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap',
-          }}>
-            <Download size={14} /> Export CSV
-          </button>
-          <button onClick={openModal} style={{
-            padding: '0 14px', height: '36px', borderRadius: '6px', border: 'none', background: '#1e3a8a',
-            color: 'white', fontSize: '13px', fontWeight: 500, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap',
-          }}>
-            <Plus size={14} /> New Movement
-          </button>
-        </div>
-      </div>
+          <ExportCSVButton onClick={handleExport} />
+          <AddButton label="New Movement" onClick={openModal} />
+        </ActionBar>
+      </FilterBar>
 
       {/* ─── MOVEMENT RECORDS TABLE ─── */}
       {loading ? (
@@ -1753,14 +1691,14 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
                           )}
                         </td>
                         <td style={{ ...tdStyle, fontSize: '13px' }}>
-                          {m.movement_type === 'REJECTION_DISPOSAL' ? 'Production Warehouse'
+                          {m.movement_type === 'REJECTION_DISPOSAL' ? 'FI Warehouse'
                             : m.movement_type === 'PRODUCTION_RECEIPT' ? 'Production'
                               : m.movement_type === 'CUSTOMER_RETURN' ? 'Customer'
                                 : resolveWarehouseLabel(m.source_warehouse_id, m.source_warehouse)}
                         </td>
                         <td style={{ ...tdStyle, fontSize: '13px' }}>
                           {m.movement_type === 'REJECTION_DISPOSAL' ? 'Production Floor (Disposal)'
-                            : m.movement_type === 'PRODUCTION_RECEIPT' ? 'Production Warehouse'
+                            : m.movement_type === 'PRODUCTION_RECEIPT' ? 'FI Warehouse'
                               : m.movement_type === 'CUSTOMER_SALE' ? 'Customer'
                                 : resolveWarehouseLabel(m.destination_warehouse_id, m.destination_warehouse)}
                         </td>
@@ -1990,21 +1928,56 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
                 </div>
               )}
 
-              {/* Row 2: Reference Type + Reference ID */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <div>
-                  <label style={mLabelStyle}>Reference Type</label>
-                  <select value={referenceType} onChange={e => setReferenceType(e.target.value)} style={mSelectStyle}>
-                    <option value="">Select type...</option>
-                    {REFERENCE_TYPES.map(rt => <option key={rt.value} value={rt.value}>{rt.label}</option>)}
-                  </select>
+              {/* Packing Spec Warning (between Production Receipt badge and Reference Type) */}
+              {selectedRoute?.movementType === 'PRODUCTION_RECEIPT' && packingSpecError && !loadingPackingSpec && (
+                <div style={{
+                  padding: '10px 16px', borderRadius: '8px',
+                  background: '#fef2f2',
+                  border: '1px solid #fecaca',
+                  fontSize: 13, color: '#991b1b', display: 'flex', alignItems: 'center', gap: 8,
+                }}>
+                  <XCircle size={16} />
+                  {packingSpecError}
                 </div>
-                <div>
-                  <label style={mLabelStyle}>Reference ID</label>
-                  <input type="text" value={referenceId} onChange={e => setReferenceId(e.target.value)}
-                    placeholder="Enter reference ID..." style={mInputStyle} />
+              )}
+
+              {/* Production Receipt: Inner Qty + Total Qty calculation — placed between route badge and reference */}
+              {selectedRoute?.movementType === 'PRODUCTION_RECEIPT' && (
+                <div style={{
+                  padding: '12px 16px', borderRadius: '8px',
+                  background: 'linear-gradient(135deg, #eff6ff, #dbeafe)',
+                  border: '1px solid #bfdbfe',
+                }}>
+                  {loadingPackingSpec ? (
+                    <div style={{ fontSize: 13, color: '#6b7280', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid #93c5fd', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                      Loading packing specification...
+                    </div>
+                  ) : !packingSpecError ? (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+                      <div>
+                        <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 4 }}>Inner Box Qty</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: '#1e40af' }}>{innerBoxQty} <span style={{ fontSize: 12, fontWeight: 500, color: '#6b7280' }}>PCS/box</span></div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 4 }}>Boxes</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: '#374151' }}>{boxCount || 0}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 4 }}>Total Quantity</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: boxCount > 0 ? '#16a34a' : '#9ca3af' }}>
+                          {boxCount > 0 ? `${boxCount * innerBoxQty} PCS` : '—'}
+                        </div>
+                        {boxCount > 0 && (
+                          <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                            {boxCount} box(es) × {innerBoxQty} PCS = {boxCount * innerBoxQty} PCS
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
-              </div>
+              )}
 
               {/* Row 3: Reason Code + Quantity */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
@@ -2015,10 +1988,58 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
                     {filteredReasonCodes.map(rc => <option key={rc.id} value={rc.reason_code}>{rc.reason_code.replace(/_/g, ' ')}</option>)}
                   </select>
                 </div>
+                {selectedRoute?.movementType === 'PRODUCTION_RECEIPT' ? (
+                  /* BOX-BASED ENTRY FOR PRODUCTION RECEIPT */
+                  <div>
+                    <label style={mLabelStyle}>Number of Boxes *</label>
+                    <input type="number" min={1} value={boxCount || ''}
+                      onChange={e => {
+                        const val = parseInt(e.target.value) || 0;
+                        setBoxCount(val);
+                        setQuantity(val * innerBoxQty);
+                      }}
+                      placeholder="Enter number of boxes"
+                      style={mInputStyle}
+                      disabled={loadingPackingSpec || innerBoxQty <= 0}
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label style={mLabelStyle}>Quantity ({selectedItem.uom}) *</label>
+                    <input type="number" min={1} value={quantity || ''} onChange={e => setQuantity(parseInt(e.target.value) || 0)}
+                      placeholder="Enter quantity" style={mInputStyle} />
+                  </div>
+                )}
+              </div>
+
+              {/* Row 2: Reference Type + Reference ID (mandatory) */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div>
-                  <label style={mLabelStyle}>Quantity ({selectedItem.uom}) *</label>
-                  <input type="number" min={1} value={quantity || ''} onChange={e => setQuantity(parseInt(e.target.value) || 0)}
-                    placeholder="Enter quantity" style={mInputStyle} />
+                  <label style={mLabelStyle}>Reference Type *</label>
+                  <select value={referenceType} onChange={e => { setReferenceType(e.target.value); if (e.target.value === 'WORK_ORDER') { setReferenceId('AE/WO/D/'); } else { setReferenceId(''); } }} style={mSelectStyle}>
+                    <option value="">Select type...</option>
+                    {REFERENCE_TYPES.map(rt => <option key={rt.value} value={rt.value}>{rt.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={mLabelStyle}>Reference ID *</label>
+                  {referenceType === 'WORK_ORDER' ? (
+                    <div style={{ position: 'relative' }}>
+                      <span style={{
+                        position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)',
+                        fontSize: '13px', fontWeight: 600, color: '#1e40af', pointerEvents: 'none', userSelect: 'none',
+                      }}>AE/WO/D/</span>
+                      <input type="text"
+                        value={referenceId.startsWith('AE/WO/D/') ? referenceId.slice(8) : referenceId}
+                        onChange={e => setReferenceId('AE/WO/D/' + e.target.value)}
+                        placeholder="Enter ID..."
+                        style={{ ...mInputStyle, paddingLeft: '88px' }}
+                      />
+                    </div>
+                  ) : (
+                    <input type="text" value={referenceId} onChange={e => setReferenceId(e.target.value)}
+                      placeholder="Enter reference ID..." style={mInputStyle} />
+                  )}
                 </div>
               </div>
 
@@ -2117,7 +2138,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
             <Button
               variant="primary"
               onClick={handleSubmitRequest}
-              disabled={submitting || !selectedRoute || quantity <= 0 || !selectedCategory || !note.trim()}
+              disabled={submitting || !selectedRoute || (selectedRoute?.movementType === 'PRODUCTION_RECEIPT' ? (boxCount <= 0 || innerBoxQty <= 0) : quantity <= 0) || !selectedCategory || !note.trim() || !referenceType || !(referenceType === 'WORK_ORDER' ? referenceId.replace(/^AE\/WO\/D\//, '').trim() : referenceId.trim())}
               icon={submitting ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <Shield size={16} />}
             >
               {submitting ? 'Submitting...' : 'Submit Request'}
@@ -2133,13 +2154,13 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
           const isPending = reviewMovement.status === 'PENDING_APPROVAL';
           const stockType = getStockType(reviewMovement.movement_type);
           const fromLabel =
-            reviewMovement.movement_type === 'REJECTION_DISPOSAL' ? 'Production Warehouse'
+            reviewMovement.movement_type === 'REJECTION_DISPOSAL' ? 'FI Warehouse'
               : reviewMovement.movement_type === 'PRODUCTION_RECEIPT' ? 'Production'
                 : reviewMovement.movement_type === 'CUSTOMER_RETURN' ? 'Customer'
                   : resolveWarehouseLabel(reviewMovement.source_warehouse_id, reviewMovement.source_warehouse, 'External');
           const toLabel =
             reviewMovement.movement_type === 'REJECTION_DISPOSAL' ? 'Production Floor (Disposal)'
-              : reviewMovement.movement_type === 'PRODUCTION_RECEIPT' ? 'Production Warehouse'
+              : reviewMovement.movement_type === 'PRODUCTION_RECEIPT' ? 'FI Warehouse'
                 : reviewMovement.movement_type === 'CUSTOMER_SALE' ? 'Customer'
                   : resolveWarehouseLabel(reviewMovement.destination_warehouse_id, reviewMovement.destination_warehouse, 'External');
           const requestedQty = reviewMovement.requested_quantity ?? reviewMovement.quantity ?? 0;

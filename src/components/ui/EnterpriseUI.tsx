@@ -181,6 +181,8 @@ interface InputProps {
   type?: string;
   value: string | number;
   onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onBlur?: (e: React.FocusEvent<HTMLInputElement>) => void;
+  onFocus?: (e: React.FocusEvent<HTMLInputElement>) => void;
   placeholder?: string;
   required?: boolean;
   disabled?: boolean;
@@ -194,6 +196,8 @@ export function Input({
   type = 'text',
   value,
   onChange,
+  onBlur: onBlurProp,
+  onFocus: onFocusProp,
   placeholder,
   required = false,
   disabled = false,
@@ -215,8 +219,8 @@ export function Input({
       min={min}
       max={max}
       step={step}
-      onFocus={() => setIsFocused(true)}
-      onBlur={() => setIsFocused(false)}
+      onFocus={(e) => { setIsFocused(true); onFocusProp?.(e); }}
+      onBlur={(e) => { setIsFocused(false); onBlurProp?.(e); }}
       style={{
         width: '100%',
         padding: '8px 12px',
@@ -365,7 +369,7 @@ export function Label({ children, required = false, style = {} }: LabelProps) {
 interface ModalProps {
   isOpen: boolean;
   onClose: () => void;
-  title: string;
+  title: React.ReactNode;
   children: React.ReactNode;
   maxWidth?: string;
 }

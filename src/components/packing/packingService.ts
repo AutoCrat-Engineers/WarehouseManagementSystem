@@ -5,7 +5,7 @@
  *   - Movement ID = primary reference for packing request
  *   - On supervisor approval: packing request created, NO stock movement
  *   - Each BOX gets its own unique Packing ID (PKG-XXXXXXXX)
- *   - Stock moves PRODUCTION → PROD WHSE only when operator explicitly triggers:
+ *   - Stock moves PRODUCTION → FI Warehouse only when operator explicitly triggers:
  *       a) "Move Packed Stock" — partial transfer of completed boxes
  *       b) "Complete Packing" → confirms final stock transfer
  *   - Supports partial packing + partial stock transfer (like SAP MIGO partial GR)
@@ -308,7 +308,7 @@ export async function deleteBox(requestId: string, boxId: string) {
         .select('*').eq('id', boxId).eq('packing_request_id', requestId).single();
     if (!box) throw new Error('Box not found');
     if (box.sticker_printed) throw new Error('Cannot delete a box after its sticker has been printed');
-    if (box.is_transferred) throw new Error('Cannot delete a box that has already been transferred to Prod WHSE');
+    if (box.is_transferred) throw new Error('Cannot delete a box that has already been transferred to FI Warehouse');
 
     const packingId = box.packing_id || generatePackingId(box.id);
 
@@ -319,6 +319,139 @@ export async function deleteBox(requestId: string, boxId: string) {
     await logAudit(requestId, 'BOX_DELETED', userId, role, {
         box_number: box.box_number, box_qty: box.box_qty, packing_id: packingId,
     });
+}
+
+// ============================================================================
+// AUTO-GENERATE BOXES — Creates all boxes automatically from packing spec
+// Called when opening a sticker generation detail view.
+// If boxes already exist, returns them without re-creating.
+// ============================================================================
+
+export async function autoGenerateBoxes(requestId: string): Promise<PackingBox[]> {
+    const userId = await getCurrentUserId();
+    const role = await getUserRole(userId);
+
+    // Fetch request
+    const { data: req } = await supabase.from('packing_requests')
+        .select('status, total_packed_qty, item_code, movement_number')
+        .eq('id', requestId).single();
+    if (!req) throw new Error('Packing request not found');
+
+    // Check if boxes already exist — if so, return them
+    const existingBoxes = await fetchBoxesForRequest(requestId);
+    if (existingBoxes.length > 0) return existingBoxes;
+
+    // Only auto-generate for APPROVED status
+    if (req.status !== 'APPROVED') {
+        throw new Error('Can only auto-generate boxes for APPROVED requests');
+    }
+
+    // Fetch packing specification for the item
+    const { data: packingSpec } = await supabase.from('packing_specifications')
+        .select('inner_box_quantity')
+        .eq('item_code', req.item_code)
+        .eq('is_active', true)
+        .single();
+
+    if (!packingSpec || !packingSpec.inner_box_quantity || packingSpec.inner_box_quantity <= 0) {
+        throw new Error('No valid packing specification found for this item. Please add one in Packing Details first.');
+    }
+
+    const innerBoxQty = packingSpec.inner_box_quantity;
+    const totalQty = Number(req.total_packed_qty);
+    const fullBoxes = Math.floor(totalQty / innerBoxQty);
+    const remainder = totalQty % innerBoxQty;
+    const totalBoxes = fullBoxes + (remainder > 0 ? 1 : 0);
+
+    if (totalBoxes <= 0) throw new Error('Cannot generate boxes — total quantity is 0');
+
+    // Transition to PACKING_IN_PROGRESS
+    await supabase.from('packing_requests').update({
+        status: 'PACKING_IN_PROGRESS',
+        started_at: new Date().toISOString(),
+    }).eq('id', requestId);
+
+    await logAudit(requestId, 'PACKING_STARTED', userId, role, {
+        movement_number: req.movement_number,
+        auto_generated: true,
+        total_boxes: totalBoxes,
+        inner_box_qty: innerBoxQty,
+    });
+
+    // Create all boxes
+    const boxInserts = [];
+    for (let i = 0; i < totalBoxes; i++) {
+        const isLastPartialBox = (i === totalBoxes - 1 && remainder > 0);
+        boxInserts.push({
+            packing_request_id: requestId,
+            box_number: i + 1,
+            box_qty: isLastPartialBox ? remainder : innerBoxQty,
+            created_by: userId,
+            is_transferred: false,
+            sticker_printed: false,
+        });
+    }
+
+    const { data: insertedBoxes, error: insertError } = await supabase
+        .from('packing_boxes')
+        .insert(boxInserts)
+        .select();
+    if (insertError) throw insertError;
+
+    // Generate packing IDs for all boxes
+    const createdBoxes: PackingBox[] = [];
+    for (const box of (insertedBoxes || [])) {
+        const packingId = generatePackingId(box.id);
+        await supabase.from('packing_boxes').update({ packing_id: packingId }).eq('id', box.id);
+        createdBoxes.push({ ...box, packing_id: packingId });
+    }
+
+    // Audit — log auto-generation
+    await logAudit(requestId, 'BOX_CREATED', userId, role, {
+        auto_generated: true,
+        total_boxes: totalBoxes,
+        inner_box_qty: innerBoxQty,
+        total_qty: totalQty,
+        movement_number: req.movement_number,
+    });
+
+    return createdBoxes;
+}
+
+// ============================================================================
+// BATCH STICKER PRINT — Mark all unprinted stickers as printed
+// ============================================================================
+
+export async function markAllStickersPrinted(requestId: string): Promise<number> {
+    const userId = await getCurrentUserId();
+    const role = await getUserRole(userId);
+
+    // Get all unprinted boxes
+    const { data: unprintedBoxes } = await supabase.from('packing_boxes')
+        .select('id, box_number, box_qty, packing_id')
+        .eq('packing_request_id', requestId)
+        .eq('sticker_printed', false);
+
+    if (!unprintedBoxes || unprintedBoxes.length === 0) {
+        return 0;
+    }
+
+    const now = new Date().toISOString();
+    // Mark all as printed
+    const boxIds = unprintedBoxes.map(b => b.id);
+    const { error } = await supabase.from('packing_boxes')
+        .update({ sticker_printed: true, sticker_printed_at: now })
+        .in('id', boxIds);
+    if (error) throw error;
+
+    // Audit
+    await logAudit(requestId, 'STICKER_PRINTED', userId, role, {
+        batch_print: true,
+        boxes_printed: unprintedBoxes.length,
+        packing_ids: unprintedBoxes.map(b => b.packing_id || generatePackingId(b.id)).join(', '),
+    });
+
+    return unprintedBoxes.length;
 }
 
 // ============================================================================
@@ -349,12 +482,12 @@ export async function markStickerPrinted(requestId: string, boxId: string) {
 }
 
 // ============================================================================
-// STOCK TRANSFER — Move packed stock from PRODUCTION → PROD WHSE
+// STOCK TRANSFER — Move packed stock from PRODUCTION → FI Warehouse
 // This is the core of v5: stock moves based on packing, not on approval.
 // ============================================================================
 
 /**
- * Transfer packed (and printed) boxes' stock from Production to Prod WHSE.
+ * Transfer packed (and printed) boxes' stock from Production to FI Warehouse.
  * Can be called for partial transfers (some boxes) or full transfer (all boxes).
  * @param requestId - Packing request ID
  * @param boxIds - Optional array of specific box IDs to transfer. If empty, transfers ALL untransferred printed boxes.
@@ -393,18 +526,18 @@ export async function transferPackedStock(
     // Calculate transfer quantity
     const transferQty = eligibleBoxes.reduce((sum: number, b: any) => sum + Number(b.box_qty), 0);
 
-    // Perform stock movement: PRODUCTION → PROD WHSE
+    // Perform stock movement: PRODUCTION → FI Warehouse
     // Get warehouse IDs from the movement header
     const { data: movementHeader } = await supabase.from('inv_movement_headers')
         .select('source_warehouse_id, destination_warehouse_id')
         .eq('id', req.movement_header_id).single();
     if (!movementHeader) throw new Error('Movement header not found');
 
-    const dstId = movementHeader.destination_warehouse_id; // Prod WHSE
+    const dstId = movementHeader.destination_warehouse_id; // FI Warehouse
     const itemCode = req.item_code;
 
     if (dstId && itemCode) {
-        // Increment destination (PROD WHSE) stock
+        // Increment destination (FI Warehouse) stock
         const { data: ds } = await supabase.from('inv_warehouse_stock')
             .select('id, quantity_on_hand').eq('warehouse_id', dstId)
             .eq('item_code', itemCode).eq('is_active', true).single();
