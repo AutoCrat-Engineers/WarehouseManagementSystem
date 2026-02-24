@@ -11,11 +11,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Plus, Edit2, Trash2, Search, Package, Eye, ChevronDown, ChevronRight, AlertTriangle, Clock, Calendar, Download, X, XCircle, CheckCircle, Settings, CheckCircle2, Info } from 'lucide-react';
 import { Card, Button, Badge, Input, Select, Label, Modal, LoadingSpinner, EmptyState, Textarea, ModuleLoader } from './ui/EnterpriseUI';
-import {
-  SummaryCard, SummaryCardsGrid,
-  FilterBar as SharedFilterBar, ActionBar,
-  SearchBox, ExportCSVButton, ClearFiltersButton, AddButton,
-} from './ui/SharedComponents';
 import * as itemsApi from '../utils/api/itemsSupabase';
 import { getSupabaseClient } from '../utils/supabase/client';
 
@@ -155,7 +150,229 @@ const sectionStyle: React.CSSProperties = {
 
 type CardFilter = 'ALL' | 'ACTIVE' | 'INACTIVE';
 
+// ============================================================================
+// SUMMARY CARD COMPONENT (Clickable - matches InventoryGrid)
+// ============================================================================
 
+interface SummaryCardProps {
+  label: string;
+  value: number;
+  icon: React.ReactNode;
+  color: string;
+  bgColor: string;
+  isActive?: boolean;
+  onClick?: () => void;
+}
+
+function SummaryCard({ label, value, icon, color, bgColor, isActive = false, onClick }: SummaryCardProps) {
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        cursor: onClick ? 'pointer' : 'default',
+        transition: 'all 0.2s ease',
+      }}
+    >
+      <Card
+        style={{
+          border: isActive ? `2px solid ${color}` : '1px solid var(--enterprise-gray-200)',
+          boxShadow: isActive ? `0 0 0 3px ${bgColor}` : 'var(--shadow-sm)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <p style={{
+              fontSize: '12px',
+              color: 'var(--enterprise-gray-600)',
+              fontWeight: 500,
+              marginBottom: '6px',
+            }}>
+              {label}
+            </p>
+            <p style={{
+              fontSize: '1.75rem',
+              fontWeight: 700,
+              color,
+            }}>
+              {value}
+            </p>
+          </div>
+          <div style={{
+            width: '44px',
+            height: '44px',
+            borderRadius: '8px',
+            backgroundColor: bgColor,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}>
+            {icon}
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================================
+// FILTER BAR COMPONENT (matches InventoryGrid)
+// ============================================================================
+
+interface FilterBarProps {
+  searchTerm: string;
+  onSearchChange: (value: string) => void;
+  onExport: () => void;
+  onAddItem: () => void;
+  onClearFilters: () => void;
+  hasActiveFilters: boolean;
+  showAddItem?: boolean;
+}
+
+function FilterBar({
+  searchTerm,
+  onSearchChange,
+  onExport,
+  onAddItem,
+  onClearFilters,
+  hasActiveFilters,
+  showAddItem = true,
+}: FilterBarProps) {
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      marginBottom: '16px',
+      gap: '12px',
+      flexWrap: 'wrap',
+      background: 'white',
+      padding: '10px 16px',
+      borderRadius: '8px',
+      border: '1px solid var(--enterprise-gray-200)',
+    }}>
+      {/* Search - Elongated */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        background: 'var(--enterprise-gray-50)',
+        border: '1px solid var(--enterprise-gray-300)',
+        borderRadius: '6px',
+        padding: '8px 12px',
+        flex: 1,
+        minWidth: '280px',
+      }}>
+        <Search size={18} style={{ color: 'var(--enterprise-gray-400)', marginRight: '10px', flexShrink: 0 }} />
+        <input
+          type="text"
+          placeholder="Search by item code, item name..."
+          value={searchTerm}
+          onChange={(e) => onSearchChange(e.target.value)}
+          style={{
+            border: 'none',
+            outline: 'none',
+            flex: 1,
+            fontSize: '13px',
+            color: 'var(--enterprise-gray-800)',
+            background: 'transparent',
+            minWidth: '180px',
+          }}
+        />
+        {searchTerm && (
+          <button
+            onClick={() => onSearchChange('')}
+            style={{
+              background: 'var(--enterprise-gray-200)',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '4px',
+              display: 'flex',
+              alignItems: 'center',
+              borderRadius: '4px',
+              marginLeft: '8px',
+            }}
+          >
+            <X size={14} style={{ color: 'var(--enterprise-gray-600)' }} />
+          </button>
+        )}
+      </div>
+
+      {/* Actions - Right Side */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+        {/* Clear Filters - Only show when filters active */}
+        {hasActiveFilters && (
+          <button
+            onClick={onClearFilters}
+            style={{
+              padding: '0 12px',
+              height: '36px',
+              borderRadius: '6px',
+              border: '1px solid #dc2626',
+              background: 'white',
+              color: '#dc2626',
+              fontSize: '13px',
+              fontWeight: 500,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <XCircle size={16} />
+            Clear Filters
+          </button>
+        )}
+
+        {/* Export Button */}
+        <button
+          onClick={onExport}
+          style={{
+            padding: '0 14px',
+            height: '36px',
+            borderRadius: '6px',
+            border: '1px solid var(--enterprise-gray-300)',
+            background: 'white',
+            color: 'var(--enterprise-gray-700)',
+            fontSize: '13px',
+            fontWeight: 500,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <Download size={14} />
+          Export CSV
+        </button>
+
+        {/* Add Item Button - Primary action (role-gated) */}
+        {showAddItem && (
+          <button
+            onClick={onAddItem}
+            style={{
+              padding: '0 14px',
+              height: '36px',
+              borderRadius: '6px',
+              border: 'none',
+              background: '#1e3a8a',
+              color: 'white',
+              fontSize: '13px',
+              fontWeight: 500,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <Plus size={14} />
+            Add Item
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ============================================================================
 // CSV EXPORT UTILITY
@@ -1341,8 +1558,12 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
         </div>
       )}
 
-      {/* Summary Cards - Responsive & Clickable */}
-      <SummaryCardsGrid>
+      {/* Summary Cards - Responsive & Clickable (matches InventoryGrid) */}
+      <div className="summary-cards-grid" style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+        gap: '16px',
+      }}>
         <SummaryCard
           label="Total Items"
           value={stats.totalCount}
@@ -1370,25 +1591,18 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
           isActive={cardFilter === 'INACTIVE'}
           onClick={() => handleCardClick('INACTIVE')}
         />
-      </SummaryCardsGrid>
+      </div>
 
-      {/* Filter Bar */}
-      <SharedFilterBar>
-        <SearchBox
-          value={searchTerm}
-          onChange={setSearchTerm}
-          placeholder="Search by item code, item name..."
-        />
-        <ActionBar>
-          {hasActiveFilters && (
-            <ClearFiltersButton onClick={handleClearFilters} />
-          )}
-          <ExportCSVButton onClick={handleExport} />
-          {canAddItem && (
-            <AddButton label="Add Item" onClick={() => setShowModal(true)} />
-          )}
-        </ActionBar>
-      </SharedFilterBar>
+      {/* Filter Bar - Elongated Search + Export + Add Item (matches InventoryGrid) */}
+      <FilterBar
+        searchTerm={searchTerm}
+        onSearchChange={setSearchTerm}
+        onExport={handleExport}
+        onAddItem={() => setShowModal(true)}
+        onClearFilters={handleClearFilters}
+        hasActiveFilters={hasActiveFilters}
+        showAddItem={canAddItem}
+      />
 
       {/* Items Table - PRIMARY IDENTIFIER: Part Number */}
       <Card style={{ padding: 0, overflow: 'hidden' }}>

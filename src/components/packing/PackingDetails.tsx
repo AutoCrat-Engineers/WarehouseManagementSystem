@@ -16,12 +16,7 @@ import {
     Modal, LoadingSpinner, EmptyState,
 } from '../ui/EnterpriseUI';
 import {
-    SummaryCard, SummaryCardsGrid,
-    FilterBar as SharedFilterBar, ActionBar,
-    SearchBox, ClearFiltersButton, ExportCSVButton, RefreshButton, AddButton,
-} from '../ui/SharedComponents';
-import {
-    Package, Search, Plus, Eye, Edit2, Download,
+    Package, Search, Plus, Eye, Edit3, Download,
     X, CheckCircle2, XCircle, AlertTriangle, Info,
     ClipboardList, Ruler, Weight, Box, ChevronDown,
     RefreshCw, Filter, Trash2, Settings,
@@ -158,22 +153,59 @@ const sectionStyle: React.CSSProperties = {
     borderRadius: 'var(--border-radius-md)', padding: '16px', marginBottom: '16px',
 };
 
+// ============================================================================
+// SUMMARY CARD (same as ItemMaster)
+// ============================================================================
 
+function SummaryCard({ label, value, icon, color, bgColor, isActive, onClick }: {
+    label: string; value: number; icon: React.ReactNode; color: string; bgColor: string;
+    isActive?: boolean; onClick?: () => void;
+}) {
+    return (
+        <div
+            onClick={onClick}
+            style={{
+                cursor: onClick ? 'pointer' : 'default',
+                transition: 'all 0.2s ease',
+            }}
+        >
+            <Card
+                style={{
+                    border: isActive ? `2px solid ${color}` : '1px solid var(--enterprise-gray-200)',
+                    boxShadow: isActive ? `0 0 0 3px ${bgColor}` : 'var(--shadow-sm)',
+                }}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                        <p style={{
+                            fontSize: '12px', color: 'var(--enterprise-gray-600)',
+                            fontWeight: 500, marginBottom: '6px',
+                        }}>{label}</p>
+                        <p style={{
+                            fontSize: '1.75rem', fontWeight: 700, color,
+                        }}>{value}</p>
+                    </div>
+                    <div style={{
+                        width: '44px', height: '44px', borderRadius: '8px',
+                        backgroundColor: bgColor, display: 'flex',
+                        alignItems: 'center', justifyContent: 'center',
+                    }}>{icon}</div>
+                </div>
+            </Card>
+        </div>
+    );
+}
 
 // ============================================================================
 // UNIT TOGGLE BUTTON (compact, ERP-style)
 // ============================================================================
 
-function UnitToggle<T extends string>({ units, active, onChange, label, icon }: {
-    units: readonly T[]; active: T; onChange: (u: T) => void; label?: string; icon?: React.ReactNode;
+function UnitToggle<T extends string>({ units, active, onChange, label }: {
+    units: readonly T[]; active: T; onChange: (u: T) => void; label: string;
 }) {
     return (
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-            {icon ? (
-                <span style={{ display: 'flex', alignItems: 'center', color: 'var(--enterprise-gray-500)' }}>{icon}</span>
-            ) : label ? (
-                <span style={{ fontSize: '10px', color: 'var(--enterprise-gray-500)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}:</span>
-            ) : null}
+            <span style={{ fontSize: '10px', color: 'var(--enterprise-gray-500)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}:</span>
             <div style={{ display: 'inline-flex', borderRadius: '6px', border: '1px solid var(--enterprise-gray-200)', overflow: 'hidden' }}>
                 {units.map(u => (
                     <button
@@ -216,12 +248,7 @@ function ViewModal({ isOpen, onClose, spec, item }: {
     };
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title={
-            <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                <span>View Packing Specification</span>
-                <Badge variant={spec.is_active ? 'success' : 'error'}>{spec.is_active ? 'Active' : 'Inactive'}</Badge>
-            </span>
-        } maxWidth="750px">
+        <Modal isOpen={isOpen} onClose={onClose} title="View Packing Specification" maxWidth="750px">
             {/* Item Info */}
             <div style={{ ...sectionStyle, background: 'linear-gradient(135deg, rgba(30,58,138,0.03), rgba(30,58,138,0.08))', border: '1px solid rgba(30,58,138,0.1)' }}>
                 <p style={{ fontSize: '12px', fontWeight: 700, color: 'var(--enterprise-primary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -234,12 +261,16 @@ function ViewModal({ isOpen, onClose, spec, item }: {
                     <div><Label>Revision</Label><Input value={spec.revision || '—'} disabled /></div>
                     <div style={{ gridColumn: '1 / -1' }}><Label>Description</Label><Input value={spec.item_name || '—'} disabled /></div>
                 </div>
+                <div style={{ marginTop: '10px' }}>
+                    <Label>Status</Label>
+                    <Badge variant={spec.is_active ? 'success' : 'error'}>{spec.is_active ? 'Active' : 'Inactive'}</Badge>
+                </div>
             </div>
 
             {/* Unit Toggles */}
             <div style={{ display: 'flex', gap: '20px', marginBottom: '16px', justifyContent: 'flex-end' }}>
-                <UnitToggle<LengthUnit> units={['mm', 'cm', 'inches']} active={lu} onChange={setLu} icon={<Ruler size={14} />} />
-                <UnitToggle<WeightUnit> units={['g', 'kg', 'lbs']} active={wu} onChange={setWu} icon={<Weight size={14} />} />
+                <UnitToggle<LengthUnit> units={['mm', 'cm', 'inches']} active={lu} onChange={setLu} label="Length" />
+                <UnitToggle<WeightUnit> units={['g', 'kg', 'lbs']} active={wu} onChange={setWu} label="Weight" />
             </div>
 
             {/* Inner Box */}
@@ -250,7 +281,7 @@ function ViewModal({ isOpen, onClose, spec, item }: {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
                     <div style={detailCard}><p style={lblStyle}>Size (L × W × H)</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{fmtSize(spec.inner_box_length_mm, spec.inner_box_width_mm, spec.inner_box_height_mm)}</p></div>
                     <div style={detailCard}><p style={lblStyle}>Quantity</p><p style={{ fontWeight: 700, color: 'var(--enterprise-info, #3b82f6)', fontSize: '18px' }}>{spec.inner_box_quantity}</p></div>
-                    <div style={detailCard}><p style={lblStyle}>Carton Box Gross Weight</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{convertWeight(spec.inner_box_net_weight_kg, wu)} {WEIGHT_LABELS[wu]}</p></div>
+                    <div style={detailCard}><p style={lblStyle}>Carton Box Weight</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{convertWeight(spec.inner_box_net_weight_kg, wu)} {WEIGHT_LABELS[wu]}</p></div>
                 </div>
             </div>
 
@@ -262,7 +293,7 @@ function ViewModal({ isOpen, onClose, spec, item }: {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
                     <div style={detailCard}><p style={lblStyle}>Size (L × W × H)</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{fmtSize(spec.outer_box_length_mm, spec.outer_box_width_mm, spec.outer_box_height_mm)}</p></div>
                     <div style={detailCard}><p style={lblStyle}>Quantity</p><p style={{ fontWeight: 700, color: 'rgb(168,85,247)', fontSize: '18px' }}>{spec.outer_box_quantity}</p></div>
-                    <div style={detailCard}><p style={lblStyle}>Plywood Box Gross Weight</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{convertWeight(spec.outer_box_gross_weight_kg, wu)} {WEIGHT_LABELS[wu]}</p></div>
+                    <div style={detailCard}><p style={lblStyle}>Plywood Box Weight</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{convertWeight(spec.outer_box_gross_weight_kg, wu)} {WEIGHT_LABELS[wu]}</p></div>
                 </div>
             </div>
 
@@ -293,6 +324,7 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
 
     // Table unit toggles
     const [tableLU, setTableLU] = useState<LengthUnit>('mm');
+    const [tableWU, setTableWU] = useState<WeightUnit>('kg');
 
     // Modal state
     const [showAddModal, setShowAddModal] = useState(false);
@@ -406,7 +438,6 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
             const { data } = await supabase
                 .from('items')
                 .select('id, item_code, item_name, master_serial_no, part_number, is_active')
-                .eq('is_active', true)
                 .or(`item_code.ilike.%${q}%,item_name.ilike.%${q}%,master_serial_no.ilike.%${q}%,part_number.ilike.%${q}%`)
                 .limit(10);
             // Filter out items that already have packing specs
@@ -474,7 +505,6 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
     const handleCloseModal = () => {
         setShowAddModal(false); setEditSpec(null); setSelectedItem(null);
         setItemSearch(''); setItemResults([]); setFormData(formDefault);
-        setRawInputs({});
         setInnerFormLU('mm'); setInnerFormWU('kg');
         setOuterFormLU('mm'); setOuterFormWU('kg');
     };
@@ -495,57 +525,23 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
     };
 
     // ── FORM INPUT with unit conversion (per-section) ──
-    // Raw input tracking to prevent backspace glitch with unit conversions
-    const [rawInputs, setRawInputs] = useState<Record<string, string>>({});
+    const setInnerLenField = (field: keyof PackingFormData, displayVal: number) => {
+        setFormData(prev => ({ ...prev, [field]: toMm(displayVal, innerFormLU) }));
+    };
+    const setInnerWtField = (field: keyof PackingFormData, displayVal: number) => {
+        setFormData(prev => ({ ...prev, [field]: toKg(displayVal, innerFormWU) }));
+    };
+    const getInnerLenDisplay = (field: keyof PackingFormData) => convertLength(formData[field] as number, innerFormLU);
+    const getInnerWtDisplay = (field: keyof PackingFormData) => convertWeight(formData[field] as number, innerFormWU);
 
-    const handleNumericInput = (
-        field: keyof PackingFormData,
-        rawVal: string,
-        convertFn: (v: number) => number,
-    ) => {
-        setRawInputs(prev => ({ ...prev, [field]: rawVal }));
-        const num = parseFloat(rawVal);
-        if (!isNaN(num)) {
-            setFormData(prev => ({ ...prev, [field]: convertFn(num) }));
-        } else if (rawVal === '' || rawVal === '-') {
-            setFormData(prev => ({ ...prev, [field]: 0 }));
-        }
+    const setOuterLenField = (field: keyof PackingFormData, displayVal: number) => {
+        setFormData(prev => ({ ...prev, [field]: toMm(displayVal, outerFormLU) }));
     };
-
-    const getDisplayValue = (
-        field: keyof PackingFormData,
-        convertFn: (v: number) => number,
-    ): string => {
-        // If user is actively editing this field, show their raw input
-        if (rawInputs[field] !== undefined) return rawInputs[field];
-        const v = convertFn(formData[field] as number);
-        return v ? String(v) : '';
+    const setOuterWtField = (field: keyof PackingFormData, displayVal: number) => {
+        setFormData(prev => ({ ...prev, [field]: toKg(displayVal, outerFormWU) }));
     };
-
-    // Clear raw inputs when unit changes so display re-syncs from stored values
-    useEffect(() => { setRawInputs({}); }, [innerFormLU, innerFormWU, outerFormLU, outerFormWU]);
-
-    const setInnerLenField = (field: keyof PackingFormData, raw: string) => {
-        handleNumericInput(field, raw, v => toMm(v, innerFormLU));
-    };
-    const setInnerWtField = (field: keyof PackingFormData, raw: string) => {
-        handleNumericInput(field, raw, v => toKg(v, innerFormWU));
-    };
-    const getInnerLenDisplay = (field: keyof PackingFormData) =>
-        getDisplayValue(field, v => convertLength(v, innerFormLU));
-    const getInnerWtDisplay = (field: keyof PackingFormData) =>
-        getDisplayValue(field, v => convertWeight(v, innerFormWU));
-
-    const setOuterLenField = (field: keyof PackingFormData, raw: string) => {
-        handleNumericInput(field, raw, v => toMm(v, outerFormLU));
-    };
-    const setOuterWtField = (field: keyof PackingFormData, raw: string) => {
-        handleNumericInput(field, raw, v => toKg(v, outerFormWU));
-    };
-    const getOuterLenDisplay = (field: keyof PackingFormData) =>
-        getDisplayValue(field, v => convertLength(v, outerFormLU));
-    const getOuterWtDisplay = (field: keyof PackingFormData) =>
-        getDisplayValue(field, v => convertWeight(v, outerFormWU));
+    const getOuterLenDisplay = (field: keyof PackingFormData) => convertLength(formData[field] as number, outerFormLU);
+    const getOuterWtDisplay = (field: keyof PackingFormData) => convertWeight(formData[field] as number, outerFormWU);
 
     // ── CSV EXPORT ──
     const handleExport = () => {
@@ -658,50 +654,83 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
             )}
 
             {/* Summary Cards */}
-            <SummaryCardsGrid>
+            <div className="summary-cards-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
                 <SummaryCard label="Total Specifications" value={stats.total} icon={<ClipboardList size={22} style={{ color: 'var(--enterprise-primary)' }} />} color="var(--enterprise-primary)" bgColor="rgba(30, 58, 138, 0.1)" isActive={cardFilter === 'ALL'} onClick={() => setCardFilter(p => p === 'ALL' ? 'ALL' : 'ALL')} />
                 <SummaryCard label="Active" value={stats.active} icon={<CheckCircle2 size={22} style={{ color: 'var(--enterprise-success)' }} />} color="var(--enterprise-success)" bgColor="rgba(34, 197, 94, 0.1)" isActive={cardFilter === 'ACTIVE'} onClick={() => setCardFilter(p => p === 'ACTIVE' ? 'ALL' : 'ACTIVE')} />
                 <SummaryCard label="Inactive" value={stats.inactive} icon={<AlertTriangle size={22} style={{ color: '#b91c1c' }} />} color="#b91c1c" bgColor="rgba(185, 28, 28, 0.1)" isActive={cardFilter === 'INACTIVE'} onClick={() => setCardFilter(p => p === 'INACTIVE' ? 'ALL' : 'INACTIVE')} />
-            </SummaryCardsGrid>
+            </div>
 
             {/* Toolbar */}
-            <SharedFilterBar>
-                <SearchBox
-                    value={searchTerm}
-                    onChange={setSearchTerm}
-                    placeholder="Search by Item Code, Part Number, MSN, or Description..."
-                />
-
-                {/* Unit Dropdowns */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Ruler size={14} style={{ color: 'var(--enterprise-gray-400)' }} />
-                    <select
-                        value={tableLU}
-                        onChange={e => setTableLU(e.target.value as LengthUnit)}
-                        style={{
-                            padding: '7px 28px 7px 10px', border: '1.5px solid var(--enterprise-gray-200)',
-                            borderRadius: '6px', fontSize: '12px', fontWeight: 600,
-                            color: 'var(--enterprise-gray-700)', background: 'white', cursor: 'pointer',
-                            outline: 'none', appearance: 'none', height: '36px',
-                            backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%236b7280' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")`,
-                            backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center',
-                        }}
-                    >
-                        <option value="mm">mm</option>
-                        <option value="cm">cm</option>
-                        <option value="inches">inches</option>
-                    </select>
-                </div>
-
-                <ActionBar>
+            <Card style={{ padding: '16px 20px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                    <div style={{ position: 'relative', flex: 1, minWidth: '240px' }}>
+                        <Search size={18} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--enterprise-gray-400)' }} />
+                        <input
+                            type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                            placeholder="Search by Item Code, Part Number, MSN, or Description..."
+                            style={{
+                                width: '100%', padding: '10px 14px 10px 44px', border: '1.5px solid var(--enterprise-gray-200)',
+                                borderRadius: 'var(--border-radius-lg)', fontSize: '13px', background: 'var(--enterprise-gray-50)',
+                                transition: 'all 0.2s ease', outline: 'none',
+                            }}
+                            onFocus={e => { e.target.style.borderColor = 'var(--enterprise-primary)'; e.target.style.background = 'white'; e.target.style.boxShadow = '0 0 0 3px rgba(30,58,138,0.1)'; }}
+                            onBlur={e => { e.target.style.borderColor = 'var(--enterprise-gray-200)'; e.target.style.background = 'var(--enterprise-gray-50)'; e.target.style.boxShadow = 'none'; }}
+                        />
+                        {searchTerm && (
+                            <button onClick={() => setSearchTerm('')} style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'var(--enterprise-gray-200)', border: 'none', borderRadius: '50%', width: '20px', height: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: '12px', color: 'var(--enterprise-gray-600)' }}>×</button>
+                        )}
+                    </div>
                     {hasActiveFilters && (
-                        <ClearFiltersButton onClick={() => setCardFilter('ALL')} />
+                        <Button variant="tertiary" size="sm" onClick={() => setCardFilter('ALL')} icon={<Filter size={14} />}>Clear Filter</Button>
                     )}
-                    <ExportCSVButton onClick={handleExport} />
-                    <RefreshButton onClick={() => { fetchSpecs(); showToast('info', 'Refreshed', 'Data refreshed successfully.'); }} />
-                    {canAdd && <AddButton label="Add Specification" onClick={() => setShowAddModal(true)} />}
-                </ActionBar>
-            </SharedFilterBar>
+
+                    {/* Unit Dropdowns */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Ruler size={14} style={{ color: 'var(--enterprise-gray-400)' }} />
+                        <select
+                            value={tableLU}
+                            onChange={e => setTableLU(e.target.value as LengthUnit)}
+                            style={{
+                                padding: '7px 28px 7px 10px', border: '1.5px solid var(--enterprise-gray-200)',
+                                borderRadius: 'var(--border-radius-md)', fontSize: '12px', fontWeight: 600,
+                                color: 'var(--enterprise-gray-700)', background: 'white', cursor: 'pointer',
+                                outline: 'none', appearance: 'none',
+                                backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%236b7280' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")`,
+                                backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center',
+                            }}
+                        >
+                            <option value="mm">mm</option>
+                            <option value="cm">cm</option>
+                            <option value="inches">inches</option>
+                        </select>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Weight size={14} style={{ color: 'var(--enterprise-gray-400)' }} />
+                        <select
+                            value={tableWU}
+                            onChange={e => setTableWU(e.target.value as WeightUnit)}
+                            style={{
+                                padding: '7px 28px 7px 10px', border: '1.5px solid var(--enterprise-gray-200)',
+                                borderRadius: 'var(--border-radius-md)', fontSize: '12px', fontWeight: 600,
+                                color: 'var(--enterprise-gray-700)', background: 'white', cursor: 'pointer',
+                                outline: 'none', appearance: 'none',
+                                backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%236b7280' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")`,
+                                backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center',
+                            }}
+                        >
+                            <option value="g">g</option>
+                            <option value="kg">kg</option>
+                            <option value="lbs">lbs</option>
+                        </select>
+                    </div>
+
+                    <div style={{ width: '1px', height: '24px', background: 'var(--enterprise-gray-200)' }} />
+
+                    <Button variant="tertiary" size="sm" onClick={handleExport} icon={<Download size={14} />}>Export</Button>
+                    <Button variant="tertiary" size="sm" onClick={() => { fetchSpecs(); showToast('info', 'Refreshed', 'Data refreshed successfully.'); }} icon={<RefreshCw size={14} />}>Refresh</Button>
+                    {canAdd && <Button variant="primary" size="sm" onClick={() => setShowAddModal(true)} icon={<Plus size={14} />}>Add Specification</Button>}
+                </div>
+            </Card>
 
             {/* Data Table */}
             <Card style={{ padding: 0 }}>
@@ -790,7 +819,7 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                                                                         onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
                                                                         onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
                                                                     >
-                                                                        <Edit2 size={16} /> Edit Specs
+                                                                        <Edit3 size={16} /> Edit
                                                                     </button>
                                                                     <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
                                                                     <button
@@ -799,7 +828,7 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                                                                         onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#fef2f2'; }}
                                                                         onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
                                                                     >
-                                                                        <Trash2 size={16} /> Delete Specs
+                                                                        <Trash2 size={16} /> Delete
                                                                     </button>
                                                                 </div>
                                                             );
@@ -833,9 +862,12 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
             {/* ADD / EDIT MODAL */}
             <Modal isOpen={showAddModal || !!editSpec} onClose={handleCloseModal} title={editSpec ? 'Edit Packing Specification' : 'Add Packing Specification'} maxWidth="800px">
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                    {/* Item Search (only for new) */}
+                    {/* Step 1: Item Search (only for new) */}
                     {!editSpec && !selectedItem && (
                         <div style={{ ...sectionStyle, background: 'linear-gradient(135deg, rgba(30,58,138,0.03), rgba(30,58,138,0.08))', border: '1px solid rgba(30,58,138,0.1)' }}>
+                            <p style={{ fontSize: '12px', fontWeight: 700, color: 'var(--enterprise-primary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <Search size={14} /> Step 1: Search Item from Item Master
+                            </p>
                             <div style={{ position: 'relative' }}>
                                 <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--enterprise-gray-400)' }} />
                                 <input
@@ -922,18 +954,18 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                                         <Box size={14} /> Inner Box Specifications
                                     </p>
                                     <div style={{ display: 'flex', gap: '12px' }}>
-                                        <UnitToggle<LengthUnit> units={['mm', 'cm', 'inches']} active={innerFormLU} onChange={setInnerFormLU} icon={<Ruler size={14} />} />
-                                        <UnitToggle<WeightUnit> units={['g', 'kg', 'lbs']} active={innerFormWU} onChange={setInnerFormWU} icon={<Weight size={14} />} />
+                                        <UnitToggle<LengthUnit> units={['mm', 'cm', 'inches']} active={innerFormLU} onChange={setInnerFormLU} label="Length" />
+                                        <UnitToggle<WeightUnit> units={['g', 'kg', 'lbs']} active={innerFormWU} onChange={setInnerFormWU} label="Weight" />
                                     </div>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-                                    <div><Label required>Length ({LENGTH_LABELS[innerFormLU]})</Label><Input type="number" step="any" min={0} value={getInnerLenDisplay('inner_box_length_mm')} onChange={e => setInnerLenField('inner_box_length_mm', e.target.value)} onBlur={() => setRawInputs(prev => { const n = { ...prev }; delete n['inner_box_length_mm']; return n; })} placeholder="e.g. 100" /></div>
-                                    <div><Label required>Width ({LENGTH_LABELS[innerFormLU]})</Label><Input type="number" step="any" min={0} value={getInnerLenDisplay('inner_box_width_mm')} onChange={e => setInnerLenField('inner_box_width_mm', e.target.value)} onBlur={() => setRawInputs(prev => { const n = { ...prev }; delete n['inner_box_width_mm']; return n; })} placeholder="e.g. 70" /></div>
-                                    <div><Label required>Height ({LENGTH_LABELS[innerFormLU]})</Label><Input type="number" step="any" min={0} value={getInnerLenDisplay('inner_box_height_mm')} onChange={e => setInnerLenField('inner_box_height_mm', e.target.value)} onBlur={() => setRawInputs(prev => { const n = { ...prev }; delete n['inner_box_height_mm']; return n; })} placeholder="e.g. 50" /></div>
+                                    <div><Label required>Length ({LENGTH_LABELS[innerFormLU]})</Label><Input type="number" step="any" min={0} value={getInnerLenDisplay('inner_box_length_mm') || ''} onChange={e => setInnerLenField('inner_box_length_mm', parseFloat(e.target.value) || 0)} placeholder="e.g. 100" /></div>
+                                    <div><Label required>Width ({LENGTH_LABELS[innerFormLU]})</Label><Input type="number" step="any" min={0} value={getInnerLenDisplay('inner_box_width_mm') || ''} onChange={e => setInnerLenField('inner_box_width_mm', parseFloat(e.target.value) || 0)} placeholder="e.g. 70" /></div>
+                                    <div><Label required>Height ({LENGTH_LABELS[innerFormLU]})</Label><Input type="number" step="any" min={0} value={getInnerLenDisplay('inner_box_height_mm') || ''} onChange={e => setInnerLenField('inner_box_height_mm', parseFloat(e.target.value) || 0)} placeholder="e.g. 50" /></div>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
                                     <div><Label required>Quantity per Box</Label><Input type="number" min={0} value={formData.inner_box_quantity || ''} onChange={e => setFormData(p => ({ ...p, inner_box_quantity: parseInt(e.target.value) || 0 }))} placeholder="e.g. 450" /></div>
-                                    <div><Label required>Gross Weight ({WEIGHT_LABELS[innerFormWU]})</Label><Input type="number" step="any" min={0} value={getInnerWtDisplay('inner_box_net_weight_kg')} onChange={e => setInnerWtField('inner_box_net_weight_kg', e.target.value)} onBlur={() => setRawInputs(prev => { const n = { ...prev }; delete n['inner_box_net_weight_kg']; return n; })} placeholder="e.g. 0.5" /></div>
+                                    <div><Label required>Net Weight ({WEIGHT_LABELS[innerFormWU]})</Label><Input type="number" step="any" min={0} value={getInnerWtDisplay('inner_box_net_weight_kg') || ''} onChange={e => setInnerWtField('inner_box_net_weight_kg', parseFloat(e.target.value) || 0)} placeholder="e.g. 0.5" /></div>
                                 </div>
                             </div>
 
@@ -944,18 +976,18 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                                         <Package size={14} /> Outer Box Specifications
                                     </p>
                                     <div style={{ display: 'flex', gap: '12px' }}>
-                                        <UnitToggle<LengthUnit> units={['mm', 'cm', 'inches']} active={outerFormLU} onChange={setOuterFormLU} icon={<Ruler size={14} />} />
-                                        <UnitToggle<WeightUnit> units={['g', 'kg', 'lbs']} active={outerFormWU} onChange={setOuterFormWU} icon={<Weight size={14} />} />
+                                        <UnitToggle<LengthUnit> units={['mm', 'cm', 'inches']} active={outerFormLU} onChange={setOuterFormLU} label="Length" />
+                                        <UnitToggle<WeightUnit> units={['g', 'kg', 'lbs']} active={outerFormWU} onChange={setOuterFormWU} label="Weight" />
                                     </div>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-                                    <div><Label required>Length ({LENGTH_LABELS[outerFormLU]})</Label><Input type="number" step="any" min={0} value={getOuterLenDisplay('outer_box_length_mm')} onChange={e => setOuterLenField('outer_box_length_mm', e.target.value)} onBlur={() => setRawInputs(prev => { const n = { ...prev }; delete n['outer_box_length_mm']; return n; })} placeholder="e.g. 1000" /></div>
-                                    <div><Label required>Width ({LENGTH_LABELS[outerFormLU]})</Label><Input type="number" step="any" min={0} value={getOuterLenDisplay('outer_box_width_mm')} onChange={e => setOuterLenField('outer_box_width_mm', e.target.value)} onBlur={() => setRawInputs(prev => { const n = { ...prev }; delete n['outer_box_width_mm']; return n; })} placeholder="e.g. 700" /></div>
-                                    <div><Label required>Height ({LENGTH_LABELS[outerFormLU]})</Label><Input type="number" step="any" min={0} value={getOuterLenDisplay('outer_box_height_mm')} onChange={e => setOuterLenField('outer_box_height_mm', e.target.value)} onBlur={() => setRawInputs(prev => { const n = { ...prev }; delete n['outer_box_height_mm']; return n; })} placeholder="e.g. 500" /></div>
+                                    <div><Label required>Length ({LENGTH_LABELS[outerFormLU]})</Label><Input type="number" step="any" min={0} value={getOuterLenDisplay('outer_box_length_mm') || ''} onChange={e => setOuterLenField('outer_box_length_mm', parseFloat(e.target.value) || 0)} placeholder="e.g. 1000" /></div>
+                                    <div><Label required>Width ({LENGTH_LABELS[outerFormLU]})</Label><Input type="number" step="any" min={0} value={getOuterLenDisplay('outer_box_width_mm') || ''} onChange={e => setOuterLenField('outer_box_width_mm', parseFloat(e.target.value) || 0)} placeholder="e.g. 700" /></div>
+                                    <div><Label required>Height ({LENGTH_LABELS[outerFormLU]})</Label><Input type="number" step="any" min={0} value={getOuterLenDisplay('outer_box_height_mm') || ''} onChange={e => setOuterLenField('outer_box_height_mm', parseFloat(e.target.value) || 0)} placeholder="e.g. 500" /></div>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
                                     <div><Label required>Quantity per Box</Label><Input type="number" min={0} value={formData.outer_box_quantity || ''} onChange={e => setFormData(p => ({ ...p, outer_box_quantity: parseInt(e.target.value) || 0 }))} placeholder="e.g. 1200" /></div>
-                                    <div><Label required>Gross Weight ({WEIGHT_LABELS[outerFormWU]})</Label><Input type="number" step="any" min={0} value={getOuterWtDisplay('outer_box_gross_weight_kg')} onChange={e => setOuterWtField('outer_box_gross_weight_kg', e.target.value)} onBlur={() => setRawInputs(prev => { const n = { ...prev }; delete n['outer_box_gross_weight_kg']; return n; })} placeholder="e.g. 50" /></div>
+                                    <div><Label required>Gross Weight ({WEIGHT_LABELS[outerFormWU]})</Label><Input type="number" step="any" min={0} value={getOuterWtDisplay('outer_box_gross_weight_kg') || ''} onChange={e => setOuterWtField('outer_box_gross_weight_kg', parseFloat(e.target.value) || 0)} placeholder="e.g. 50" /></div>
                                 </div>
                             </div>
 

@@ -63,7 +63,7 @@ const PACKING_SUB_VIEWS: View[] = ['packing', 'packing-sticker', 'packing-detail
 // Meta for packing sub-views (displayed in the header bar)
 const PACKING_VIEW_META: Record<string, { label: string; description: string }> = {
   'packing': { label: 'Packing', description: 'FG Packing Workflow' },
-  'packing-sticker': { label: 'Packing — Sticker Generation', description: 'FG Sticker Generation' },
+  'packing-sticker': { label: 'Packing — Generate Sticker', description: 'FG Packing Workflow' },
   'packing-details': { label: 'Packing — Details', description: 'Packing Specifications' },
   'packing-list-invoice': { label: 'Packing List — Against Invoice', description: 'Packing by Invoice' },
   'packing-list-sub-invoice': { label: 'Packing List — Against Sub Invoice', description: 'Packing by Sub Invoice' },
@@ -574,7 +574,7 @@ export default function App() {
                         onMouseLeave={(e) => { if (!isStickerActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
                       >
                         <Printer size={15} strokeWidth={isStickerActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isStickerActive ? 1 : 0.6 }} />
-                        <span>Sticker Generation</span>
+                        <span>Generate Sticker</span>
                       </button>
 
                       {/* 2. Packing Details */}
