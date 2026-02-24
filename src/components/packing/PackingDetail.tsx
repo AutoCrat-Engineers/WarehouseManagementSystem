@@ -1,19 +1,27 @@
 /**
- * PackingDetail — Box-level packing with per-box PKG IDs and stock transfer (v6).
+ * PackingDetail — Sticker Generation Detail View (v9 — Refactored).
  *
- * Architecture:
- *   - Movement # is the primary reference
- *   - Each BOX gets a unique Packing ID (PKG-XXXXXXXX)
- *   - Stock does NOT move on approval — only on explicit operator action
- *   - "Move Packed Stock" — partial transfer of printed boxes to Prod WHSE
- *   - "Complete Packing" → validates all boxes + triggers stock transfer
- *   - Transfer status shown per box (Transferred / Pending)
- *   - Sticky header bar for easy navigation
- *   - Document Details in section-wise layout
+ * PURPOSE: Auto-generates boxes and stickers based on approved qty & packing spec.
+ * 
+ * REMOVED (v9):
+ *   - Manual "Add Box" form
+ *   - "Start Packing" CTA button
+ *   - Packing Progress bar
+ *   - Partial stock transfer ("Move Packed Stock")
+ *   - "Complete Packing" button
+ *
+ * NEW WORKFLOW (v9):
+ *   1. On open → auto-generates box rows (Box Qty = total / inner_qty_per_box)
+ *   2. Table shows: Unique Box ID, Movement ID, Serial #, Qty/Box, Print Status
+ *   3. "Print Sticker" per row + "Print All Stickers" batch button
+ *   4. "Move to FG Warehouse" enabled ONLY when all stickers are printed
+ *   5. Stock moves ONLY after print is complete (core business rule)
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card } from '../ui/EnterpriseUI';
+import { Card, LoadingSpinner } from '../ui/EnterpriseUI';
 import { StickerPrint } from './StickerPrint';
+import { Printer } from 'lucide-react';
+import QRCode from 'qrcode';
 import * as svc from './packingService';
 import {
     PACKING_STATUS_CONFIG, AUDIT_ACTION_LABELS,
@@ -38,468 +46,542 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
     const [boxes, setBoxes] = useState<PackingBox[]>([]);
     const [auditLogs, setAuditLogs] = useState<PackingAuditLog[]>([]);
     const [loading, setLoading] = useState(true);
-    const [addQty, setAddQty] = useState<number>(0);
+    const [generating, setGenerating] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
     const [stickerData, setStickerData] = useState<StickerData | null>(null);
-    const [activeTab, setActiveTab] = useState<'boxes' | 'audit'>('boxes');
+    const [activeTab, setActiveTab] = useState<'stickers' | 'audit'>('stickers');
     const [showTransferConfirm, setShowTransferConfirm] = useState(false);
-    const [transferType, setTransferType] = useState<'partial' | 'complete'>('partial');
+    // printQueue and isBatchPrinting removed — Print All now uses a single-window approach
 
     // ============================================================================
-    // DATA LOADING
+    // DATA LOADING — all queries fire in parallel for maximum speed
     // ============================================================================
 
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
-            const { data: reqRow, error: reqErr } = await supabase
-                .from('packing_requests')
-                .select('*')
-                .eq('id', requestId)
-                .single();
-            if (reqErr || !reqRow) throw new Error(reqErr?.message || 'Packing request not found');
+            // PHASE 1: Fetch request (needed to derive item_code + profile IDs)
+            const { data: reqData, error: reqErr } = await supabase
+                .from('packing_requests').select('*').eq('id', requestId).single();
+            if (reqErr) throw reqErr;
 
-            // ── PARALLEL: Run all 4 enrichment queries simultaneously ──
-            const userIds = [reqRow.created_by, reqRow.approved_by].filter(Boolean);
+            // PHASE 2: All remaining fetches in parallel (items, profiles, boxes, audit)
+            const profileIds = [reqData.created_by, reqData.approved_by].filter(Boolean);
             const [itemResult, profilesResult, boxesData, auditData] = await Promise.all([
                 supabase.from('items')
                     .select('item_name, part_number, master_serial_no, revision')
-                    .eq('item_code', reqRow.item_code)
-                    .single(),
-                userIds.length
-                    ? supabase.from('profiles').select('id, full_name').in('id', userIds)
+                    .eq('item_code', reqData.item_code).single(),
+                profileIds.length
+                    ? supabase.from('profiles').select('id, full_name').in('id', profileIds)
                     : Promise.resolve({ data: [] as any[] }),
                 svc.fetchBoxesForRequest(requestId),
                 svc.fetchAuditLogs(requestId),
             ]);
 
-            // Build enriched request
             const itemData = itemResult.data;
-            let createdByName = '';
-            let approvedByName = '';
-            (profilesResult.data || []).forEach((p: any) => {
-                if (p.id === reqRow.created_by) createdByName = p.full_name;
-                if (p.id === reqRow.approved_by) approvedByName = p.full_name;
-            });
+            const nameMap: Record<string, string> = {};
+            ((profilesResult.data || []) as any[]).forEach((p: any) => { nameMap[p.id] = p.full_name; });
 
             const enrichedReq: PackingRequest = {
-                ...reqRow,
-                item_name: itemData?.item_name || reqRow.item_code,
+                ...reqData,
+                item_name: itemData?.item_name || reqData.item_code,
                 part_number: itemData?.part_number || null,
                 master_serial_no: itemData?.master_serial_no || null,
                 revision: itemData?.revision || null,
-                created_by_name: createdByName,
-                approved_by_name: approvedByName,
-                transferred_qty: reqRow.transferred_qty || 0,
+                created_by_name: nameMap[reqData.created_by] || undefined,
+                approved_by_name: reqData.approved_by ? nameMap[reqData.approved_by] : undefined,
             };
             setRequest(enrichedReq);
             setBoxes(boxesData);
             setAuditLogs(auditData);
+
         } catch (err: any) {
-            console.error('PackingDetail loadData error:', err);
+            console.error('Error loading packing data:', err);
             setMessage({ type: 'error', text: err.message || 'Failed to load data' });
-        } finally { setLoading(false); }
+        } finally {
+            setLoading(false);
+        }
     }, [requestId, supabase]);
 
     useEffect(() => { loadData(); }, [loadData]);
 
     // ============================================================================
-    // COMPUTED VALUES
+    // AUTO-GENERATE BOXES (on first open for APPROVED requests)
     // ============================================================================
 
-    const isOperator = userRole === 'L1';
-    const status = (request?.status || 'APPROVED') as PackingRequestStatus;
-    const isPacking = status === 'PACKING_IN_PROGRESS';
-    const isApproved = status === 'APPROVED';
-    const isRejected = status === 'REJECTED';
-    const isCompleted = status === 'COMPLETED';
-    const isPartiallyTransferred = status === 'PARTIALLY_TRANSFERRED';
-    const canPack = isPacking || isPartiallyTransferred;
-    const totalQty = Number(request?.total_packed_qty || 0);
-    const totalBoxQty = boxes.reduce((s, b) => s + Number(b.box_qty), 0);
-    const remaining = totalQty - totalBoxQty;
-    const isFullyPacked = remaining === 0 && boxes.length > 0;
-    const allStickersPrinted = boxes.length > 0 && boxes.every(b => b.sticker_printed);
-    // Compute transferred qty from ACTUAL boxes (source of truth), not the stored field which may be stale
-    const transferredQty = boxes.filter(b => b.is_transferred).reduce((s, b) => s + Number(b.box_qty), 0);
-    const untransferredBoxes = boxes.filter(b => b.sticker_printed && !b.is_transferred);
-    const untransferredQty = untransferredBoxes.reduce((s, b) => s + Number(b.box_qty), 0);
-    const hasUntransferred = untransferredBoxes.length > 0;
-    const allBoxesTransferred = boxes.length > 0 && boxes.every(b => b.is_transferred);
-    const canComplete = isFullyPacked && allStickersPrinted;
-    const statusCfg = PACKING_STATUS_CONFIG[status];
-    const progressPct = totalQty > 0 ? Math.round((totalBoxQty / totalQty) * 100) : 0;
-    const transferPct = totalQty > 0 ? Math.round((transferredQty / totalQty) * 100) : 0;
+    useEffect(() => {
+        if (!request || loading) return;
+        if (request.status === 'APPROVED' && boxes.length === 0) {
+            handleAutoGenerate();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [request?.id, request?.status, loading]);
 
-    // ============================================================================
-    // HANDLERS
-    // ============================================================================
-
-    const handleStartPacking = async () => {
-        setSubmitting(true);
+    const handleAutoGenerate = async () => {
+        if (generating) return;
+        setGenerating(true);
         setMessage(null);
         try {
-            await svc.startPacking(requestId);
-            setMessage({ type: 'success', text: 'Packing started. Add boxes to split the approved quantity.' });
+            const generatedBoxes = await svc.autoGenerateBoxes(requestId);
+            setBoxes(generatedBoxes);
+            // Reload full data to get updated status
             await loadData();
+            setMessage({ type: 'success', text: `Auto-generated ${generatedBoxes.length} box sticker(s) based on packing specifications.` });
         } catch (err: any) {
-            setMessage({ type: 'error', text: err.message || 'Cannot start packing' });
-        } finally { setSubmitting(false); }
-    };
-
-    const handleAddBox = async () => {
-        if (addQty <= 0) { setMessage({ type: 'error', text: 'Box quantity must be greater than 0.' }); return; }
-        if (addQty > remaining) { setMessage({ type: 'error', text: `Qty ${addQty} exceeds remaining (${remaining}).` }); return; }
-        setSubmitting(true);
-        setMessage(null);
-        try {
-            const newBox = await svc.addBox(requestId, addQty);
-            setAddQty(0);
-            setMessage({ type: 'success', text: `Box #${newBox.box_number} created — ${addQty} PCS — PKG: ${newBox.packing_id}` });
-            await loadData();
-        } catch (err: any) {
-            setMessage({ type: 'error', text: err.message || 'Failed to add box' });
-        } finally { setSubmitting(false); }
-    };
-
-    const handleDeleteBox = async (boxId: string) => {
-        if (!confirm('Remove this box? This action cannot be undone.')) return;
-        try {
-            await svc.deleteBox(requestId, boxId);
-            setMessage({ type: 'success', text: 'Box removed.' });
-            await loadData();
-        } catch (err: any) {
-            setMessage({ type: 'error', text: err.message || 'Cannot delete box' });
+            console.error('Auto-generate failed:', err);
+            setMessage({ type: 'error', text: err.message || 'Failed to auto-generate boxes' });
+        } finally {
+            setGenerating(false);
         }
     };
 
+    // ============================================================================
+    // STICKER ACTIONS
+    // ============================================================================
+
     const handlePrintSticker = (box: PackingBox) => {
         if (!request) return;
-        setStickerData({
+        const sticker: StickerData = {
             packingId: box.packing_id || generatePackingId(box.id),
-            partNumber: request.part_number || request.item_code,
-            description: request.item_name || '',
+            partNumber: request.part_number || '—',
+            description: request.item_name || request.item_code,
             mslNo: request.master_serial_no || '—',
             revision: request.revision || '—',
             movementNumber: request.movement_number,
             packingRequestId: request.id,
             boxNumber: box.box_number,
             totalBoxes: boxes.length,
-            boxQuantity: Number(box.box_qty),
-            totalQuantity: totalQty,
-            packingDate: new Date().toLocaleDateString('en-IN'),
+            boxQuantity: box.box_qty,
+            totalQuantity: Number(request.total_packed_qty),
+            packingDate: new Date().toISOString().split('T')[0],
             itemCode: request.item_code,
-            operatorName: currentUserName,
-        });
+            operatorName: currentUserName || 'System',
+        };
+        setStickerData(sticker);
     };
 
     const handleStickerPrinted = async () => {
-        if (!stickerData) return;
-        const box = boxes.find(b => b.box_number === stickerData.boxNumber);
-        if (box) {
-            try {
-                await svc.markStickerPrinted(requestId, box.id);
-                await loadData();
-            } catch (err: any) { console.error('Sticker print tracking error:', err); }
+        const box = boxes.find(b => (b.packing_id || generatePackingId(b.id)) === stickerData?.packingId);
+        if (!box) return;
+        try {
+            await svc.markStickerPrinted(requestId, box.id);
+            setStickerData(null);
+            await loadData();
+            setMessage({ type: 'success', text: `Sticker printed for Box #${box.box_number} (${box.packing_id})` });
+        } catch (err: any) {
+            setMessage({ type: 'error', text: err.message || 'Failed to mark sticker as printed' });
         }
-        setStickerData(null);
     };
 
-    const handlePrintNextSticker = () => {
-        const unprintedBoxes = boxes.filter(b => !b.sticker_printed);
-        if (unprintedBoxes.length === 0) {
-            setMessage({ type: 'error', text: 'All stickers have already been printed.' });
+    const handlePrintAllStickers = async () => {
+        if (!request) return;
+        // Build sticker data for all unprinted + non-transferred boxes
+        const eligibleBoxes = boxes.filter(b => !b.sticker_printed && !b.is_transferred);
+        if (eligibleBoxes.length === 0) {
+            setMessage({ type: 'info', text: 'All stickers are already printed.' });
             return;
         }
-        handlePrintSticker(unprintedBoxes[0]);
+
+        setSubmitting(true);
+        setMessage({ type: 'info', text: `Preparing ${eligibleBoxes.length} sticker(s) for printing...` });
+
+        try {
+            // Build sticker data + QR codes for ALL boxes upfront
+            const stickers = eligibleBoxes.map(box => ({
+                packingId: box.packing_id || generatePackingId(box.id),
+                partNumber: request.part_number || '—',
+                description: request.item_name || request.item_code,
+                mslNo: request.master_serial_no || '—',
+                revision: request.revision || '—',
+                movementNumber: request.movement_number,
+                boxNumber: box.box_number,
+                totalBoxes: boxes.length,
+                boxQuantity: box.box_qty,
+                totalQuantity: Number(request.total_packed_qty),
+                packingDate: new Date().toISOString().split('T')[0],
+                itemCode: request.item_code,
+                operatorName: currentUserName || 'System',
+                boxId: box.id,
+            }));
+
+            // Generate QR codes for all stickers
+            const qrUrls = await Promise.all(
+                stickers.map(s => {
+                    const qrText = [
+                        `AUTOCRAT ENGINEERS`,
+                        `PKG:${s.packingId}`, `MOV:${s.movementNumber}`,
+                        `PN:${s.partNumber}`, `IC:${s.itemCode}`,
+                        `DESC:${s.description}`, `MSL:${s.mslNo}`, `REV:${s.revision}`,
+                        `QTY:${s.boxQuantity}PCS`, `BOX:${s.boxNumber}/${s.totalBoxes}`,
+                        `TOTAL:${s.totalQuantity}PCS`, `DATE:${s.packingDate}`, `BY:${s.operatorName}`,
+                    ].join('\n');
+                    return QRCode.toDataURL(qrText, {
+                        errorCorrectionLevel: 'M', width: 200, margin: 1,
+                        color: { dark: '#000000', light: '#ffffff' },
+                    });
+                })
+            );
+
+            // Build HTML for ALL stickers in one document
+            const stickerPages = stickers.map((s, i) => `
+<div class="sticker" ${i < stickers.length - 1 ? 'style="page-break-after: always;"' : ''}>
+  <div class="header">
+    <div class="header-logo"><img src="/a-logo.png" alt="AE" /></div>
+    <div>
+      <div class="header-company">Autocrat Engineers</div>
+      <div class="header-sub">Packaging Sticker</div>
+    </div>
+  </div>
+  <div class="content">
+    <div class="data-side">
+      <table class="data-table">
+        <tr class="pkg-row"><td class="lbl">PKG ID</td><td class="val">${s.packingId}</td></tr>
+        <tr><td class="lbl">Part No.</td><td class="val" style="font-weight:800;font-size:12px">${s.partNumber}</td></tr>
+        <tr><td class="lbl">Description</td><td class="val">${s.description}</td></tr>
+        <tr><td class="lbl">MSL No.</td><td class="val">${s.mslNo}</td></tr>
+        <tr><td class="lbl">Revision</td><td class="val" style="font-weight:800">${s.revision}</td></tr>
+        <tr class="qty-row"><td class="lbl">QTY IN BOX</td><td class="val">${s.boxQuantity} PCS</td></tr>
+      </table>
+    </div>
+    <div class="qr-side">
+      <img src="${qrUrls[i]}" alt="QR" />
+      <div class="qr-label">Scan for full details</div>
+    </div>
+  </div>
+  <div class="footer">Auto-generated by WMS &bull; ${s.packingDate} &bull; ${s.operatorName} &bull; Box ${s.boxNumber} of ${s.totalBoxes}</div>
+</div>`).join('\n');
+
+            const printWindow = window.open('', '_blank', 'width=500,height=600');
+            if (!printWindow) {
+                setMessage({ type: 'error', text: 'Popup blocked. Please allow popups for this site.' });
+                setSubmitting(false);
+                return;
+            }
+
+            printWindow.document.write(`<!DOCTYPE html><html><head><title>Print All Stickers — ${request.movement_number}</title>
+<style>
+  @media print {
+    @page { size: 100mm 70mm; margin: 2mm; }
+    body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, Helvetica, sans-serif; padding: 0; margin: 0; }
+  .sticker { width: 100%; max-width: 376px; margin: 0 auto 20px; border: 2px solid #000; overflow: hidden; page-break-inside: avoid; }
+  @media print { .sticker { margin: 0 auto; } }
+  .header { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 2px solid #000; background: #fff; }
+  .header-logo { width: 24px; height: 24px; flex-shrink: 0; }
+  .header-logo img { width: 100%; height: 100%; object-fit: contain; }
+  .header-company { font-size: 12px; font-weight: 900; color: #000; letter-spacing: 1px; text-transform: uppercase; line-height: 1.2; }
+  .header-sub { font-size: 7px; color: #666; letter-spacing: 1.5px; text-transform: uppercase; font-weight: 600; }
+  .content { display: flex; border-bottom: 2px solid #000; }
+  .data-side { flex: 1; min-width: 0; }
+  .qr-side { width: 130px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 6px; border-left: 1px solid #999; }
+  .qr-side img { width: 110px; height: 110px; image-rendering: pixelated; }
+  .qr-label { font-size: 6px; color: #666; text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; font-weight: 700; }
+  .data-table { width: 100%; border-collapse: collapse; }
+  .data-table td { padding: 3px 8px; font-size: 11px; border-bottom: 1px solid #ccc; vertical-align: middle; line-height: 1.3; }
+  .data-table .lbl { width: 35%; font-weight: 800; font-size: 8px; text-transform: uppercase; letter-spacing: 0.5px; color: #333; border-right: 1px solid #ccc; }
+  .data-table .val { font-weight: 600; color: #000; word-break: break-word; }
+  .pkg-row td { border-bottom: 1px solid #999; }
+  .pkg-row .lbl { font-weight: 900; color: #000; }
+  .pkg-row .val { font-weight: 900; font-size: 13px; font-family: 'Courier New', monospace; color: #000; letter-spacing: 1px; }
+  .qty-row td { border-top: 2px solid #000; border-bottom: none; }
+  .qty-row .lbl { font-weight: 900; font-size: 9px; color: #000; }
+  .qty-row .val { font-weight: 900; font-size: 20px; color: #000; letter-spacing: 0.5px; }
+  .footer { text-align: center; font-size: 6px; color: #888; padding: 2px 6px; letter-spacing: 0.5px; text-transform: uppercase; }
+</style></head><body>
+${stickerPages}
+<script>setTimeout(()=>{window.print()},500)<\/script>
+</body></html>`);
+            printWindow.document.close();
+
+            // Wait for user to close print window, then mark all as printed
+            const boxIds = stickers.map(s => s.boxId);
+            const checkClosed = setInterval(async () => {
+                if (printWindow.closed) {
+                    clearInterval(checkClosed);
+                    try {
+                        // Mark all printed boxes in DB
+                        for (const boxId of boxIds) {
+                            await svc.markStickerPrinted(requestId, boxId);
+                        }
+                        await loadData();
+                        setMessage({ type: 'success', text: `All ${boxIds.length} sticker(s) printed successfully.` });
+                    } catch (err: any) {
+                        setMessage({ type: 'error', text: err.message || 'Failed to update print status' });
+                        await loadData();
+                    } finally {
+                        setSubmitting(false);
+                    }
+                }
+            }, 500);
+        } catch (err: any) {
+            setMessage({ type: 'error', text: err.message || 'Failed to prepare stickers for printing' });
+            setSubmitting(false);
+        }
     };
 
-    // Partial stock transfer — move printed boxes to Prod WHSE
-    const handleMovePackedStock = () => {
-        if (untransferredBoxes.length === 0) {
-            setMessage({ type: 'error', text: 'No printed boxes available for transfer. Print stickers first.' });
-            return;
-        }
-        setTransferType('partial');
+    // ============================================================================
+    // MOVE TO FI WAREHOUSE — Partial/Full stock transfer
+    // Transfers all PRINTED + NOT YET TRANSFERRED boxes
+    // ============================================================================
+
+    const handleMoveToFIWarehouse = () => {
         setShowTransferConfirm(true);
     };
 
-    // Complete packing — validate and transfer remaining
-    const handleCompletePacking = () => {
-        if (!canComplete) {
-            setMessage({ type: 'error', text: 'All boxes must be filled and all stickers printed before completing.' });
-            return;
-        }
-        setTransferType('complete');
-        setShowTransferConfirm(true);
-    };
-
-    // Confirm stock transfer
     const handleConfirmTransfer = async () => {
-        setShowTransferConfirm(false);
         setSubmitting(true);
         setMessage(null);
         try {
-            if (transferType === 'complete') {
-                await svc.completePacking(requestId);
-                setMessage({ type: 'success', text: 'Packing completed. All stock has been transferred to Prod WHSE.' });
-            } else {
-                const result = await svc.transferPackedStock(requestId);
-                if (result.isComplete) {
-                    setMessage({ type: 'success', text: `All stock transferred to Prod WHSE — ${result.transferredQty} PCS in ${result.boxesTransferred} box(es). Packing completed.` });
-                } else {
-                    setMessage({ type: 'success', text: `${result.transferredQty} PCS moved to Prod WHSE (${result.boxesTransferred} box(es)). Remaining stock can be transferred after packing more boxes.` });
-                }
-            }
+            // Transfer all printed but untransferred boxes
+            const result = await svc.transferPackedStock(requestId);
+            setShowTransferConfirm(false);
             await loadData();
+
+            if (result.isComplete) {
+                setMessage({ type: 'success', text: `All stock moved to FG Warehouse — ${result.transferredQty} PCS in ${result.boxesTransferred} box(es). Record is now completed.` });
+            } else {
+                setMessage({ type: 'success', text: `Transferred ${result.transferredQty} PCS (${result.boxesTransferred} box(es)) to FG Warehouse. Print remaining stickers to transfer more.` });
+            }
         } catch (err: any) {
-            setMessage({ type: 'error', text: err.message || 'Failed to transfer stock' });
-        } finally { setSubmitting(false); }
+            setMessage({ type: 'error', text: err.message || 'Failed to move stock to FG Warehouse' });
+        } finally {
+            setSubmitting(false);
+        }
     };
+
+    // ============================================================================
+    // COMPUTED VALUES
+    // ============================================================================
+
+    if (loading || !request) {
+        return (
+            <div style={{ padding: 48, textAlign: 'center' }}>
+                <div style={{
+                    width: 36, height: 36, border: '3px solid #e5e7eb', borderTopColor: '#1e3a8a',
+                    borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 12px',
+                }} />
+                <div style={{ fontSize: 14, color: '#6b7280' }}>Loading sticker data...</div>
+                <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+            </div>
+        );
+    }
+
+    const statusCfg = PACKING_STATUS_CONFIG[request.status] || { color: '#6b7280', bg: '#f3f4f6', label: request.status };
+    const isCompleted = request.status === 'COMPLETED';
+    const isRejected = request.status === 'REJECTED';
+
+    const totalQty = Number(request.total_packed_qty);
+    const allStickersPrinted = boxes.length > 0 && boxes.every(b => b.sticker_printed);
+    const unprintedCount = boxes.filter(b => !b.sticker_printed).length;
+    const printedCount = boxes.filter(b => b.sticker_printed).length;
+    const transferredCount = boxes.filter(b => b.is_transferred).length;
+
+    // Eligible boxes = sticker printed + not yet transferred
+    const eligibleBoxes = boxes.filter(b => b.sticker_printed && !b.is_transferred);
+    const eligibleQty = eligibleBoxes.reduce((s, b) => s + Number(b.box_qty), 0);
+
+    // "Move to FG Warehouse" is enabled when:
+    // 1. Status is NOT completed or rejected
+    // 2. At least 1 box has its sticker PRINTED and is NOT yet transferred
+    const canMoveToFI = !isCompleted && !isRejected && eligibleBoxes.length > 0;
 
     // ============================================================================
     // STYLES
     // ============================================================================
 
-    const cellStyle: React.CSSProperties = {
-        padding: '10px 14px', fontSize: 13, borderBottom: '1px solid #f0f0f0', color: '#111827',
+    const sectionTitleStyle: React.CSSProperties = {
+        fontSize: 11, fontWeight: 700, color: '#374151', textTransform: 'uppercase',
+        letterSpacing: '0.8px', marginBottom: 12, paddingBottom: 8,
+        borderBottom: '2px solid #e5e7eb',
     };
     const headerCellStyle: React.CSSProperties = {
-        ...cellStyle, fontWeight: 700, fontSize: 11, color: '#374151',
-        textTransform: 'uppercase' as const, letterSpacing: '0.5px',
-        background: '#f9fafb', borderBottom: '2px solid #e5e7eb',
+        padding: '10px 14px', textAlign: 'left', fontSize: 11,
+        fontWeight: 700, color: '#374151', textTransform: 'uppercase',
+        letterSpacing: '0.4px', borderBottom: '2px solid #e5e7eb',
+        whiteSpace: 'nowrap', background: '#f9fafb',
     };
-    const sectionTitleStyle: React.CSSProperties = {
-        fontSize: 11, fontWeight: 700, color: '#6b7280',
-        textTransform: 'uppercase' as const, letterSpacing: '1px', marginBottom: 12,
-        paddingBottom: 8, borderBottom: '1px solid #e5e7eb',
+    const cellStyle: React.CSSProperties = {
+        padding: '10px 14px', fontSize: 13, color: '#111827',
+        borderBottom: '1px solid #f3f4f6',
     };
-    const labelStyle: React.CSSProperties = {
-        fontSize: 11, fontWeight: 700, color: '#6b7280',
-        textTransform: 'uppercase' as const, letterSpacing: '0.5px', marginBottom: 2,
+    const infoLabelStyle: React.CSSProperties = {
+        fontSize: 10, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase',
+        letterSpacing: '0.3px', marginBottom: 3,
     };
-    const valueStyle: React.CSSProperties = { fontSize: 14, fontWeight: 600, color: '#111827' };
-    const btnBase: React.CSSProperties = {
-        padding: '7px 14px', borderRadius: 3, fontSize: 12, fontWeight: 600,
-        cursor: 'pointer', border: '1px solid #d1d5db', background: '#fff',
-        color: '#374151', transition: 'all 0.1s',
-    };
-    const btnPrimary: React.CSSProperties = {
-        ...btnBase, background: '#1e3a8a', color: '#fff', border: '1px solid #1e3a8a',
-    };
-    const btnSuccess: React.CSSProperties = {
-        ...btnBase, background: '#16a34a', color: '#fff', border: '1px solid #16a34a',
-    };
-    const btnWarning: React.CSSProperties = {
-        ...btnBase, background: '#d97706', color: '#fff', border: '1px solid #d97706',
-    };
-    const btnDanger: React.CSSProperties = {
-        ...btnBase, background: '#fff', color: '#dc2626', border: '1px solid #fca5a5',
+    const infoValueStyle: React.CSSProperties = {
+        fontSize: 13, fontWeight: 600, color: '#111827',
     };
 
     // ============================================================================
-    // LOADING / ERROR
+    // LOADING STATE — show enterprise spinner while data loads
     // ============================================================================
 
-    if (loading && !request) {
+    if (loading || !request) {
         return (
-            <div style={{ padding: 60, textAlign: 'center', color: '#6b7280', fontSize: 14 }}>
-                Loading packing request...
+            <div style={{ paddingBottom: 40 }}>
+                <button onClick={onBack} style={{
+                    padding: '6px 14px', borderRadius: 6, border: '1px solid #d1d5db',
+                    background: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: 4, marginBottom: 16,
+                }}>
+                    ← Back
+                </button>
+                <LoadingSpinner size={48} message="Loading sticker generation details…" />
             </div>
         );
     }
-
-    if (!request) {
-        return (
-            <div style={{ padding: 40, textAlign: 'center' }}>
-                <p style={{ color: '#dc2626', fontSize: 14 }}>Packing request not found.</p>
-                <button onClick={onBack} style={{ ...btnBase, marginTop: 16 }}>Back</button>
-            </div>
-        );
-    }
-
-    // ============================================================================
-    // RENDER
-    // ============================================================================
 
     return (
-        <div>
-            {/* ──────────────────────────────────────────────────────────
-                STICKY HEADER BAR
-                ─ margin-top: -32px → fills <main>'s 32px padding zone
-                ─ padding-top: 48px → 32px to fill gap + 16px real spacing
-                ─ top: -32px → hides the filler above viewport when stuck
-                ─ Same width as content below (no horizontal stretch)
-               ────────────────────────────────────────────────────────── */}
+        <div style={{ paddingBottom: 40 }}>
+            {/* STICKY HEADER BAR — top: -32px offsets the parent <main> padding so bar sits flush at scroll top */}
             <div style={{
-                position: 'sticky', top: -28, zIndex: 100,
-                background: '#ffffff',
-                borderBottom: '2px solid #e5e7eb',
-                borderRadius: '0 0 12px 12px',
-                padding: '28px 16px 14px',
-                margin: '-28px 0 20px',
-                display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.06)',
+                position: 'sticky', top: -32, zIndex: 100, backgroundColor: '#fff',
+                border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 20px',
+                marginBottom: 12,
+                display: 'flex', alignItems: 'center', gap: 16,
+                boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
             }}>
                 <button onClick={onBack} style={{
-                    ...btnBase, fontWeight: 700, color: '#1e3a8a',
-                    display: 'flex', alignItems: 'center', gap: 6,
-                    padding: '8px 14px', borderRadius: 6,
-                    border: '1px solid #dbeafe', background: '#eff6ff',
-                    transition: 'all 0.15s',
+                    padding: '6px 14px', borderRadius: 6, border: '1px solid #d1d5db',
+                    background: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: 4,
                 }}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="15 18 9 12 15 6" />
-                    </svg>
-                    Back
+                    ← Back
                 </button>
-                <div style={{ flex: 1, minWidth: 200 }}>
-                    <div style={{ fontSize: 18, fontWeight: 800, color: '#111827', letterSpacing: '-0.3px' }}>
+                <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#111827', fontFamily: 'monospace' }}>
                         {request.movement_number}
                     </div>
-                    <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
-                        Packing for {request.item_code} — {request.item_name || ''}
+                    <div style={{ fontSize: 12, color: '#6b7280' }}>
+                        Sticker Generation — {request.item_name || request.item_code}
                     </div>
                 </div>
                 <span style={{
-                    padding: '6px 16px', borderRadius: 4, fontSize: 12,
-                    fontWeight: 700, color: statusCfg.color, backgroundColor: statusCfg.bg,
-                    border: `1px solid ${statusCfg.color}22`,
+                    padding: '4px 14px', borderRadius: 12, fontSize: 11,
+                    fontWeight: 600, color: statusCfg.color, backgroundColor: statusCfg.bg,
+                    border: `1px solid ${statusCfg.color}30`, textTransform: 'uppercase',
+                    letterSpacing: '0.3px', minWidth: 95, display: 'inline-flex',
+                    alignItems: 'center', justifyContent: 'center',
                 }}>
-                    {statusCfg.label.toUpperCase()}
+                    {statusCfg.label}
                 </span>
             </div>
 
-            {/* Message Banner */}
+            {/* MESSAGE BANNER */}
             {message && (
                 <div style={{
-                    padding: '10px 16px', borderRadius: 3, marginBottom: 16, fontSize: 13,
-                    fontWeight: 500, display: 'flex', alignItems: 'center', gap: 8,
-                    color: message.type === 'error' ? '#dc2626' : message.type === 'info' ? '#2563eb' : '#16a34a',
-                    backgroundColor: message.type === 'error' ? '#fef2f2' : message.type === 'info' ? '#eff6ff' : '#f0fdf4',
-                    border: `1px solid ${message.type === 'error' ? '#fca5a5' : message.type === 'info' ? '#93c5fd' : '#86efac'}`,
+                    margin: '12px 0', padding: '12px 16px', borderRadius: 8,
+                    background: message.type === 'error' ? '#fef2f2' : message.type === 'success' ? '#f0fdf4' : '#eff6ff',
+                    color: message.type === 'error' ? '#dc2626' : message.type === 'success' ? '#16a34a' : '#2563eb',
+                    border: `1px solid ${message.type === 'error' ? '#fecaca' : message.type === 'success' ? '#bbf7d0' : '#bfdbfe'}`,
+                    fontSize: 13, fontWeight: 500,
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 }}>
-                    <span style={{ flex: 1 }}>{message.text}</span>
+                    <span>{message.text}</span>
                     <button onClick={() => setMessage(null)} style={{
-                        background: 'none', border: 'none', cursor: 'pointer',
-                        fontSize: 16, color: 'inherit', padding: '0 4px',
+                        background: 'none', border: 'none', cursor: 'pointer', fontSize: 16,
+                        color: 'inherit', fontWeight: 700, padding: '0 4px',
                     }}>×</button>
                 </div>
             )}
 
-            {/* Cancelled Banner */}
-            {isRejected && (
-                <div style={{
-                    padding: '14px 20px', borderRadius: 3, marginBottom: 20,
-                    background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b',
-                }}>
-                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Movement Rejected</div>
-                    <div style={{ fontSize: 13 }}>
-                        No stock was transferred. Supervisor: {request.approved_by_name || '—'}
-                        {request.supervisor_remarks && <> — "{request.supervisor_remarks}"</>}
-                    </div>
-                </div>
-            )}
-
-            {/* Completed Banner */}
+            {/* COMPLETED BANNER */}
             {isCompleted && (
                 <div style={{
-                    padding: '14px 20px', borderRadius: 3, marginBottom: 20,
-                    background: '#f0fdf4', border: '1px solid #86efac', color: '#166534',
+                    margin: '16px 0 0', padding: '12px 16px', borderRadius: 6,
+                    background: '#fff', border: '1px solid #e5e7eb',
+                    borderLeft: '4px solid #16a34a',
+                    display: 'flex', alignItems: 'center', gap: 10,
                 }}>
-                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Packing Completed — Stock in Prod WHSE</div>
-                    <div style={{ fontSize: 13 }}>
-                        All {totalQty} PCS packed into {boxes.length} box(es) and transferred to Production Warehouse.
-                        Completed on {request.completed_at ? new Date(request.completed_at).toLocaleString('en-IN') : '—'}.
+                    <div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>
+                            Completed — All Stock in FG Warehouse
+                        </div>
+                        <div style={{ fontSize: 12, color: '#6b7280' }}>
+                            {totalQty} PCS transferred on {request.completed_at ? new Date(request.completed_at).toLocaleString('en-IN') : '—'}. This record is locked.
+                        </div>
                     </div>
                 </div>
             )}
 
-            {/* Partial Transfer Info Banner */}
-            {isPartiallyTransferred && (
+            {/* GENERATING BANNER */}
+            {generating && (
                 <div style={{
-                    padding: '14px 20px', borderRadius: 3, marginBottom: 20,
-                    background: '#fffbeb', border: '1px solid #fcd34d', color: '#92400e',
+                    margin: '12px 0', padding: '14px 18px', borderRadius: 8,
+                    background: '#eff6ff', border: '1px solid #bfdbfe',
+                    display: 'flex', alignItems: 'center', gap: 10,
                 }}>
-                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Partial Stock Transfer</div>
-                    <div style={{ fontSize: 13 }}>
-                        {transferredQty} of {totalQty} PCS have been transferred to Prod WHSE.
-                        Continue packing remaining {totalQty - transferredQty} PCS or move completed boxes.
-                    </div>
+                    <div style={{
+                        width: 20, height: 20, border: '2px solid #93c5fd', borderTopColor: '#1e3a8a',
+                        borderRadius: '50%', animation: 'spin 0.8s linear infinite',
+                    }} />
+                    <span style={{ fontSize: 13, color: '#1e40af', fontWeight: 600 }}>
+                        Auto-generating box stickers from packing specifications...
+                    </span>
                 </div>
             )}
 
-            {/* ──────────────────────────────────────────────────────────
-                DOCUMENT DETAILS — Section-wise layout
-               ────────────────────────────────────────────────────────── */}
+            {/* DOCUMENT DETAILS */}
             {!isRejected && (
-                <Card>
-                    <div style={{
-                        fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 16,
-                        textTransform: 'uppercase', letterSpacing: '0.5px',
-                        paddingBottom: 8, borderBottom: '2px solid #e5e7eb',
-                    }}>
-                        DOCUMENT DETAILS
-                    </div>
-
-                    {/* Section 1: Item Information — 5 columns */}
+                <Card style={{ marginTop: 16 }}>
+                    {/* Item Information */}
                     <div style={{ marginBottom: 20 }}>
                         <div style={sectionTitleStyle}>Item Information</div>
-                        <div style={{
-                            display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)',
-                            gap: '14px 24px',
-                        }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '14px 24px' }}>
                             <div>
-                                <div style={labelStyle}>Item Code</div>
-                                <div style={valueStyle}>{request.item_code}</div>
+                                <div style={infoLabelStyle}>Item Code</div>
+                                <div style={{ ...infoValueStyle, fontFamily: 'monospace' }}>{request.item_code}</div>
                             </div>
                             <div>
-                                <div style={labelStyle}>Description</div>
-                                <div style={valueStyle}>{request.item_name || '—'}</div>
+                                <div style={infoLabelStyle}>Description</div>
+                                <div style={infoValueStyle}>{request.item_name || '—'}</div>
                             </div>
                             <div>
-                                <div style={labelStyle}>Part Number</div>
-                                <div style={valueStyle}>{request.part_number || '—'}</div>
+                                <div style={infoLabelStyle}>Part Number</div>
+                                <div style={{ ...infoValueStyle, fontFamily: 'monospace' }}>{request.part_number || '—'}</div>
                             </div>
                             <div>
-                                <div style={labelStyle}>MSL No</div>
-                                <div style={valueStyle}>{request.master_serial_no || '—'}</div>
+                                <div style={infoLabelStyle}>MSL No</div>
+                                <div style={{ ...infoValueStyle, fontFamily: 'monospace' }}>{request.master_serial_no || '—'}</div>
                             </div>
                             <div>
-                                <div style={labelStyle}>Revision</div>
-                                <div style={{ ...valueStyle, color: request.revision ? '#7c3aed' : '#9ca3af' }}>{request.revision || '—'}</div>
+                                <div style={infoLabelStyle}>Revision</div>
+                                <div style={infoValueStyle}>{request.revision || '—'}</div>
                             </div>
                         </div>
                     </div>
 
-                    {/* Section 2: Approval & Authorization — 5 columns */}
+                    {/* Approval & Authorization */}
                     <div>
                         <div style={sectionTitleStyle}>Approval & Authorization</div>
-                        <div style={{
-                            display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)',
-                            gap: '14px 24px',
-                        }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '14px 24px' }}>
                             <div>
-                                <div style={labelStyle}>Requested By</div>
-                                <div style={valueStyle}>{request.created_by_name || '—'}</div>
+                                <div style={infoLabelStyle}>Requested By</div>
+                                <div style={infoValueStyle}>{request.created_by_name || '—'}</div>
                             </div>
                             <div>
-                                <div style={labelStyle}>Created</div>
-                                <div style={valueStyle}>{new Date(request.created_at).toLocaleString('en-IN')}</div>
+                                <div style={infoLabelStyle}>Created</div>
+                                <div style={{ fontSize: 12, color: '#6b7280' }}>
+                                    {request.created_at ? new Date(request.created_at).toLocaleString('en-IN') : '—'}
+                                </div>
                             </div>
                             <div>
-                                <div style={labelStyle}>Approved By</div>
-                                <div style={valueStyle}>{request.approved_by_name || '—'}</div>
+                                <div style={infoLabelStyle}>Approved By</div>
+                                <div style={infoValueStyle}>{request.approved_by_name || '—'}</div>
                             </div>
                             <div>
-                                <div style={labelStyle}>Approved Qty</div>
-                                <div style={{ ...valueStyle, fontSize: 18, color: '#1e3a8a' }}>{totalQty} PCS</div>
+                                <div style={infoLabelStyle}>Approved Qty</div>
+                                <div style={{ ...infoValueStyle, color: '#1e40af', fontSize: 16 }}>
+                                    {totalQty} PCS
+                                </div>
                             </div>
                             <div>
-                                <div style={labelStyle}>Supervisor Remarks</div>
-                                <div style={{ ...valueStyle, fontStyle: request.supervisor_remarks ? 'italic' : 'normal', color: request.supervisor_remarks ? '#374151' : '#9ca3af' }}>
-                                    {request.supervisor_remarks ? `"${request.supervisor_remarks}"` : '—'}
+                                <div style={infoLabelStyle}>Supervisor Remarks</div>
+                                <div style={{ fontSize: 12, color: '#6b7280' }}>
+                                    {request.supervisor_remarks || '—'}
                                 </div>
                             </div>
                         </div>
@@ -507,334 +589,279 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                 </Card>
             )}
 
-            {/* Packing Progress + Stock Transfer Status */}
-            {!isRejected && (canPack || isCompleted) && (
-                <div style={{ marginTop: 16 }}>
-                    <Card>
+            {/* STICKER SUMMARY */}
+            {!isRejected && boxes.length > 0 && (
+                <Card style={{ marginTop: 12 }}>
+                    <div style={{
+                        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                        gap: 16,
+                    }}>
                         <div style={{
-                            fontSize: 12, fontWeight: 700, color: '#374151', marginBottom: 12,
-                            textTransform: 'uppercase', letterSpacing: '0.5px',
-                            paddingBottom: 8, borderBottom: '1px solid #e5e7eb',
+                            padding: '14px 16px', borderRadius: 8, background: '#eff6ff',
+                            border: '1px solid #bfdbfe', textAlign: 'center',
                         }}>
-                            PACKING PROGRESS
+                            <div style={{ fontSize: 11, fontWeight: 600, color: '#1e40af', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.5px' }}>TOTAL BOXES</div>
+                            <div style={{ fontSize: 24, fontWeight: 800, color: '#1e3a8a' }}>{boxes.length}</div>
                         </div>
-                        <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap', marginBottom: 12 }}>
-                            <div>
-                                <span style={{ fontSize: 12, color: '#6b7280' }}>Packed: </span>
-                                <span style={{ fontWeight: 700, fontSize: 15, color: isFullyPacked ? '#16a34a' : '#d97706' }}>
-                                    {totalBoxQty} / {totalQty}
-                                </span>
-                            </div>
-                            <div>
-                                <span style={{ fontSize: 12, color: '#6b7280' }}>Boxes: </span>
-                                <span style={{ fontWeight: 700, fontSize: 15 }}>{boxes.length}</span>
-                            </div>
-                            <div>
-                                <span style={{ fontSize: 12, color: '#6b7280' }}>Remaining: </span>
-                                <span style={{ fontWeight: 700, fontSize: 15, color: remaining === 0 ? '#16a34a' : '#dc2626' }}>
-                                    {remaining}
-                                </span>
-                            </div>
-                            <div>
-                                <span style={{ fontSize: 12, color: '#6b7280' }}>Stickers: </span>
-                                <span style={{ fontWeight: 700, fontSize: 15 }}>
-                                    {boxes.filter(b => b.sticker_printed).length} / {boxes.length} printed
-                                </span>
-                            </div>
+                        <div style={{
+                            padding: '14px 16px', borderRadius: 8, background: '#f0fdf4',
+                            border: '1px solid #bbf7d0', textAlign: 'center',
+                        }}>
+                            <div style={{ fontSize: 11, fontWeight: 600, color: '#16a34a', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.5px' }}>PRINTED</div>
+                            <div style={{ fontSize: 24, fontWeight: 800, color: '#166534' }}>{printedCount}</div>
                         </div>
-                        {/* Packing Progress Bar */}
-                        <div style={{ marginBottom: 4 }}>
-                            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3, fontWeight: 600 }}>Packing</div>
-                            <div style={{ height: 6, borderRadius: 3, backgroundColor: '#e5e7eb', overflow: 'hidden' }}>
-                                <div style={{
-                                    height: '100%', borderRadius: 3, transition: 'width 0.4s ease',
-                                    width: `${progressPct}%`,
-                                    background: isFullyPacked ? '#16a34a' : '#3b82f6',
-                                }} />
-                            </div>
-                            <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2, textAlign: 'right' }}>
-                                {progressPct}% packed
-                            </div>
+                        <div style={{
+                            padding: '14px 16px', borderRadius: 8, background: '#fef2f2',
+                            border: '1px solid #fecaca', textAlign: 'center',
+                        }}>
+                            <div style={{ fontSize: 11, fontWeight: 600, color: '#dc2626', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.5px' }}>PENDING</div>
+                            <div style={{ fontSize: 24, fontWeight: 800, color: '#991b1b' }}>{unprintedCount}</div>
                         </div>
-                        {/* Stock Transfer Progress Bar */}
-                        <div style={{ marginTop: 8 }}>
-                            <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 3, fontWeight: 600 }}>Stock Transfer to Prod WHSE</div>
-                            <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 4 }}>
-                                <span style={{ fontSize: 12, color: '#374151', fontWeight: 600 }}>
-                                    {transferredQty} / {totalQty} PCS transferred
-                                </span>
-                                {hasUntransferred && (
-                                    <span style={{
-                                        fontSize: 11, color: '#d97706', fontWeight: 600,
-                                        padding: '2px 8px', borderRadius: 3, background: '#fffbeb',
-                                    }}>
-                                        {untransferredQty} PCS ready to move
-                                    </span>
-                                )}
-                            </div>
-                            <div style={{ height: 6, borderRadius: 3, backgroundColor: '#e5e7eb', overflow: 'hidden' }}>
-                                <div style={{
-                                    height: '100%', borderRadius: 3, transition: 'width 0.4s ease',
-                                    width: `${transferPct}%`,
-                                    background: transferPct >= 100 ? '#16a34a' : '#d97706',
-                                }} />
-                            </div>
-                            <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2, textAlign: 'right' }}>
-                                {transferPct}% transferred to Prod WHSE
-                            </div>
+                        <div style={{
+                            padding: '14px 16px', borderRadius: 8, background: '#f9fafb',
+                            border: '1px solid #e5e7eb', textAlign: 'center',
+                        }}>
+                            <div style={{ fontSize: 11, fontWeight: 600, color: '#374151', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.5px' }}>TOTAL QTY</div>
+                            <div style={{ fontSize: 24, fontWeight: 800, color: '#111827' }}>{totalQty}</div>
                         </div>
-                    </Card>
-                </div>
+                    </div>
+                </Card>
             )}
 
-            {/* Start Packing CTA */}
-            {isApproved && isOperator && (
+            {/* TABS */}
+            {!isRejected && boxes.length > 0 && (
                 <div style={{
-                    marginTop: 16, textAlign: 'center', padding: '28px 20px',
-                    border: '1px dashed #3b82f6', borderRadius: 4, background: '#f8fafc',
+                    display: 'flex', gap: 0, marginTop: 16,
+                    borderBottom: '2px solid #e5e7eb',
                 }}>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: '#1e40af', marginBottom: 8 }}>
-                        Movement approved — {totalQty} PCS ready for packing
-                    </div>
-                    <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 6 }}>
-                        Stock is in <b>Production</b>. Start packing to split into boxes, generate stickers,
-                    </div>
-                    <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>
-                        and then transfer stock to <b>Prod WHSE</b> when ready.
-                    </div>
-                    <button onClick={handleStartPacking} disabled={submitting}
-                        style={{
-                            ...btnPrimary, padding: '12px 32px', fontSize: 14,
-                            opacity: submitting ? 0.6 : 1,
-                            cursor: submitting ? 'not-allowed' : 'pointer',
-                        }}>
-                        {submitting ? 'Starting...' : 'Start Packing'}
+                    <button onClick={() => setActiveTab('stickers')} style={{
+                        padding: '10px 20px', border: 'none', cursor: 'pointer',
+                        fontSize: 13, fontWeight: activeTab === 'stickers' ? 700 : 500,
+                        color: activeTab === 'stickers' ? '#1e3a8a' : '#6b7280',
+                        background: 'none',
+                        borderBottom: activeTab === 'stickers' ? '2px solid #1e3a8a' : '2px solid transparent',
+                        marginBottom: -2,
+                    }}>
+                        Stickers ({boxes.length})
+                    </button>
+                    <button onClick={() => setActiveTab('audit')} style={{
+                        padding: '10px 20px', border: 'none', cursor: 'pointer',
+                        fontSize: 13, fontWeight: activeTab === 'audit' ? 700 : 500,
+                        color: activeTab === 'audit' ? '#1e3a8a' : '#6b7280',
+                        background: 'none',
+                        borderBottom: activeTab === 'audit' ? '2px solid #1e3a8a' : '2px solid transparent',
+                        marginBottom: -2,
+                    }}>
+                        Activity Log ({auditLogs.length})
                     </button>
                 </div>
             )}
 
-            {/* Tabs */}
-            {!isRejected && (canPack || isCompleted) && (
-                <div style={{
-                    display: 'flex', gap: 0, borderBottom: '2px solid #e5e7eb',
-                    marginTop: 20, marginBottom: 0,
-                }}>
-                    {([
-                        { key: 'boxes' as const, label: 'Boxes' },
-                        { key: 'audit' as const, label: 'Activity Log' },
-                    ]).map(tab => (
-                        <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
-                            padding: '10px 20px', border: 'none', cursor: 'pointer',
-                            fontSize: 13, fontWeight: activeTab === tab.key ? 700 : 500,
-                            color: activeTab === tab.key ? '#1e3a8a' : '#6b7280',
-                            borderBottom: activeTab === tab.key ? '2px solid #1e3a8a' : '2px solid transparent',
-                            background: 'none', marginBottom: -2,
-                        }}>
-                            {tab.label}
-                        </button>
-                    ))}
-                </div>
-            )}
-
-            {/* BOXES TAB */}
-            {activeTab === 'boxes' && !isRejected && (canPack || isCompleted) && (
+            {/* STICKERS TAB */}
+            {activeTab === 'stickers' && !isRejected && boxes.length > 0 && (
                 <Card style={{ marginTop: 0, borderTopLeftRadius: 0, borderTopRightRadius: 0, borderTop: 'none' }}>
-                    {/* Add Box Form */}
-                    {canPack && isOperator && remaining > 0 && (
-                        <div style={{
-                            display: 'flex', gap: 10, alignItems: 'center',
-                            padding: '12px 16px', borderBottom: '1px solid #e5e7eb',
-                            backgroundColor: '#fafafa',
-                        }}>
-                            <label style={{ fontSize: 13, fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>
-                                Add Box:
-                            </label>
-                            <input
-                                type="number" min={1} max={remaining}
-                                value={addQty || ''} onChange={e => setAddQty(Number(e.target.value))}
-                                placeholder={`Qty (max ${remaining})`}
-                                style={{
-                                    width: 120, padding: '7px 12px', borderRadius: 3,
-                                    border: '1px solid #d1d5db', fontSize: 13,
-                                }}
-                                onKeyDown={e => { if (e.key === 'Enter') handleAddBox(); }}
-                            />
-                            <button onClick={handleAddBox} disabled={submitting || addQty <= 0}
-                                style={{
-                                    ...btnPrimary,
-                                    opacity: (submitting || addQty <= 0) ? 0.5 : 1,
-                                    cursor: (submitting || addQty <= 0) ? 'not-allowed' : 'pointer',
-                                }}>
-                                {submitting ? 'Adding...' : 'Add'}
-                            </button>
-                            <span style={{ fontSize: 11, color: '#9ca3af', marginLeft: 'auto' }}>
-                                Remaining: {remaining} PCS
-                            </span>
-                        </div>
-                    )}
+                    {/* Sticker Table */}
+                    <div style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                            <colgroup>
+                                <col style={{ width: '5%' }} />
+                                <col style={{ width: '16%' }} />
+                                <col style={{ width: '16%' }} />
+                                <col style={{ width: '7%' }} />
+                                <col style={{ width: '10%' }} />
+                                <col style={{ width: '13%' }} />
+                                <col style={{ width: '15%' }} />
+                                <col style={{ width: '12%' }} />
+                            </colgroup>
+                            <thead>
+                                <tr>
+                                    <th style={{ ...headerCellStyle, textAlign: 'center' }}>S.No</th>
+                                    <th style={headerCellStyle}>Unique Box ID</th>
+                                    <th style={headerCellStyle}>Movement ID</th>
+                                    <th style={{ ...headerCellStyle, textAlign: 'center' }}>Box #</th>
+                                    <th style={{ ...headerCellStyle, textAlign: 'right' }}>Qty / Box</th>
+                                    <th style={{ ...headerCellStyle, textAlign: 'center' }}>Print Status</th>
+                                    <th style={{ ...headerCellStyle, textAlign: 'center' }}>Transfer</th>
+                                    <th style={{ ...headerCellStyle, textAlign: 'center' }}>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {boxes.map((box, idx) => {
+                                    const packingId = box.packing_id || generatePackingId(box.id);
+                                    const isPrinted = box.sticker_printed;
+                                    const isTransferred = box.is_transferred;
 
-                    {/* Box Table */}
-                    {boxes.length === 0 ? (
-                        <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af', fontSize: 14 }}>
-                            {canPack ? 'No boxes yet. Use the form above to add boxes.' : 'No boxes recorded.'}
-                        </div>
-                    ) : (
-                        <div style={{ overflowX: 'auto' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
-                                <colgroup>
-                                    <col style={{ width: '7%' }} />
-                                    <col style={{ width: '16%' }} />
-                                    <col style={{ width: '11%' }} />
-                                    <col style={{ width: '10%' }} />
-                                    <col style={{ width: '13%' }} />
-                                    <col style={{ width: '22%' }} />
-                                    <col style={{ width: '21%' }} />
-                                </colgroup>
-                                <thead>
-                                    <tr>
-                                        {['Box #', 'Packing ID', 'Quantity', 'Sticker', 'Transfer', 'Created', 'Actions'].map(h => (
-                                            <th key={h} style={{
-                                                ...headerCellStyle,
-                                                padding: '10px 12px',
-                                                textAlign: h === 'Actions' ? 'center' : 'left',
-                                            }}>{h}</th>
-                                        ))}
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {boxes.map(box => {
-                                        const pkgId = box.packing_id || generatePackingId(box.id);
-                                        return (
-                                            <tr key={box.id}
-                                                onMouseEnter={e => (e.currentTarget.style.background = '#fafafa')}
-                                                onMouseLeave={e => (e.currentTarget.style.background = '')}
-                                            >
-                                                <td style={{ ...cellStyle, fontWeight: 800, fontSize: 15, color: '#1e3a8a', padding: '10px 12px' }}>
-                                                    #{box.box_number}
-                                                </td>
-                                                <td style={{ ...cellStyle, fontWeight: 700, fontSize: 12, color: '#7c3aed', fontFamily: 'monospace', padding: '10px 12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                    {pkgId}
-                                                </td>
-                                                <td style={{ ...cellStyle, fontWeight: 600, fontSize: 14, padding: '10px 12px' }}>
-                                                    {box.box_qty} PCS
-                                                </td>
-                                                <td style={{ ...cellStyle, padding: '10px 12px' }}>
+                                    return (
+                                        <tr key={box.id}
+                                            onMouseEnter={e => { e.currentTarget.style.background = '#fafafa'; }}
+                                            onMouseLeave={e => { e.currentTarget.style.background = ''; }}
+                                        >
+                                            <td style={{ ...cellStyle, textAlign: 'center', fontWeight: 600, color: '#6b7280' }}>
+                                                {idx + 1}
+                                            </td>
+                                            <td style={{ ...cellStyle, fontWeight: 700, fontFamily: 'monospace', color: '#1e3a8a' }}>
+                                                {packingId}
+                                            </td>
+                                            <td style={{ ...cellStyle, fontFamily: 'monospace', fontSize: 12, color: '#6b7280' }}>
+                                                {request.movement_number}
+                                            </td>
+                                            <td style={{ ...cellStyle, textAlign: 'center', fontWeight: 600 }}>
+                                                {box.box_number}
+                                            </td>
+                                            <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 700, fontFamily: 'monospace' }}>
+                                                {box.box_qty} PCS
+                                            </td>
+                                            <td style={{ ...cellStyle, textAlign: 'center' }}>
+                                                {isPrinted ? (
                                                     <span style={{
-                                                        padding: '3px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700,
-                                                        color: box.sticker_printed ? '#16a34a' : '#d97706',
-                                                        backgroundColor: box.sticker_printed ? '#f0fdf4' : '#fffbeb',
+                                                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                                                        padding: '3px 10px', borderRadius: 12,
+                                                        background: '#f0fdf4', color: '#16a34a',
+                                                        fontSize: 11, fontWeight: 600,
+                                                        border: '1px solid #bbf7d0', minWidth: 80, justifyContent: 'center',
                                                     }}>
-                                                        {box.sticker_printed ? 'Printed' : 'Pending'}
+                                                        Printed
                                                     </span>
-                                                </td>
-                                                <td style={{ ...cellStyle, padding: '10px 12px' }}>
+                                                ) : (
                                                     <span style={{
-                                                        padding: '3px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700,
-                                                        color: box.is_transferred ? '#16a34a' : '#6b7280',
-                                                        backgroundColor: box.is_transferred ? '#f0fdf4' : '#f9fafb',
+                                                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                                                        padding: '3px 10px', borderRadius: 12,
+                                                        background: '#fef2f2', color: '#dc2626',
+                                                        fontSize: 11, fontWeight: 600,
+                                                        border: '1px solid #fecaca', minWidth: 80, justifyContent: 'center',
                                                     }}>
-                                                        {box.is_transferred ? 'In Prod WHSE' : 'In Production'}
+                                                        Pending
                                                     </span>
-                                                </td>
-                                                <td style={{ ...cellStyle, fontSize: 12, color: '#6b7280', padding: '10px 12px' }}>
-                                                    {new Date(box.created_at).toLocaleString('en-IN')}
-                                                </td>
-                                                <td style={{ ...cellStyle, padding: '10px 12px', textAlign: 'center' }}>
-                                                    <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
-                                                        {(canPack || isCompleted) && (
-                                                            <button onClick={() => handlePrintSticker(box)}
-                                                                style={{
-                                                                    ...btnBase,
-                                                                    display: 'inline-flex', alignItems: 'center', gap: 4,
-                                                                    padding: '6px 12px', borderRadius: 5,
-                                                                    border: '1px solid #dbeafe', background: '#eff6ff',
-                                                                    color: '#1e3a8a', fontWeight: 600, fontSize: 12,
-                                                                    transition: 'all 0.15s',
-                                                                }}>
-                                                                🖨️ Print
-                                                            </button>
-                                                        )}
-                                                        {canPack && isOperator && !box.sticker_printed && !box.is_transferred && (
-                                                            <button onClick={() => handleDeleteBox(box.id)}
-                                                                style={btnDanger}>
-                                                                Delete
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                                <tfoot>
-                                    <tr style={{ background: '#f9fafb', borderTop: '2px solid #e5e7eb' }}>
-                                        <td style={{ ...cellStyle, fontWeight: 700, fontSize: 12, padding: '10px 12px' }}>TOTAL</td>
-                                        <td style={{ ...cellStyle, padding: '10px 12px' }}></td>
-                                        <td style={{ ...cellStyle, fontWeight: 700, fontSize: 14, padding: '10px 12px' }}>{totalBoxQty} PCS</td>
-                                        <td style={{ ...cellStyle, fontSize: 12, fontWeight: 600, padding: '10px 12px' }}>
-                                            {boxes.filter(b => b.sticker_printed).length} / {boxes.length} printed
-                                        </td>
-                                        <td style={{ ...cellStyle, fontSize: 12, fontWeight: 600, padding: '10px 12px' }}>
-                                            {boxes.filter(b => b.is_transferred).length} / {boxes.length} transferred
-                                        </td>
-                                        <td colSpan={2}></td>
-                                    </tr>
-                                </tfoot>
-                            </table>
-                        </div>
-                    )}
+                                                )}
+                                            </td>
+                                            <td style={{ ...cellStyle, textAlign: 'center' }}>
+                                                {isTransferred ? (
+                                                    <span style={{
+                                                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                                                        padding: '3px 10px', borderRadius: 12,
+                                                        background: '#f0fdf4', color: '#166534',
+                                                        fontSize: 11, fontWeight: 600,
+                                                        border: '1px solid #86efac', minWidth: 80, justifyContent: 'center',
+                                                    }}>
+                                                        In FG Warehouse
+                                                    </span>
+                                                ) : isPrinted ? (
+                                                    <span style={{
+                                                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                                                        padding: '3px 10px', borderRadius: 12,
+                                                        background: '#eff6ff', color: '#1e40af',
+                                                        fontSize: 11, fontWeight: 600,
+                                                        border: '1px solid #93c5fd', minWidth: 80, justifyContent: 'center',
+                                                    }}>
+                                                        Ready to Move
+                                                    </span>
+                                                ) : (
+                                                    <span style={{ fontSize: 11, color: '#9ca3af' }}>—</span>
+                                                )}
+                                            </td>
+                                            <td style={{ ...cellStyle, textAlign: 'center' }}>
+                                                <button
+                                                    onClick={() => handlePrintSticker(box)}
+                                                    disabled={false}
+                                                    style={{
+                                                        padding: '5px 14px', borderRadius: 5, border: 'none',
+                                                        background: isPrinted ? '#e5e7eb' : '#1e3a8a',
+                                                        color: isPrinted ? '#374151' : '#fff',
+                                                        fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                                                        opacity: 1,
+                                                        transition: 'all 0.15s',
+                                                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                                                    }}
+                                                >
+                                                    <Printer size={13} /> {isPrinted ? 'Reprint' : 'Print'}
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                            <tfoot>
+                                <tr style={{ background: '#f9fafb' }}>
+                                    <td colSpan={4} style={{ ...cellStyle, fontWeight: 700, borderTop: '2px solid #e5e7eb' }}>
+                                        TOTAL — {boxes.length} Box{boxes.length !== 1 ? 'es' : ''}
+                                    </td>
+                                    <td style={{ ...cellStyle, fontWeight: 800, textAlign: 'right', fontFamily: 'monospace', borderTop: '2px solid #e5e7eb' }}>
+                                        {boxes.reduce((s, b) => s + Number(b.box_qty), 0)} PCS
+                                    </td>
+                                    <td style={{ ...cellStyle, fontWeight: 600, textAlign: 'center', borderTop: '2px solid #e5e7eb' }}>
+                                        {printedCount}/{boxes.length}
+                                    </td>
+                                    <td style={{ ...cellStyle, fontWeight: 600, textAlign: 'center', borderTop: '2px solid #e5e7eb' }}>
+                                        {transferredCount}/{boxes.length}
+                                    </td>
+                                    <td style={{ ...cellStyle, borderTop: '2px solid #e5e7eb' }}></td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
 
-                    {/* Action Bar */}
-                    {canPack && isOperator && boxes.length > 0 && (
+                    {/* ACTION BAR */}
+                    {!isCompleted && (
                         <div style={{
-                            padding: '14px 16px', borderTop: '1px solid #e5e7eb',
-                            display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
+                            display: 'flex', flexWrap: 'wrap', alignItems: 'center',
+                            gap: 12, padding: '16px 0 4px',
+                            borderTop: '1px solid #e5e7eb', marginTop: 8,
                         }}>
-                            {boxes.some(b => !b.sticker_printed) && (
-                                <button onClick={handlePrintNextSticker} style={btnBase}>
-                                    Print Next Sticker
-                                </button>
-                            )}
-
-                            {/* Move Packed Stock Button — Partial Transfer */}
-                            {hasUntransferred && (
-                                <button onClick={handleMovePackedStock} disabled={submitting}
+                            {/* Print All Stickers */}
+                            {unprintedCount > 0 && (
+                                <button onClick={handlePrintAllStickers} disabled={submitting}
                                     style={{
-                                        ...btnWarning,
-                                        opacity: submitting ? 0.4 : 1,
-                                        cursor: submitting ? 'not-allowed' : 'pointer',
-                                    }}>
-                                    {submitting ? 'Moving...' : `Move ${untransferredQty} PCS to Prod WHSE`}
+                                        padding: '10px 20px', borderRadius: 6, border: 'none',
+                                        background: '#7c3aed', color: '#fff',
+                                        fontSize: 13, fontWeight: 700, cursor: submitting ? 'not-allowed' : 'pointer',
+                                        opacity: submitting ? 0.5 : 1, transition: 'all 0.15s',
+                                        display: 'flex', alignItems: 'center', gap: 6,
+                                    }}
+                                >
+                                    <Printer size={14} /> {submitting ? 'Printing...' : `Print All (${unprintedCount})`}
                                 </button>
                             )}
 
                             <div style={{ flex: 1 }} />
 
-                            {!isFullyPacked && (
-                                <span style={{ fontSize: 12, color: '#6b7280' }}>
-                                    Split all {totalQty} PCS across boxes to complete.
+                            {/* Status Message */}
+                            {eligibleBoxes.length > 0 && (
+                                <span style={{ fontSize: 12, color: '#1e40af', fontWeight: 600 }}>
+                                    {eligibleBoxes.length} box(es) ({eligibleQty} PCS) ready to move to FG Warehouse.
                                 </span>
                             )}
-                            {isFullyPacked && !allStickersPrinted && (
+                            {eligibleBoxes.length === 0 && unprintedCount > 0 && (
                                 <span style={{ fontSize: 12, color: '#d97706', fontWeight: 600 }}>
-                                    Print all stickers before completing. ({boxes.filter(b => !b.sticker_printed).length} pending)
+                                    Print sticker(s) to enable warehouse transfer.
                                 </span>
                             )}
-                            <button onClick={handleCompletePacking} disabled={submitting || !canComplete}
+                            {eligibleBoxes.length === 0 && unprintedCount === 0 && transferredCount === boxes.length && (
+                                <span style={{ fontSize: 12, color: '#16a34a', fontWeight: 600 }}>
+                                    All boxes transferred to FG Warehouse.
+                                </span>
+                            )}
+
+                            {/* Move to FG Warehouse Button */}
+                            <button onClick={handleMoveToFIWarehouse}
+                                disabled={!canMoveToFI || submitting}
                                 style={{
-                                    ...btnSuccess,
-                                    padding: '10px 24px', fontSize: 13,
-                                    opacity: (submitting || !canComplete) ? 0.4 : 1,
-                                    cursor: (submitting || !canComplete) ? 'not-allowed' : 'pointer',
-                                }}>
-                                {submitting ? 'Completing...' : 'Complete Packing'}
+                                    padding: '10px 24px', borderRadius: 6, border: 'none',
+                                    background: canMoveToFI ? '#16a34a' : '#e5e7eb',
+                                    color: canMoveToFI ? '#fff' : '#9ca3af',
+                                    fontSize: 13, fontWeight: 800, letterSpacing: '0.3px',
+                                    cursor: (canMoveToFI && !submitting) ? 'pointer' : 'not-allowed',
+                                    opacity: submitting ? 0.5 : 1, transition: 'all 0.15s',
+                                    display: 'flex', alignItems: 'center', gap: 6,
+                                }}
+                            >
+                                {submitting ? 'Moving...' : `Move to FG Warehouse (${eligibleBoxes.length})`}
                             </button>
                         </div>
                     )}
                 </Card>
             )}
 
-            {/* ACTIVITY LOG TAB — Human-readable, no UUIDs */}
+            {/* ACTIVITY LOG TAB */}
             {activeTab === 'audit' && !isRejected && (
                 <Card style={{ marginTop: 0, borderTopLeftRadius: 0, borderTopRightRadius: 0, borderTop: 'none' }}>
                     {auditLogs.length === 0 ? (
@@ -877,7 +904,7 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                 </Card>
             )}
 
-            {/* Stock Transfer Confirmation Modal */}
+            {/* TRANSFER CONFIRMATION MODAL */}
             {showTransferConfirm && (
                 <div style={{
                     position: 'fixed', inset: 0, zIndex: 10000,
@@ -885,14 +912,12 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                     alignItems: 'center', justifyContent: 'center',
                 }}>
                     <div style={{
-                        background: '#fff', borderRadius: 8, padding: 28, maxWidth: 520, width: '95%',
+                        background: '#fff', borderRadius: 12, padding: 28, maxWidth: 520, width: '95%',
                         boxShadow: '0 25px 50px rgba(0,0,0,0.25)',
                     }}>
                         {/* Header */}
-                        <div style={{
-                            fontSize: 16, fontWeight: 800, color: '#111827', marginBottom: 4,
-                        }}>
-                            {transferType === 'complete' ? 'Complete Packing & Transfer Stock' : 'Move Packed Stock to Prod WHSE'}
+                        <div style={{ fontSize: 18, fontWeight: 800, color: '#111827', marginBottom: 4 }}>
+                            Move Stock to FG Warehouse
                         </div>
                         <div style={{
                             fontSize: 12, color: '#6b7280', marginBottom: 20,
@@ -903,41 +928,27 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
 
                         {/* Transfer Details */}
                         <div style={{
-                            padding: '16px', borderRadius: 6, marginBottom: 20,
-                            background: transferType === 'complete' ? '#f0fdf4' : '#fffbeb',
-                            border: `1px solid ${transferType === 'complete' ? '#86efac' : '#fcd34d'}`,
+                            padding: '16px', borderRadius: 8, marginBottom: 20,
+                            background: '#f0fdf4', border: '1px solid #86efac',
                         }}>
-                            {transferType === 'complete' ? (
-                                <>
-                                    <div style={{ fontWeight: 700, fontSize: 14, color: '#166534', marginBottom: 8 }}>
-                                        Final Transfer — All Remaining Stock
-                                    </div>
-                                    <div style={{ fontSize: 13, color: '#15803d', marginBottom: 4 }}>
-                                        <b>{allBoxesTransferred ? 'All boxes already transferred.' : `${untransferredQty} PCS`}</b> will be moved from <b>Production</b> to <b>Prod WHSE</b>.
-                                    </div>
-                                    <div style={{ fontSize: 12, color: '#15803d' }}>
-                                        This will complete packing — {totalQty} PCS total in {boxes.length} box(es).
-                                    </div>
-                                </>
-                            ) : (
-                                <>
-                                    <div style={{ fontWeight: 700, fontSize: 14, color: '#92400e', marginBottom: 8 }}>
-                                        Partial Stock Transfer
-                                    </div>
-                                    <div style={{ fontSize: 13, color: '#92400e', marginBottom: 4 }}>
-                                        <b>{untransferredQty} PCS</b> ({untransferredBoxes.length} box{untransferredBoxes.length > 1 ? 'es' : ''}) will be moved from <b>Production</b> to <b>Prod WHSE</b>.
-                                    </div>
-                                    <div style={{ fontSize: 12, color: '#92400e' }}>
-                                        You can continue packing remaining items and transfer more later.
-                                    </div>
-                                </>
-                            )}
+                            <div style={{ fontWeight: 700, fontSize: 14, color: '#166534', marginBottom: 8 }}>
+                                Stock Transfer — {eligibleBoxes.length} Printed Box(es)
+                            </div>
+                            <div style={{ fontSize: 13, color: '#15803d', marginBottom: 4 }}>
+                                <b>{eligibleQty} PCS</b> in <b>{eligibleBoxes.length} box(es)</b> will be moved from <b>Production</b> to <b>FG Warehouse</b>.
+                            </div>
+                            <div style={{ fontSize: 12, color: '#15803d' }}>
+                                {eligibleBoxes.length === boxes.length - transferredCount
+                                    ? 'This will transfer all remaining boxes and complete the record.'
+                                    : `${unprintedCount} box(es) still have pending stickers. You can transfer them after printing.`
+                                }
+                            </div>
                         </div>
 
-                        {/* Box Summary */}
+                        {/* Summary */}
                         <div style={{
                             fontSize: 12, color: '#6b7280', marginBottom: 16,
-                            padding: '10px 14px', background: '#f9fafb', borderRadius: 4,
+                            padding: '10px 14px', background: '#f9fafb', borderRadius: 6,
                             border: '1px solid #e5e7eb',
                         }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -945,36 +956,38 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                                 <span style={{ fontWeight: 700, color: '#111827' }}>{totalQty} PCS</span>
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                                <span>Already in Prod WHSE:</span>
-                                <span style={{ fontWeight: 700, color: '#16a34a' }}>{transferredQty} PCS</span>
+                                <span>Ready to Transfer:</span>
+                                <span style={{ fontWeight: 700, color: '#1e40af' }}>{eligibleBoxes.length} box(es) — {eligibleQty} PCS</span>
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                                <span>To Transfer Now:</span>
-                                <span style={{ fontWeight: 700, color: '#d97706' }}>{untransferredQty} PCS</span>
+                                <span>Already Transferred:</span>
+                                <span style={{ fontWeight: 700, color: '#16a34a' }}>{transferredCount} box(es)</span>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                                <span>Pending Print:</span>
+                                <span style={{ fontWeight: 700, color: '#d97706' }}>{unprintedCount} box(es)</span>
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #e5e7eb', paddingTop: 4, marginTop: 4 }}>
-                                <span>After Transfer:</span>
-                                <span style={{ fontWeight: 700, color: '#111827' }}>{transferredQty + untransferredQty} / {totalQty} PCS in Prod WHSE</span>
+                                <span>Destination:</span>
+                                <span style={{ fontWeight: 700, color: '#1e3a8a' }}>FG Warehouse</span>
                             </div>
                         </div>
 
                         {/* Action Buttons */}
                         <div style={{ display: 'flex', gap: 10 }}>
                             <button onClick={() => setShowTransferConfirm(false)} style={{
-                                flex: 1, padding: '10px 16px', borderRadius: 4,
+                                flex: 1, padding: '10px 16px', borderRadius: 6,
                                 border: '1px solid #d1d5db', background: '#fff',
                                 fontWeight: 600, cursor: 'pointer', fontSize: 13,
                                 color: '#374151',
                             }}>Cancel</button>
                             <button onClick={handleConfirmTransfer} disabled={submitting} style={{
-                                flex: 1, padding: '10px 16px', borderRadius: 4,
-                                border: 'none',
-                                background: transferType === 'complete' ? '#16a34a' : '#d97706',
-                                color: '#fff',
+                                flex: 1, padding: '10px 16px', borderRadius: 6,
+                                border: 'none', background: '#16a34a', color: '#fff',
                                 fontWeight: 700, cursor: submitting ? 'not-allowed' : 'pointer', fontSize: 13,
                                 opacity: submitting ? 0.6 : 1,
                             }}>
-                                {submitting ? 'Processing...' : transferType === 'complete' ? 'Complete & Transfer Stock' : 'Move Stock to Prod WHSE'}
+                                {submitting ? 'Processing...' : 'Confirm & Move Stock'}
                             </button>
                         </div>
                     </div>
@@ -983,8 +996,11 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
 
             {/* Sticker Print Modal */}
             {stickerData && (
-                <StickerPrint sticker={stickerData} onClose={() => setStickerData(null)} onPrinted={handleStickerPrinted} />
+                <StickerPrint sticker={stickerData} onClose={() => { setStickerData(null); }} onPrinted={handleStickerPrinted} />
             )}
+
+            {/* Spinner CSS */}
+            <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
         </div>
     );
 }
