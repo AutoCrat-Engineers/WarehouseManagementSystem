@@ -5,10 +5,10 @@
 //   - Movement ID = primary reference for the packing request
 //   - Each BOX gets its own unique Packing ID (PKG-XXXXXXXX)
 //   - Stock does NOT move on supervisor approval
-//   - Stock moves from PRODUCTION → PROD WHSE only when operator
+//   - Stock moves from PRODUCTION → FI Warehouse only when operator
 //     explicitly triggers stock transfer (partial or complete)
 //   - Operator can do partial packing + partial stock transfer
-//   - "Complete Packing" → confirms stock transfer to Prod WHSE
+//   - "Complete Packing" → confirms stock transfer to FI Warehouse
 // ============================================================================
 
 // ============================================================================
@@ -19,8 +19,8 @@ export type PackingRequestStatus =
     | 'APPROVED'              // Supervisor approved — packing can begin, NO stock moved yet
     | 'REJECTED'              // Supervisor rejected — no stock movement
     | 'PACKING_IN_PROGRESS'   // Operator started packing — creating boxes
-    | 'PARTIALLY_TRANSFERRED' // Some boxes packed & stock partially moved to Prod WHSE
-    | 'COMPLETED';            // All boxes packed, all stock transferred to Prod WHSE
+    | 'PARTIALLY_TRANSFERRED' // Some boxes packed & stock partially moved to FI Warehouse
+    | 'COMPLETED';            // All boxes packed, all stock transferred to FI Warehouse
 
 export type PackingAuditAction =
     | 'PACKING_CREATED'
@@ -29,7 +29,7 @@ export type PackingAuditAction =
     | 'BOX_CREATED'
     | 'BOX_DELETED'
     | 'STICKER_PRINTED'
-    | 'STOCK_PARTIAL_TRANSFER'   // Partial stock moved to Prod WHSE
+    | 'STOCK_PARTIAL_TRANSFER'   // Partial stock moved to FI Warehouse
     | 'STOCK_FULL_TRANSFER'      // Full stock moved on complete packing
     | 'PACKING_COMPLETED';
 
@@ -55,7 +55,7 @@ export interface PackingRequest {
     supervisor_remarks: string | null;
 
     // Stock transfer tracking
-    transferred_qty?: number;          // How many PCS have been moved to Prod WHSE so far
+    transferred_qty?: number;          // How many PCS have been moved to FI Warehouse so far
     last_transfer_at?: string | null;  // Last stock transfer timestamp
 
     // Joined fields
@@ -84,7 +84,7 @@ export interface PackingBox {
     box_qty: number;
     sticker_printed: boolean;
     sticker_printed_at: string | null;
-    is_transferred: boolean;       // Has this box's stock been moved to Prod WHSE?
+    is_transferred: boolean;       // Has this box's stock been moved to FI Warehouse?
     transferred_at: string | null; // When was this box's stock transferred?
     created_by: string;
     created_at: string;
@@ -137,13 +137,13 @@ export const PACKING_STATUS_CONFIG: Record<PackingRequestStatus, {
     label: string;
 }> = {
     APPROVED: {
-        color: '#2563eb',
-        bg: '#eff6ff',
-        label: 'Open',
-    },
-    REJECTED: {
         color: '#dc2626',
         bg: '#fef2f2',
+        label: 'Pending',
+    },
+    REJECTED: {
+        color: '#6b7280',
+        bg: '#f3f4f6',
         label: 'Cancelled',
     },
     PACKING_IN_PROGRESS: {
@@ -193,8 +193,8 @@ export const AUDIT_ACTION_LABELS: Record<PackingAuditAction, string> = {
     BOX_CREATED: 'Box Added',
     BOX_DELETED: 'Box Removed',
     STICKER_PRINTED: 'Sticker Printed',
-    STOCK_PARTIAL_TRANSFER: 'Partial Stock Transferred to Prod WHSE',
-    STOCK_FULL_TRANSFER: 'Full Stock Transferred to Prod WHSE',
+    STOCK_PARTIAL_TRANSFER: 'Partial Stock Transferred to FI Warehouse',
+    STOCK_FULL_TRANSFER: 'Full Stock Transferred to FI Warehouse',
     PACKING_COMPLETED: 'Packing Completed',
 };
 
@@ -232,11 +232,11 @@ export function formatAuditDetails(actionType: string, metadata: Record<string, 
             if (m.box_number) return `Box #${m.box_number} | ${m.qty ?? ''} PCS | PKG: ${m.packing_id || '—'}`;
             return 'Sticker printed';
         case 'STOCK_PARTIAL_TRANSFER':
-            return `${m.transferred_qty || '—'} PCS moved to Prod WHSE | ${m.boxes_transferred || '—'} box(es) | Remaining: ${m.remaining_qty || '—'} PCS`;
+            return `${m.transferred_qty || '—'} PCS moved to FI Warehouse | ${m.boxes_transferred || '—'} box(es) | Remaining: ${m.remaining_qty || '—'} PCS`;
         case 'STOCK_FULL_TRANSFER':
-            return `${m.transferred_qty || '—'} PCS moved to Prod WHSE | All ${m.boxes_transferred || '—'} box(es) transferred`;
+            return `${m.transferred_qty || '—'} PCS moved to FI Warehouse | All ${m.boxes_transferred || '—'} box(es) transferred`;
         case 'PACKING_COMPLETED':
-            return `${m.total_packed_qty || '—'} PCS in ${m.boxes_count || '—'} boxes | All stock in Prod WHSE`;
+            return `${m.total_packed_qty || '—'} PCS in ${m.boxes_count || '—'} boxes | All stock in FI Warehouse`;
         default:
             // Generic fallback: filter out UUID-like values and _id keys
             return Object.entries(m)
