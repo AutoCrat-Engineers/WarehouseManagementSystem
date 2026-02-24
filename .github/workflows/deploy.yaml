@@ -53,12 +53,42 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_KEY }}
           script: |
+            echo "Pull latest image"
             docker pull shravanaweb/wms:latest
-            docker stop wms || true
-            docker rm wms || true
-            docker system prune -af || true
+
+            echo "Start new container for validation"
             docker run -d \
-              --name wms \
+              --name wms-new \
               --restart unless-stopped \
-              -p 80:3000 \
+              -p 3000:3000 \
               shravanaweb/wms:latest
+
+            echo "Waiting for container startup..."
+            sleep 15
+
+            echo "Checking container health"
+            docker ps | grep wms-new
+
+            if [ $? -eq 0 ]; then
+              echo "New container running. Switching production container."
+
+              docker stop wms || true
+              docker rm wms || true
+
+              docker stop wms-new
+              docker rm wms-new
+
+              docker run -d \
+                --name wms \
+                --restart unless-stopped \
+                -p 80:3000 \
+                shravanaweb/wms:latest
+
+              echo "Deployment successful"
+            else
+              echo "New container failed. Keeping old container."
+              docker logs wms-new
+              docker stop wms-new || true
+              docker rm wms-new || true
+              exit 1
+            fi
