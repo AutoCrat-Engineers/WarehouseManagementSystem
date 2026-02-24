@@ -14,7 +14,7 @@
  *   1. Stock Movement Module → Supervisor approves → record auto-appears here
  *   2. Click a record → auto-generates boxes based on Box Qty & Inner Qty/Box
  *   3. Print stickers (individual or batch)
- *   4. "Move to FI Warehouse" button enabled after all stickers printed
+ *   4. "Move to FG Warehouse" button enabled after all stickers printed
  *   5. Stock moves only after sticker printing is complete
  */
 import React, { useState, useEffect, useCallback } from 'react';

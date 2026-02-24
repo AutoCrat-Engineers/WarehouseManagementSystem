@@ -5,7 +5,7 @@
  *   - Movement ID = primary reference for packing request
  *   - On supervisor approval: packing request created, NO stock movement
  *   - Each BOX gets its own unique Packing ID (PKG-XXXXXXXX)
- *   - Stock moves PRODUCTION → FI Warehouse only when operator explicitly triggers:
+ *   - Stock moves PRODUCTION → FG Warehouse only when operator explicitly triggers:
  *       a) "Move Packed Stock" — partial transfer of completed boxes
  *       b) "Complete Packing" → confirms final stock transfer
  *   - Supports partial packing + partial stock transfer (like SAP MIGO partial GR)
@@ -308,7 +308,7 @@ export async function deleteBox(requestId: string, boxId: string) {
         .select('*').eq('id', boxId).eq('packing_request_id', requestId).single();
     if (!box) throw new Error('Box not found');
     if (box.sticker_printed) throw new Error('Cannot delete a box after its sticker has been printed');
-    if (box.is_transferred) throw new Error('Cannot delete a box that has already been transferred to FI Warehouse');
+    if (box.is_transferred) throw new Error('Cannot delete a box that has already been transferred to FG Warehouse');
 
     const packingId = box.packing_id || generatePackingId(box.id);
 
@@ -482,12 +482,12 @@ export async function markStickerPrinted(requestId: string, boxId: string) {
 }
 
 // ============================================================================
-// STOCK TRANSFER — Move packed stock from PRODUCTION → FI Warehouse
+// STOCK TRANSFER — Move packed stock from PRODUCTION → FG Warehouse
 // This is the core of v5: stock moves based on packing, not on approval.
 // ============================================================================
 
 /**
- * Transfer packed (and printed) boxes' stock from Production to FI Warehouse.
+ * Transfer packed (and printed) boxes' stock from Production to FG Warehouse.
  * Can be called for partial transfers (some boxes) or full transfer (all boxes).
  * @param requestId - Packing request ID
  * @param boxIds - Optional array of specific box IDs to transfer. If empty, transfers ALL untransferred printed boxes.
@@ -526,18 +526,18 @@ export async function transferPackedStock(
     // Calculate transfer quantity
     const transferQty = eligibleBoxes.reduce((sum: number, b: any) => sum + Number(b.box_qty), 0);
 
-    // Perform stock movement: PRODUCTION → FI Warehouse
+    // Perform stock movement: PRODUCTION → FG Warehouse
     // Get warehouse IDs from the movement header
     const { data: movementHeader } = await supabase.from('inv_movement_headers')
         .select('source_warehouse_id, destination_warehouse_id')
         .eq('id', req.movement_header_id).single();
     if (!movementHeader) throw new Error('Movement header not found');
 
-    const dstId = movementHeader.destination_warehouse_id; // FI Warehouse
+    const dstId = movementHeader.destination_warehouse_id; // FG Warehouse
     const itemCode = req.item_code;
 
     if (dstId && itemCode) {
-        // Increment destination (FI Warehouse) stock
+        // Increment destination (FG Warehouse) stock
         const { data: ds } = await supabase.from('inv_warehouse_stock')
             .select('id, quantity_on_hand').eq('warehouse_id', dstId)
             .eq('item_code', itemCode).eq('is_active', true).single();

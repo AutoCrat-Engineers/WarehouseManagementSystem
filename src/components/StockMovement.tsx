@@ -132,7 +132,7 @@ interface WarehouseStock {
 // ============================================================================
 
 const LOCATIONS: Record<LocationCode, { name: string; icon: React.ElementType; color: string }> = {
-  PW: { name: 'FI Warehouse', icon: Warehouse, color: '#6366f1' },
+  PW: { name: 'FG Warehouse', icon: Warehouse, color: '#6366f1' },
   IT: { name: 'In-Transit', icon: Truck, color: '#f59e0b' },
   SV: { name: 'S&V Warehouse', icon: MapPin, color: '#10b981' },
   US: { name: 'US Warehouse', icon: MapPin, color: '#3b82f6' },
@@ -140,7 +140,7 @@ const LOCATIONS: Record<LocationCode, { name: string; icon: React.ElementType; c
 };
 
 const VALID_ROUTES: MovementRoute[] = [
-  { from: 'PRODUCTION', to: 'PW', movementType: 'PRODUCTION_RECEIPT', flow: 'FORWARD', label: 'Production → FI Warehouse' },
+  { from: 'PRODUCTION', to: 'PW', movementType: 'PRODUCTION_RECEIPT', flow: 'FORWARD', label: 'Production → FG Warehouse' },
   { from: 'PW', to: 'IT', movementType: 'DISPATCH_TO_TRANSIT', flow: 'FORWARD', label: 'PW → In-Transit' },
   { from: 'IT', to: 'SV', movementType: 'TRANSFER_TO_WAREHOUSE', flow: 'FORWARD', label: 'In-Transit → S&V' },
   { from: 'IT', to: 'US', movementType: 'TRANSFER_TO_WAREHOUSE', flow: 'FORWARD', label: 'In-Transit → US' },
@@ -423,8 +423,8 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
           reason_description: h.reason_description, notes: h.notes, created_at: h.created_at,
           source_warehouse: resolveWarehouseLabel(h.source_warehouse?.warehouse_code || null, h.source_warehouse?.warehouse_name || null),
           destination_warehouse: resolveWarehouseLabel(h.destination_warehouse?.warehouse_code || null, h.destination_warehouse?.warehouse_name || null),
-          source_warehouse_id: h.source_warehouse?.warehouse_code || h.source_warehouse_id || null,
-          destination_warehouse_id: h.destination_warehouse?.warehouse_code || h.destination_warehouse_id || null,
+          source_warehouse_id: h.source_warehouse_id || null,
+          destination_warehouse_id: h.destination_warehouse_id || null,
           item_code: line?.item_code || null,
           item_name: line ? (itemInfoMap[line.item_code]?.item_name || line.item_code) : null,
           part_number: line ? (itemInfoMap[line.item_code]?.part_number || null) : null,
@@ -919,7 +919,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
       // ==================================================================
       // PACKING REQUEST — auto-create for PRODUCTION_RECEIPT only
       // v5: Stock does NOT move on approval. Packing module handles
-      //     stock transfer from Production → FI Warehouse when operator
+      //     stock transfer from Production → FG Warehouse when operator
       //     explicitly packs boxes and triggers the transfer.
       // ==================================================================
       if (reviewMovement.movement_type === 'PRODUCTION_RECEIPT') {
@@ -958,7 +958,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
         showToast('info', 'Partially Approved', `Movement ${movNum} partially approved — ${approvedQty} units approved, ${(reviewMovement.requested_quantity ?? 0) - approvedQty} units rejected.${pMsg}`);
       } else {
         const extra = reviewMovement.movement_type === 'PRODUCTION_RECEIPT'
-          ? ' Packing request created. Stock will transfer to FI Warehouse via packing.'
+          ? ' Packing request created. Stock will transfer to FG Warehouse via packing.'
           : '';
         const stockMsg = reviewMovement.movement_type === 'PRODUCTION_RECEIPT'
           ? `${reviewMovement.requested_quantity ?? 0} units approved`
@@ -1691,14 +1691,14 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
                           )}
                         </td>
                         <td style={{ ...tdStyle, fontSize: '13px' }}>
-                          {m.movement_type === 'REJECTION_DISPOSAL' ? 'FI Warehouse'
+                          {m.movement_type === 'REJECTION_DISPOSAL' ? 'FG Warehouse'
                             : m.movement_type === 'PRODUCTION_RECEIPT' ? 'Production'
                               : m.movement_type === 'CUSTOMER_RETURN' ? 'Customer'
                                 : resolveWarehouseLabel(m.source_warehouse_id, m.source_warehouse)}
                         </td>
                         <td style={{ ...tdStyle, fontSize: '13px' }}>
                           {m.movement_type === 'REJECTION_DISPOSAL' ? 'Production Floor (Disposal)'
-                            : m.movement_type === 'PRODUCTION_RECEIPT' ? 'FI Warehouse'
+                            : m.movement_type === 'PRODUCTION_RECEIPT' ? 'FG Warehouse'
                               : m.movement_type === 'CUSTOMER_SALE' ? 'Customer'
                                 : resolveWarehouseLabel(m.destination_warehouse_id, m.destination_warehouse)}
                         </td>
@@ -2154,13 +2154,13 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
           const isPending = reviewMovement.status === 'PENDING_APPROVAL';
           const stockType = getStockType(reviewMovement.movement_type);
           const fromLabel =
-            reviewMovement.movement_type === 'REJECTION_DISPOSAL' ? 'FI Warehouse'
+            reviewMovement.movement_type === 'REJECTION_DISPOSAL' ? 'FG Warehouse'
               : reviewMovement.movement_type === 'PRODUCTION_RECEIPT' ? 'Production'
                 : reviewMovement.movement_type === 'CUSTOMER_RETURN' ? 'Customer'
                   : resolveWarehouseLabel(reviewMovement.source_warehouse_id, reviewMovement.source_warehouse, 'External');
           const toLabel =
             reviewMovement.movement_type === 'REJECTION_DISPOSAL' ? 'Production Floor (Disposal)'
-              : reviewMovement.movement_type === 'PRODUCTION_RECEIPT' ? 'FI Warehouse'
+              : reviewMovement.movement_type === 'PRODUCTION_RECEIPT' ? 'FG Warehouse'
                 : reviewMovement.movement_type === 'CUSTOMER_SALE' ? 'Customer'
                   : resolveWarehouseLabel(reviewMovement.destination_warehouse_id, reviewMovement.destination_warehouse, 'External');
           const requestedQty = reviewMovement.requested_quantity ?? reviewMovement.quantity ?? 0;

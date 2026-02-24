@@ -194,7 +194,7 @@ function StockDetailModal({ isOpen, onClose, item }: StockDetailModalProps) {
                             gridTemplateColumns: 'repeat(2, 1fr)',
                             gap: '12px',
                         }}>
-                            {/* FI Warehouse */}
+                            {/* FG Warehouse */}
                             <div style={{
                                 background: 'white',
                                 padding: '14px',
@@ -211,7 +211,7 @@ function StockDetailModal({ isOpen, onClose, item }: StockDetailModalProps) {
                                     color: 'var(--enterprise-gray-700)',
                                 }}>
                                     <Package size={16} style={{ color: 'var(--enterprise-primary)' }} />
-                                    FI Warehouse
+                                    FG Warehouse
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
                                     <span style={{ color: 'var(--enterprise-gray-500)' }}>Available</span>

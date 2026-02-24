@@ -136,7 +136,7 @@ export interface ItemStockDistribution {
     unitPrice?: number;
     standardCost?: number;
 
-    // FI Warehouse
+    // FG Warehouse
     productionOnHand: number;
     productionAvailable: number;
     productionReserved: number;

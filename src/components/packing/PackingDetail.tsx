@@ -14,13 +14,14 @@
  *   1. On open → auto-generates box rows (Box Qty = total / inner_qty_per_box)
  *   2. Table shows: Unique Box ID, Movement ID, Serial #, Qty/Box, Print Status
  *   3. "Print Sticker" per row + "Print All Stickers" batch button
- *   4. "Move to FI Warehouse" enabled ONLY when all stickers are printed
+ *   4. "Move to FG Warehouse" enabled ONLY when all stickers are printed
  *   5. Stock moves ONLY after print is complete (core business rule)
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card } from '../ui/EnterpriseUI';
 import { StickerPrint } from './StickerPrint';
 import { Printer } from 'lucide-react';
+import QRCode from 'qrcode';
 import * as svc from './packingService';
 import {
     PACKING_STATUS_CONFIG, AUDIT_ACTION_LABELS,
@@ -51,8 +52,7 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
     const [stickerData, setStickerData] = useState<StickerData | null>(null);
     const [activeTab, setActiveTab] = useState<'stickers' | 'audit'>('stickers');
     const [showTransferConfirm, setShowTransferConfirm] = useState(false);
-    const [printQueue, setPrintQueue] = useState<StickerData[]>([]);
-    const [isBatchPrinting, setIsBatchPrinting] = useState(false);
+    // printQueue and isBatchPrinting removed — Print All now uses a single-window approach
 
     // ============================================================================
     // DATA LOADING
@@ -176,57 +176,151 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
         }
     };
 
-    const handlePrintAllStickers = () => {
+    const handlePrintAllStickers = async () => {
         if (!request) return;
         // Build sticker data for all unprinted + non-transferred boxes
-        const eligibleForPrint = boxes.filter(b => !b.sticker_printed && !b.is_transferred);
-        if (eligibleForPrint.length === 0) {
+        const eligibleBoxes = boxes.filter(b => !b.sticker_printed && !b.is_transferred);
+        if (eligibleBoxes.length === 0) {
             setMessage({ type: 'info', text: 'All stickers are already printed.' });
             return;
         }
-        const queue: StickerData[] = eligibleForPrint.map(box => ({
-            packingId: box.packing_id || generatePackingId(box.id),
-            partNumber: request.part_number || '—',
-            description: request.item_name || request.item_code,
-            mslNo: request.master_serial_no || '—',
-            revision: request.revision || '—',
-            movementNumber: request.movement_number,
-            packingRequestId: request.id,
-            boxNumber: box.box_number,
-            totalBoxes: boxes.length,
-            boxQuantity: box.box_qty,
-            totalQuantity: Number(request.total_packed_qty),
-            packingDate: new Date().toISOString().split('T')[0],
-            itemCode: request.item_code,
-            operatorName: currentUserName || 'System',
-        }));
-        // Set first sticker and queue the rest
-        setStickerData(queue[0]);
-        setPrintQueue(queue.slice(1));
-        setIsBatchPrinting(true);
-        setMessage({ type: 'info', text: `Printing ${queue.length} sticker(s)... Complete each print to continue.` });
-    };
 
-    // Handle sequential print queue — after one sticker is printed, open the next
-    const handleQueuedStickerPrinted = async () => {
-        const box = boxes.find(b => (b.packing_id || generatePackingId(b.id)) === stickerData?.packingId);
-        if (box) {
-            try {
-                await svc.markStickerPrinted(requestId, box.id);
-            } catch (err: any) {
-                setMessage({ type: 'error', text: err.message || 'Failed to mark sticker as printed' });
+        setSubmitting(true);
+        setMessage({ type: 'info', text: `Preparing ${eligibleBoxes.length} sticker(s) for printing...` });
+
+        try {
+            // Build sticker data + QR codes for ALL boxes upfront
+            const stickers = eligibleBoxes.map(box => ({
+                packingId: box.packing_id || generatePackingId(box.id),
+                partNumber: request.part_number || '—',
+                description: request.item_name || request.item_code,
+                mslNo: request.master_serial_no || '—',
+                revision: request.revision || '—',
+                movementNumber: request.movement_number,
+                boxNumber: box.box_number,
+                totalBoxes: boxes.length,
+                boxQuantity: box.box_qty,
+                totalQuantity: Number(request.total_packed_qty),
+                packingDate: new Date().toISOString().split('T')[0],
+                itemCode: request.item_code,
+                operatorName: currentUserName || 'System',
+                boxId: box.id,
+            }));
+
+            // Generate QR codes for all stickers
+            const qrUrls = await Promise.all(
+                stickers.map(s => {
+                    const qrText = [
+                        `AUTOCRAT ENGINEERS`,
+                        `PKG:${s.packingId}`, `MOV:${s.movementNumber}`,
+                        `PN:${s.partNumber}`, `IC:${s.itemCode}`,
+                        `DESC:${s.description}`, `MSL:${s.mslNo}`, `REV:${s.revision}`,
+                        `QTY:${s.boxQuantity}PCS`, `BOX:${s.boxNumber}/${s.totalBoxes}`,
+                        `TOTAL:${s.totalQuantity}PCS`, `DATE:${s.packingDate}`, `BY:${s.operatorName}`,
+                    ].join('\n');
+                    return QRCode.toDataURL(qrText, {
+                        errorCorrectionLevel: 'M', width: 200, margin: 1,
+                        color: { dark: '#000000', light: '#ffffff' },
+                    });
+                })
+            );
+
+            // Build HTML for ALL stickers in one document
+            const stickerPages = stickers.map((s, i) => `
+<div class="sticker" ${i < stickers.length - 1 ? 'style="page-break-after: always;"' : ''}>
+  <div class="header">
+    <div class="header-logo"><img src="/a-logo.png" alt="AE" /></div>
+    <div>
+      <div class="header-company">Autocrat Engineers</div>
+      <div class="header-sub">Packaging Sticker</div>
+    </div>
+  </div>
+  <div class="content">
+    <div class="data-side">
+      <table class="data-table">
+        <tr class="pkg-row"><td class="lbl">PKG ID</td><td class="val">${s.packingId}</td></tr>
+        <tr><td class="lbl">Part No.</td><td class="val" style="font-weight:800;font-size:12px">${s.partNumber}</td></tr>
+        <tr><td class="lbl">Description</td><td class="val">${s.description}</td></tr>
+        <tr><td class="lbl">MSL No.</td><td class="val">${s.mslNo}</td></tr>
+        <tr><td class="lbl">Revision</td><td class="val" style="font-weight:800">${s.revision}</td></tr>
+        <tr class="qty-row"><td class="lbl">QTY IN BOX</td><td class="val">${s.boxQuantity} PCS</td></tr>
+      </table>
+    </div>
+    <div class="qr-side">
+      <img src="${qrUrls[i]}" alt="QR" />
+      <div class="qr-label">Scan for full details</div>
+    </div>
+  </div>
+  <div class="footer">Auto-generated by WMS &bull; ${s.packingDate} &bull; ${s.operatorName} &bull; Box ${s.boxNumber} of ${s.totalBoxes}</div>
+</div>`).join('\n');
+
+            const printWindow = window.open('', '_blank', 'width=500,height=600');
+            if (!printWindow) {
+                setMessage({ type: 'error', text: 'Popup blocked. Please allow popups for this site.' });
+                setSubmitting(false);
+                return;
             }
-        }
-        if (printQueue.length > 0) {
-            // Open next sticker in queue
-            setStickerData(printQueue[0]);
-            setPrintQueue(prev => prev.slice(1));
-        } else {
-            // Queue complete
-            setStickerData(null);
-            setIsBatchPrinting(false);
-            await loadData();
-            setMessage({ type: 'success', text: `All stickers printed successfully.` });
+
+            printWindow.document.write(`<!DOCTYPE html><html><head><title>Print All Stickers — ${request.movement_number}</title>
+<style>
+  @media print {
+    @page { size: 100mm 70mm; margin: 2mm; }
+    body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, Helvetica, sans-serif; padding: 0; margin: 0; }
+  .sticker { width: 100%; max-width: 376px; margin: 0 auto 20px; border: 2px solid #000; overflow: hidden; page-break-inside: avoid; }
+  @media print { .sticker { margin: 0 auto; } }
+  .header { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 2px solid #000; background: #fff; }
+  .header-logo { width: 24px; height: 24px; flex-shrink: 0; }
+  .header-logo img { width: 100%; height: 100%; object-fit: contain; }
+  .header-company { font-size: 12px; font-weight: 900; color: #000; letter-spacing: 1px; text-transform: uppercase; line-height: 1.2; }
+  .header-sub { font-size: 7px; color: #666; letter-spacing: 1.5px; text-transform: uppercase; font-weight: 600; }
+  .content { display: flex; border-bottom: 2px solid #000; }
+  .data-side { flex: 1; min-width: 0; }
+  .qr-side { width: 130px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 6px; border-left: 1px solid #999; }
+  .qr-side img { width: 110px; height: 110px; image-rendering: pixelated; }
+  .qr-label { font-size: 6px; color: #666; text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; font-weight: 700; }
+  .data-table { width: 100%; border-collapse: collapse; }
+  .data-table td { padding: 3px 8px; font-size: 11px; border-bottom: 1px solid #ccc; vertical-align: middle; line-height: 1.3; }
+  .data-table .lbl { width: 35%; font-weight: 800; font-size: 8px; text-transform: uppercase; letter-spacing: 0.5px; color: #333; border-right: 1px solid #ccc; }
+  .data-table .val { font-weight: 600; color: #000; word-break: break-word; }
+  .pkg-row td { border-bottom: 1px solid #999; }
+  .pkg-row .lbl { font-weight: 900; color: #000; }
+  .pkg-row .val { font-weight: 900; font-size: 13px; font-family: 'Courier New', monospace; color: #000; letter-spacing: 1px; }
+  .qty-row td { border-top: 2px solid #000; border-bottom: none; }
+  .qty-row .lbl { font-weight: 900; font-size: 9px; color: #000; }
+  .qty-row .val { font-weight: 900; font-size: 20px; color: #000; letter-spacing: 0.5px; }
+  .footer { text-align: center; font-size: 6px; color: #888; padding: 2px 6px; letter-spacing: 0.5px; text-transform: uppercase; }
+</style></head><body>
+${stickerPages}
+<script>setTimeout(()=>{window.print()},500)<\/script>
+</body></html>`);
+            printWindow.document.close();
+
+            // Wait for user to close print window, then mark all as printed
+            const boxIds = stickers.map(s => s.boxId);
+            const checkClosed = setInterval(async () => {
+                if (printWindow.closed) {
+                    clearInterval(checkClosed);
+                    try {
+                        // Mark all printed boxes in DB
+                        for (const boxId of boxIds) {
+                            await svc.markStickerPrinted(requestId, boxId);
+                        }
+                        await loadData();
+                        setMessage({ type: 'success', text: `All ${boxIds.length} sticker(s) printed successfully.` });
+                    } catch (err: any) {
+                        setMessage({ type: 'error', text: err.message || 'Failed to update print status' });
+                        await loadData();
+                    } finally {
+                        setSubmitting(false);
+                    }
+                }
+            }, 500);
+        } catch (err: any) {
+            setMessage({ type: 'error', text: err.message || 'Failed to prepare stickers for printing' });
+            setSubmitting(false);
         }
     };
 
@@ -249,12 +343,12 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
             await loadData();
 
             if (result.isComplete) {
-                setMessage({ type: 'success', text: `All stock moved to FI Warehouse — ${result.transferredQty} PCS in ${result.boxesTransferred} box(es). Record is now completed.` });
+                setMessage({ type: 'success', text: `All stock moved to FG Warehouse — ${result.transferredQty} PCS in ${result.boxesTransferred} box(es). Record is now completed.` });
             } else {
-                setMessage({ type: 'success', text: `Transferred ${result.transferredQty} PCS (${result.boxesTransferred} box(es)) to FI Warehouse. Print remaining stickers to transfer more.` });
+                setMessage({ type: 'success', text: `Transferred ${result.transferredQty} PCS (${result.boxesTransferred} box(es)) to FG Warehouse. Print remaining stickers to transfer more.` });
             }
         } catch (err: any) {
-            setMessage({ type: 'error', text: err.message || 'Failed to move stock to FI Warehouse' });
+            setMessage({ type: 'error', text: err.message || 'Failed to move stock to FG Warehouse' });
         } finally {
             setSubmitting(false);
         }
@@ -291,7 +385,7 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
     const eligibleBoxes = boxes.filter(b => b.sticker_printed && !b.is_transferred);
     const eligibleQty = eligibleBoxes.reduce((s, b) => s + Number(b.box_qty), 0);
 
-    // "Move to FI Warehouse" is enabled when:
+    // "Move to FG Warehouse" is enabled when:
     // 1. Status is NOT completed or rejected
     // 2. At least 1 box has its sticker PRINTED and is NOT yet transferred
     const canMoveToFI = !isCompleted && !isRejected && eligibleBoxes.length > 0;
@@ -387,7 +481,7 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                 }}>
                     <div>
                         <div style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>
-                            Completed — All Stock in FI Warehouse
+                            Completed — All Stock in FG Warehouse
                         </div>
                         <div style={{ fontSize: 12, color: '#6b7280' }}>
                             {totalQty} PCS transferred on {request.completed_at ? new Date(request.completed_at).toLocaleString('en-IN') : '—'}. This record is locked.
@@ -632,7 +726,7 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                                                         fontSize: 11, fontWeight: 600,
                                                         border: '1px solid #86efac', minWidth: 80, justifyContent: 'center',
                                                     }}>
-                                                        In FI Warehouse
+                                                        In FG Warehouse
                                                     </span>
                                                 ) : isPrinted ? (
                                                     <span style={{
@@ -716,7 +810,7 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                             {/* Status Message */}
                             {eligibleBoxes.length > 0 && (
                                 <span style={{ fontSize: 12, color: '#1e40af', fontWeight: 600 }}>
-                                    {eligibleBoxes.length} box(es) ({eligibleQty} PCS) ready to move to FI Warehouse.
+                                    {eligibleBoxes.length} box(es) ({eligibleQty} PCS) ready to move to FG Warehouse.
                                 </span>
                             )}
                             {eligibleBoxes.length === 0 && unprintedCount > 0 && (
@@ -726,11 +820,11 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                             )}
                             {eligibleBoxes.length === 0 && unprintedCount === 0 && transferredCount === boxes.length && (
                                 <span style={{ fontSize: 12, color: '#16a34a', fontWeight: 600 }}>
-                                    All boxes transferred to FI Warehouse.
+                                    All boxes transferred to FG Warehouse.
                                 </span>
                             )}
 
-                            {/* Move to FI Warehouse Button */}
+                            {/* Move to FG Warehouse Button */}
                             <button onClick={handleMoveToFIWarehouse}
                                 disabled={!canMoveToFI || submitting}
                                 style={{
@@ -743,7 +837,7 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                                     display: 'flex', alignItems: 'center', gap: 6,
                                 }}
                             >
-                                {submitting ? 'Moving...' : `Move to FI Warehouse (${eligibleBoxes.length})`}
+                                {submitting ? 'Moving...' : `Move to FG Warehouse (${eligibleBoxes.length})`}
                             </button>
                         </div>
                     )}
@@ -806,7 +900,7 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                     }}>
                         {/* Header */}
                         <div style={{ fontSize: 18, fontWeight: 800, color: '#111827', marginBottom: 4 }}>
-                            Move Stock to FI Warehouse
+                            Move Stock to FG Warehouse
                         </div>
                         <div style={{
                             fontSize: 12, color: '#6b7280', marginBottom: 20,
@@ -824,7 +918,7 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                                 Stock Transfer — {eligibleBoxes.length} Printed Box(es)
                             </div>
                             <div style={{ fontSize: 13, color: '#15803d', marginBottom: 4 }}>
-                                <b>{eligibleQty} PCS</b> in <b>{eligibleBoxes.length} box(es)</b> will be moved from <b>Production</b> to <b>FI Warehouse</b>.
+                                <b>{eligibleQty} PCS</b> in <b>{eligibleBoxes.length} box(es)</b> will be moved from <b>Production</b> to <b>FG Warehouse</b>.
                             </div>
                             <div style={{ fontSize: 12, color: '#15803d' }}>
                                 {eligibleBoxes.length === boxes.length - transferredCount
@@ -858,7 +952,7 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #e5e7eb', paddingTop: 4, marginTop: 4 }}>
                                 <span>Destination:</span>
-                                <span style={{ fontWeight: 700, color: '#1e3a8a' }}>FI Warehouse</span>
+                                <span style={{ fontWeight: 700, color: '#1e3a8a' }}>FG Warehouse</span>
                             </div>
                         </div>
 
@@ -885,7 +979,7 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
 
             {/* Sticker Print Modal */}
             {stickerData && (
-                <StickerPrint sticker={stickerData} onClose={() => { setStickerData(null); setPrintQueue([]); setIsBatchPrinting(false); }} onPrinted={isBatchPrinting ? handleQueuedStickerPrinted : handleStickerPrinted} />
+                <StickerPrint sticker={stickerData} onClose={() => { setStickerData(null); }} onPrinted={handleStickerPrinted} />
             )}
 
             {/* Spinner CSS */}
