@@ -18,7 +18,7 @@
  *   5. Stock moves only after sticker printing is complete
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card } from '../ui/EnterpriseUI';
+import { Card, ModuleLoader, EmptyState } from '../ui/EnterpriseUI';
 import {
     SummaryCard, SummaryCardsGrid,
     FilterBar, ActionBar,
@@ -209,7 +209,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
     // ============================================================================
 
     return (
-        <div>
+        <div style={{ paddingBottom: 40 }}>
             {/* SUMMARY CARDS */}
             <SummaryCardsGrid>
                 <SummaryCard
@@ -268,23 +268,13 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
             {/* TABLE */}
             <Card style={{ padding: 0 }}>
                 {loading ? (
-                    <div style={{ padding: 48, textAlign: 'center' }}>
-                        <div style={{
-                            width: 32, height: 32, border: '3px solid #e5e7eb', borderTopColor: '#1e3a8a',
-                            borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 12px',
-                        }} />
-                        <div style={{ fontSize: 13, color: '#6b7280' }}>Loading sticker records...</div>
-                    </div>
+                    <ModuleLoader moduleName="Sticker Generation" icon={<Printer size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
                 ) : filtered.length === 0 ? (
-                    <div style={{ padding: 48, textAlign: 'center' }}>
-                        <div style={{ fontSize: 40, marginBottom: 8 }}>🏷️</div>
-                        <div style={{ fontSize: 14, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
-                            No sticker generation records found
-                        </div>
-                        <div style={{ fontSize: 12, color: '#9ca3af' }}>
-                            Approved stock movements will appear here automatically.
-                        </div>
-                    </div>
+                    <EmptyState
+                        icon={<Package size={48} style={{ color: 'var(--enterprise-gray-400)' }} />}
+                        title="No Sticker Generation Records"
+                        description="Approved stock movements will appear here automatically for sticker printing."
+                    />
                 ) : (
                     <>
                         <div className="table-responsive" style={{ overflowX: 'auto' }}>

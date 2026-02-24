@@ -18,7 +18,7 @@
  *   5. Stock moves ONLY after print is complete (core business rule)
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card } from '../ui/EnterpriseUI';
+import { Card, LoadingSpinner } from '../ui/EnterpriseUI';
 import { StickerPrint } from './StickerPrint';
 import { Printer } from 'lucide-react';
 import QRCode from 'qrcode';
@@ -55,29 +55,33 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
     // printQueue and isBatchPrinting removed — Print All now uses a single-window approach
 
     // ============================================================================
-    // DATA LOADING
+    // DATA LOADING — all queries fire in parallel for maximum speed
     // ============================================================================
 
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
-            // Fetch request
+            // PHASE 1: Fetch request (needed to derive item_code + profile IDs)
             const { data: reqData, error: reqErr } = await supabase
                 .from('packing_requests').select('*').eq('id', requestId).single();
             if (reqErr) throw reqErr;
 
-            // Fetch item info
-            const { data: itemData } = await supabase
-                .from('items').select('item_name, part_number, master_serial_no, revision')
-                .eq('item_code', reqData.item_code).single();
-
-            // Fetch profiles
+            // PHASE 2: All remaining fetches in parallel (items, profiles, boxes, audit)
             const profileIds = [reqData.created_by, reqData.approved_by].filter(Boolean);
-            let nameMap: Record<string, string> = {};
-            if (profileIds.length) {
-                const { data: profiles } = await supabase.from('profiles').select('id, full_name').in('id', profileIds);
-                (profiles || []).forEach((p: any) => { nameMap[p.id] = p.full_name; });
-            }
+            const [itemResult, profilesResult, boxesData, auditData] = await Promise.all([
+                supabase.from('items')
+                    .select('item_name, part_number, master_serial_no, revision')
+                    .eq('item_code', reqData.item_code).single(),
+                profileIds.length
+                    ? supabase.from('profiles').select('id, full_name').in('id', profileIds)
+                    : Promise.resolve({ data: [] as any[] }),
+                svc.fetchBoxesForRequest(requestId),
+                svc.fetchAuditLogs(requestId),
+            ]);
+
+            const itemData = itemResult.data;
+            const nameMap: Record<string, string> = {};
+            ((profilesResult.data || []) as any[]).forEach((p: any) => { nameMap[p.id] = p.full_name; });
 
             const enrichedReq: PackingRequest = {
                 ...reqData,
@@ -89,13 +93,7 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
                 approved_by_name: reqData.approved_by ? nameMap[reqData.approved_by] : undefined,
             };
             setRequest(enrichedReq);
-
-            // Fetch boxes
-            const boxesData = await svc.fetchBoxesForRequest(requestId);
             setBoxes(boxesData);
-
-            // Fetch audit logs
-            const auditData = await svc.fetchAuditLogs(requestId);
             setAuditLogs(auditData);
 
         } catch (err: any) {
@@ -417,15 +415,34 @@ ${stickerPages}
         fontSize: 13, fontWeight: 600, color: '#111827',
     };
 
+    // ============================================================================
+    // LOADING STATE — show enterprise spinner while data loads
+    // ============================================================================
+
+    if (loading || !request) {
+        return (
+            <div style={{ paddingBottom: 40 }}>
+                <button onClick={onBack} style={{
+                    padding: '6px 14px', borderRadius: 6, border: '1px solid #d1d5db',
+                    background: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: 4, marginBottom: 16,
+                }}>
+                    ← Back
+                </button>
+                <LoadingSpinner size={48} message="Loading sticker generation details…" />
+            </div>
+        );
+    }
+
     return (
-        <div style={{ marginTop: -32 }}>
-            {/* STICKY HEADER BAR */}
+        <div style={{ paddingBottom: 40 }}>
+            {/* STICKY HEADER BAR — top: -32px offsets the parent <main> padding so bar sits flush at scroll top */}
             <div style={{
-                position: 'sticky', top: 0, zIndex: 100, backgroundColor: '#fff',
+                position: 'sticky', top: -32, zIndex: 100, backgroundColor: '#fff',
                 border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 20px',
                 marginBottom: 12,
                 display: 'flex', alignItems: 'center', gap: 16,
-                boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
             }}>
                 <button onClick={onBack} style={{
                     padding: '6px 14px', borderRadius: 6, border: '1px solid #d1d5db',
