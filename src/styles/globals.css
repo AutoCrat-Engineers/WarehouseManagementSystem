@@ -646,10 +646,6 @@
   .summary-cards-grid {
     grid-template-columns: repeat(4, 1fr) !important;
   }
-
-  .summary-cards-grid[style*="repeat(5"] {
-    grid-template-columns: repeat(4, 1fr) !important;
-  }
 }
 
 /* ── Desktop: 1280px - 1535px ── */
@@ -659,7 +655,7 @@
   }
 
   .summary-cards-grid {
-    grid-template-columns: repeat(5, 1fr) !important;
+    grid-template-columns: repeat(4, 1fr) !important;
   }
 }
 
@@ -674,7 +670,7 @@
   }
 
   .summary-cards-grid {
-    grid-template-columns: repeat(5, 1fr) !important;
+    grid-template-columns: repeat(4, 1fr) !important;
     gap: 20px !important;
   }
 
