@@ -28,7 +28,13 @@ import {
     X,
     XCircle,
 } from 'lucide-react';
-import { Card, Button, Badge, LoadingSpinner, EmptyState, Modal } from './ui/EnterpriseUI';
+import { Card, Button, Badge, LoadingSpinner, EmptyState, Modal, ModuleLoader } from './ui/EnterpriseUI';
+import {
+    SummaryCard, SummaryCardsGrid,
+    FilterBar as SharedFilterBar, ActionBar,
+    SearchBox, StatusFilter, RefreshButton, ExportCSVButton, ClearFiltersButton,
+    ActionButton,
+} from './ui/SharedComponents';
 import { useAllItemsStockDashboard, useItemStockDistribution } from '../hooks/useInventory';
 import type { ItemStockDashboard, ItemStockDistribution, StockStatus } from '../types/inventory';
 
@@ -68,254 +74,7 @@ const tdStyle: React.CSSProperties = {
     color: 'var(--enterprise-gray-800)',
 };
 
-// ============================================================================
-// SUMMARY CARD COMPONENT (Clickable)
-// ============================================================================
 
-interface SummaryCardProps {
-    label: string;
-    value: number;
-    icon: React.ReactNode;
-    color: string;
-    bgColor: string;
-    isActive?: boolean;
-    onClick?: () => void;
-}
-
-function SummaryCard({ label, value, icon, color, bgColor, isActive = false, onClick }: SummaryCardProps) {
-    return (
-        <div
-            onClick={onClick}
-            style={{
-                cursor: onClick ? 'pointer' : 'default',
-                transition: 'all 0.2s ease',
-            }}
-        >
-            <Card
-                style={{
-                    border: isActive ? `2px solid ${color}` : '1px solid var(--enterprise-gray-200)',
-                    boxShadow: isActive ? `0 0 0 3px ${bgColor}` : 'var(--shadow-sm)',
-                }}
-            >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div>
-                        <p style={{
-                            fontSize: '12px',
-                            color: 'var(--enterprise-gray-600)',
-                            fontWeight: 500,
-                            marginBottom: '6px',
-                        }}>
-                            {label}
-                        </p>
-                        <p style={{
-                            fontSize: '1.75rem',
-                            fontWeight: 700,
-                            color,
-                        }}>
-                            {value}
-                        </p>
-                    </div>
-                    <div style={{
-                        width: '44px',
-                        height: '44px',
-                        borderRadius: '8px',
-                        backgroundColor: bgColor,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                    }}>
-                        {icon}
-                    </div>
-                </div>
-            </Card>
-        </div>
-    );
-}
-
-// ============================================================================
-// FILTER BAR COMPONENT
-// ============================================================================
-
-interface FilterBarProps {
-    searchTerm: string;
-    onSearchChange: (value: string) => void;
-    activeStatusFilter: ActiveStatusFilter;
-    onActiveStatusFilterChange: (value: ActiveStatusFilter) => void;
-    onRefresh: () => void;
-    refreshing: boolean;
-    onExport: () => void;
-    onClearFilters: () => void;
-    hasActiveFilters: boolean;
-}
-
-function FilterBar({
-    searchTerm,
-    onSearchChange,
-    activeStatusFilter,
-    onActiveStatusFilterChange,
-    onRefresh,
-    refreshing,
-    onExport,
-    onClearFilters,
-    hasActiveFilters,
-}: FilterBarProps) {
-    return (
-        <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            marginBottom: '16px',
-            gap: '12px',
-            flexWrap: 'wrap',
-            background: 'white',
-            padding: '10px 16px',
-            borderRadius: '8px',
-            border: '1px solid var(--enterprise-gray-200)',
-        }}>
-            {/* Search - Elongated */}
-            <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                background: 'var(--enterprise-gray-50)',
-                border: '1px solid var(--enterprise-gray-300)',
-                borderRadius: '6px',
-                padding: '8px 12px',
-                flex: 1,
-                minWidth: '280px',
-            }}>
-                <Search size={18} style={{ color: 'var(--enterprise-gray-400)', marginRight: '10px', flexShrink: 0 }} />
-                <input
-                    type="text"
-                    placeholder="Search by item code, MSN, part number..."
-                    value={searchTerm}
-                    onChange={(e) => onSearchChange(e.target.value)}
-                    style={{
-                        border: 'none',
-                        outline: 'none',
-                        flex: 1,
-                        fontSize: '13px',
-                        color: 'var(--enterprise-gray-800)',
-                        background: 'transparent',
-                        minWidth: '180px',
-                    }}
-                />
-                {searchTerm && (
-                    <button
-                        onClick={() => onSearchChange('')}
-                        style={{
-                            background: 'var(--enterprise-gray-200)',
-                            border: 'none',
-                            cursor: 'pointer',
-                            padding: '4px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            borderRadius: '4px',
-                            marginLeft: '8px',
-                        }}
-                    >
-                        <X size={14} style={{ color: 'var(--enterprise-gray-600)' }} />
-                    </button>
-                )}
-            </div>
-
-            {/* Filters and Actions - Right Side */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-
-                {/* Active Status Filter */}
-                <select
-                    value={activeStatusFilter}
-                    onChange={(e) => onActiveStatusFilterChange(e.target.value as ActiveStatusFilter)}
-                    style={{
-                        padding: '8px 12px',
-                        borderRadius: '6px',
-                        border: '1px solid var(--enterprise-gray-300)',
-                        fontSize: '13px',
-                        color: 'var(--enterprise-gray-700)',
-                        background: 'white',
-                        cursor: 'pointer',
-                        height: '36px',
-                    }}
-                >
-                    <option value="ALL">All Items</option>
-                    <option value="ACTIVE">Active Only</option>
-                    <option value="INACTIVE">Inactive Only</option>
-                </select>
-
-                {/* Clear Filters - Only show when filters active */}
-                {hasActiveFilters && (
-                    <button
-                        onClick={onClearFilters}
-                        style={{
-                            padding: '0 12px',
-                            height: '36px',
-                            borderRadius: '6px',
-                            border: '1px solid #dc2626',
-                            background: 'white',
-                            color: '#dc2626',
-                            fontSize: '13px',
-                            fontWeight: 500,
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            whiteSpace: 'nowrap',
-                        }}
-                    >
-                        <XCircle size={16} />
-                        Clear Filters
-                    </button>
-                )}
-
-                {/* Refresh Button */}
-                <button
-                    onClick={onRefresh}
-                    disabled={refreshing}
-                    style={{
-                        padding: '0 14px',
-                        height: '36px',
-                        borderRadius: '6px',
-                        border: '1px solid var(--enterprise-gray-300)',
-                        background: 'white',
-                        color: 'var(--enterprise-gray-700)',
-                        fontSize: '13px',
-                        fontWeight: 500,
-                        cursor: refreshing ? 'not-allowed' : 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        opacity: refreshing ? 0.6 : 1,
-                        whiteSpace: 'nowrap',
-                    }}
-                >
-                    <RefreshCw size={14} className={refreshing ? 'spinning' : ''} />
-                    Refresh
-                </button>
-
-                {/* Export Button - Primary action */}
-                <button
-                    onClick={onExport}
-                    style={{
-                        padding: '0 14px',
-                        height: '36px',
-                        borderRadius: '6px',
-                        border: 'none',
-                        background: '#1e3a8a',
-                        color: 'white',
-                        fontSize: '13px',
-                        fontWeight: 500,
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        whiteSpace: 'nowrap',
-                    }}
-                >
-                    <Download size={14} />
-                    Export CSV
-                </button>
-            </div>
-        </div>
-    );
-}
 
 // ============================================================================
 // ACTIVE STATUS DOT COMPONENT
@@ -435,7 +194,7 @@ function StockDetailModal({ isOpen, onClose, item }: StockDetailModalProps) {
                             gridTemplateColumns: 'repeat(2, 1fr)',
                             gap: '12px',
                         }}>
-                            {/* Production Warehouse */}
+                            {/* FG Warehouse */}
                             <div style={{
                                 background: 'white',
                                 padding: '14px',
@@ -452,7 +211,7 @@ function StockDetailModal({ isOpen, onClose, item }: StockDetailModalProps) {
                                     color: 'var(--enterprise-gray-700)',
                                 }}>
                                     <Package size={16} style={{ color: 'var(--enterprise-primary)' }} />
-                                    Production Warehouse
+                                    FG Warehouse
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
                                     <span style={{ color: 'var(--enterprise-gray-500)' }}>Available</span>
@@ -805,24 +564,7 @@ export function InventoryGrid() {
 
     // Loading state
     if (loading && items.length === 0) {
-        return (
-            <div style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '60px',
-            }}>
-                <LoadingSpinner size={48} />
-                <p style={{
-                    marginTop: '16px',
-                    color: 'var(--enterprise-gray-600)',
-                    fontSize: '14px',
-                }}>
-                    Loading inventory data...
-                </p>
-            </div>
-        );
+        return <ModuleLoader moduleName="Inventory Grid" icon={<Package size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
     }
 
     // Error state
@@ -848,11 +590,7 @@ export function InventoryGrid() {
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             {/* Summary Cards - Responsive Grid with Click-to-Filter */}
-            <div className="summary-cards-grid" style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                gap: '14px',
-            }}>
+            <SummaryCardsGrid>
                 <SummaryCard
                     label="Total Items"
                     value={stats.totalItems}
@@ -889,20 +627,37 @@ export function InventoryGrid() {
                     isActive={cardFilter === 'CRITICAL'}
                     onClick={() => handleCardClick('CRITICAL')}
                 />
-            </div>
+            </SummaryCardsGrid>
 
             {/* Filter Bar */}
-            <FilterBar
-                searchTerm={searchTerm}
-                onSearchChange={setSearchTerm}
-                activeStatusFilter={activeStatusFilter}
-                onActiveStatusFilterChange={setActiveStatusFilter}
-                onRefresh={handleRefresh}
-                refreshing={refreshing}
-                onExport={handleExport}
-                onClearFilters={handleClearFilters}
-                hasActiveFilters={hasActiveFilters}
-            />
+            <SharedFilterBar>
+                <SearchBox
+                    value={searchTerm}
+                    onChange={setSearchTerm}
+                    placeholder="Search by item code, MSN, part number..."
+                />
+                <StatusFilter
+                    value={activeStatusFilter}
+                    onChange={v => setActiveStatusFilter(v as ActiveStatusFilter)}
+                    options={[
+                        { value: 'ALL', label: 'All Items' },
+                        { value: 'ACTIVE', label: 'Active Only' },
+                        { value: 'INACTIVE', label: 'Inactive Only' },
+                    ]}
+                />
+                <ActionBar>
+                    {hasActiveFilters && (
+                        <ClearFiltersButton onClick={handleClearFilters} />
+                    )}
+                    <RefreshButton onClick={handleRefresh} loading={refreshing} />
+                    <ActionButton
+                        label="Export CSV"
+                        icon={<Download size={14} />}
+                        onClick={handleExport}
+                        variant="primary"
+                    />
+                </ActionBar>
+            </SharedFilterBar>
 
             {/* Inventory Table */}
             <Card style={{ padding: 0, overflow: 'hidden' }}>
