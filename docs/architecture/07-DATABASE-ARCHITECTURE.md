@@ -24,6 +24,12 @@ erDiagram
     BLANKET_ORDERS ||--o{ BLANKET_RELEASES : "has releases"
     BLANKET_ORDER_LINES ||--o{ BLANKET_RELEASES : "released from"
 
+    %% ====== PACKING DOMAIN ======
+    STOCK_MOVEMENTS ||--o{ PACKING_REQUESTS : "triggers"
+    PACKING_REQUESTS ||--o{ PACKING_BOXES : "has boxes"
+    PACKING_REQUESTS ||--o{ PACKING_AUDIT_LOG : "audit trail"
+    ITEMS ||--o{ PACKING_DETAILS : "has packing specs"
+
     %% ====== AUTH DOMAIN ======
     AUTH_USERS ||--|| PROFILES : "1:1"
     AUTH_USERS ||--|| USERS : "1:1 (legacy)"
@@ -225,6 +231,58 @@ erDiagram
         timestamptz expires_at "DEFAULT now+24h"
         boolean is_used "DEFAULT false"
     }
+
+    PACKING_REQUESTS {
+        uuid id PK
+        uuid movement_header_id FK
+        varchar movement_number
+        varchar item_code
+        integer total_packed_qty
+        varchar status "APPROVED|REJECTED|PACKING_IN_PROGRESS|PARTIALLY_TRANSFERRED|COMPLETED"
+        uuid created_by FK
+        uuid approved_by FK
+        integer transferred_qty "DEFAULT 0"
+        text operator_remarks
+        text supervisor_remarks
+        timestamptz created_at
+        timestamptz approved_at
+        timestamptz completed_at
+    }
+
+    PACKING_BOXES {
+        uuid id PK
+        uuid packing_request_id FK
+        varchar packing_id UK "PKG-XXXXXXXX"
+        integer box_number
+        integer box_qty
+        boolean sticker_printed "DEFAULT false"
+        boolean is_transferred "DEFAULT false"
+        timestamptz transferred_at
+        uuid created_by FK
+        timestamptz created_at
+    }
+
+    PACKING_AUDIT_LOG {
+        uuid id PK
+        uuid packing_request_id FK
+        varchar action_type "NOT NULL"
+        uuid performed_by FK
+        varchar role
+        jsonb metadata
+        timestamptz created_at
+    }
+
+    PACKING_DETAILS {
+        uuid id PK
+        varchar item_code FK
+        varchar packing_type
+        varchar inner_dimensions
+        varchar outer_dimensions
+        integer qty_per_box
+        text remarks
+        timestamptz created_at
+        timestamptz updated_at
+    }
 ```
 
 ---
@@ -251,6 +309,10 @@ erDiagram
 | 16 | `audit_log` | Audit | Thousands | Action audit trail (v1) |
 | 17 | `audit_logs` | Audit | Thousands | Enhanced audit trail (v2) |
 | 18 | `temp_credentials` | Auth | Low | Temporary password hashes |
+| 19 | `packing_requests` | Packing | Hundreds | FG packing workflow requests |
+| 20 | `packing_boxes` | Packing | Thousands | Individual box records with PKG IDs |
+| 21 | `packing_audit_log` | Packing | Thousands | Packing operation audit trail |
+| 22 | `packing_details` | Packing | Hundreds | Packing dimension/specification templates |
 
 ---
 
@@ -294,6 +356,7 @@ CHECK (email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')
 | `vw_item_stock_summary` | Summary grid view | `items` + `inventory` |
 | `vw_blanket_release_reservations` | Pending release reservations | `blanket_releases` + `blanket_orders` |
 | `vw_recent_stock_movements` | Recent movement history | `stock_movements` + `items` + `profiles` |
+| `vw_packing_details_full` | Packing specs with item info | `packing_details` + `items` |
 
 ---
 
@@ -305,6 +368,14 @@ CHECK (email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')
 | `rbac.sql` | `.db_reference/` | RBAC tables, roles, policies (19KB) |
 | `presentschema.sql` | `.db_reference/` | Current full schema reference |
 | `003_add_employee_columns.sql` | `.db_reference/` | Employee fields migration |
+| `packing.sql` | `.db_reference/` | Packing module schema |
+| `packing_module_migration.sql` | `.db_reference/` | Packing module migration |
+| `packing_data_migration.sql` | `.db_reference/` | Packing data migration |
+| `packing_view.sql` | `.db_reference/` | Packing detail views |
+| `fix_profiles_rls.sql` | `.db_reference/` | RLS policy fixes |
+| `fix_supabase_lint_errors.sql` | `.db_reference/` | Supabase lint error fixes |
+| `fix_remaining_lint_warnings.sql` | `.db_reference/` | Remaining lint warning fixes |
+| `today.sql` | `.db_reference/` | Latest consolidated SQL |
 | `current-database-schema.sql` | `config/` | Compact schema reference |
 | `migration_add_text_columns.sql` | `config/` | Text column additions |
 | `migration_stock_movement_v2.sql` | `config/` | Stock movement v2 upgrade |

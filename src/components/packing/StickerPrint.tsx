@@ -339,7 +339,6 @@ export function StickerPrint({ sticker, onClose, onPrinted }: StickerPrintProps)
                 </div>
 
 
-
                 {/* Action Buttons */}
                 <div style={{ display: 'flex', gap: 12 }}>
                     <button onClick={onClose} style={{
@@ -348,16 +347,44 @@ export function StickerPrint({ sticker, onClose, onPrinted }: StickerPrintProps)
                         fontWeight: 600, cursor: 'pointer', fontSize: 13,
                         color: '#374151', transition: 'all 0.15s',
                     }}>Cancel</button>
-                    <button onClick={handlePrint} style={{
+
+                    <button
+                        onClick={handlePrint}
+                        disabled={!qrDataUrl}
+                        style={{
+                            flex: 1,
+                            padding: '12px 18px',
+                            borderRadius: 8,
+                            border: 'none',
+                            background: '#1e3a8a',
+                            color: '#fff',
+                            fontWeight: 600,
+                            cursor: qrDataUrl ? 'pointer' : 'not-allowed',
+                            fontSize: 14,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 8,                 // perfect spacing between icon & text
+                            transition: 'all 0.2s ease',
+                            boxShadow: '0 3px 6px rgba(30,58,138,0.25)',
+                            opacity: qrDataUrl ? 1 : 0.6,
+                        }}
+                    >
+                        <Printer size={16} />
+                        <span>Print Sticker</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+
+/*   <button onClick={handlePrint} style={{
                         flex: 1, padding: '11px 16px', borderRadius: 6,
                         border: 'none', background: '#1e3a8a', color: '#fff',
                         fontWeight: 700, cursor: 'pointer', fontSize: 13,
                         transition: 'all 0.15s',
                         boxShadow: '0 2px 4px rgba(30,58,138,0.3)',
                         opacity: qrDataUrl ? 1 : 0.5,
-                    }} disabled={!qrDataUrl}><Printer size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Print Sticker</button>
-                </div>
-            </div>
-        </div>
-    );
-}
+                    }} disabled={!qrDataUrl}><Printer size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} /> Print Sticker</button>*/

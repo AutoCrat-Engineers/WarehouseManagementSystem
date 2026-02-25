@@ -14,6 +14,8 @@ graph TD
         C3[InventoryGrid]
         C4[StockMovement]
         C5[UserManagement]
+        C6[PackingModule]
+        C7[NotificationBell]
     end
 
     subgraph HOOKS["Custom Hooks"]
@@ -27,6 +29,8 @@ graph TD
         S3["inventoryService.ts<br/>(Multi-Warehouse)"]
         S4["itemsSupabase.ts<br/>(Item CRUD)"]
         S5["services.ts<br/>(General API)"]
+        S6["packingService.ts<br/>(Packing Workflow)"]
+        S7["notificationService.ts<br/>(Notifications)"]
     end
 
     subgraph TRANSPORT["Transport Layer"]
@@ -43,6 +47,8 @@ graph TD
     C2 --> S4
     C4 --> S3
     C5 --> S2
+    C6 --> S6
+    C7 --> S7
 
     H1 --> T2
     H2 --> S3
@@ -51,6 +57,8 @@ graph TD
     S3 --> T2
     S4 --> T2
     S5 --> T1
+    S6 --> T2
+    S7 --> T2
 
     T1 --> SB
     T2 --> SB
@@ -125,6 +133,28 @@ graph TD
 |----------|-----------|---------|
 | Item CRUD | `fetchItems`, `createItem`, `updateItem`, `deleteItem` | Full item lifecycle |
 | Cascading Delete | Hard delete with associated inventory, movements, forecasts | Data cleanup |
+
+---
+
+### `src/components/packing/packingService.ts` — Packing Workflow Service
+
+| Function | Purpose |
+|----------|---------|
+| Packing request CRUD | Create, list, and manage packing requests linked to stock movements |
+| Box management | Add/remove individual boxes with unique PKG IDs |
+| Sticker generation | Generate sticker data with barcodes for box labels |
+| Stock transfer | Partial and complete stock transfers from Production to FG Warehouse |
+| Audit logging | packing_audit_log entries for all packing operations |
+
+---
+
+### `src/utils/notifications/notificationService.ts` — Notification Service
+
+| Function | Purpose |
+|----------|---------|
+| Notification CRUD | Fetch, create, and manage user notifications |
+| Mark as read | Mark individual or all notifications as read |
+| Notification types | Stock alerts, approval requests, system events |
 
 ---
 

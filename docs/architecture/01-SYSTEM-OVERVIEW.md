@@ -10,9 +10,11 @@ The WMS is an **enterprise-grade, real-time inventory and supply chain managemen
 
 - **Finished Goods (FG) inventory** across multiple warehouse types
 - **Blanket order management** and scheduled release tracking
+- **FG packing workflow** with sticker/barcode generation and box-level stock transfer
 - **Demand forecasting** using Holt-Winters triple exponential smoothing
 - **Material Requirements Planning (MRP)** with actionable recommendations
 - **Stock movement ledger** — an immutable audit trail for every IN/OUT transaction
+- **Real-time notifications** for stock events, approvals, and system alerts
 
 ---
 
@@ -32,6 +34,7 @@ The WMS is an **enterprise-grade, real-time inventory and supply chain managemen
 | **Backend-as-a-Service** | Supabase | Latest | Auth, DB, Edge Functions, Realtime |
 | **Edge Functions Runtime** | Hono | Latest | Lightweight HTTP framework on Deno |
 | **Database** | PostgreSQL | 15+ | Managed via Supabase |
+| **Barcode/QR** | QRCode | 1.5.x | Sticker barcode generation |
 | **Styling** | CSS + Tailwind Merge | — | Utility-first with merge support |
 
 ---
@@ -74,6 +77,7 @@ C4Context
 |--------|--------|-----------------|
 | **Item Master** | `items` | Finished goods catalog — codes, pricing, lead times |
 | **Inventory** | `inventory`, `stock_movements` | Real-time stock levels, movement ledger |
+| **Packing** | `packing_requests`, `packing_boxes`, `packing_audit_log`, `packing_details` | FG packing workflow, sticker generation, box-level stock transfer |
 | **Blanket Orders** | `blanket_orders`, `blanket_order_items`, `blanket_order_lines`, `blanket_releases` | Customer scheduling agreements & release tracking |
 | **Forecasting** | `demand_history`, `demand_forecasts` | Statistical demand prediction |
 | **Planning (MRP)** | `planning_recommendations` | Replenishment actions & priorities |

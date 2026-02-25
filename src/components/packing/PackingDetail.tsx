@@ -743,7 +743,7 @@ ${stickerPages}
                                                         fontSize: 11, fontWeight: 600,
                                                         border: '1px solid #86efac', minWidth: 80, justifyContent: 'center',
                                                     }}>
-                                                        In FG Warehouse
+                                                        FG Warehouse
                                                     </span>
                                                 ) : isPrinted ? (
                                                     <span style={{
