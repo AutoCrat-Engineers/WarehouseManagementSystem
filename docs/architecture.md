@@ -49,6 +49,16 @@ graph TD
 - **Input**: Current Stock + Open Orders + Forecasts + Lead Times.
 - **Output**: Actionable replenishment recommendations with priority levels.
 
+### 5. Packing Module
+- **Workflow**: Movement Approved → Packing Request → Box Creation (PKG-XXXXXXXX) → Sticker Generation → Stock Transfer.
+- **Stock Transfer**: Partial and complete stock transfers from Production to FG Warehouse.
+- **Audit**: Full packing audit trail with human-readable metadata.
+- **Sticker**: Barcode-enabled stickers with item details, box numbers, and PKG identifiers.
+
+### 6. Notifications
+- **Bell**: Real-time notification bell in the top bar with unread count.
+- **Alerts**: Stock alerts, approval requests, and system events.
+
 ## 🔐 Security Architecture
 
 - **Authentication**: Google/Microsoft style Auth via Supabase.

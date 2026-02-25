@@ -52,6 +52,18 @@ mindmap
       authService
       userService
       profiles + roles tables
+    Packing
+      PackingModule.tsx
+      PackingDetails.tsx
+      PackingListInvoice.tsx
+      PackingListSubInvoice.tsx
+      StickerPrint.tsx
+      packingService.ts
+      packing_requests table
+      packing_boxes table
+    Notifications
+      NotificationBell.tsx
+      notificationService.ts
 ```
 
 ---
@@ -85,7 +97,7 @@ mindmap
 
 | Aspect | Detail |
 |--------|--------|
-| **Component** | `ItemMasterSupabase.tsx` (80KB) |
+| **Component** | `ItemMasterSupabase.tsx` (74KB) |
 | **API** | `src/utils/api/itemsSupabase.ts` |
 | **Purpose** | Full CRUD for finished goods catalog |
 | **Tables** | `items` |
@@ -112,7 +124,7 @@ mindmap
 
 | Aspect | Detail |
 |--------|--------|
-| **Component** | `InventoryGrid.tsx` (51KB) |
+| **Component** | `InventoryGrid.tsx` (42KB) |
 | **Service** | `inventoryService.ts` (16KB) |
 | **Hooks** | 8 hooks in `useInventory.ts` (17KB) |
 | **Purpose** | Multi-warehouse stock visibility and management |
@@ -146,7 +158,7 @@ mindmap
 
 | Aspect | Detail |
 |--------|--------|
-| **Component** | `StockMovement.tsx` (132KB — largest component) |
+| **Component** | `StockMovement.tsx` (137KB — largest component) |
 | **Purpose** | Immutable transaction ledger for all stock changes |
 | **Tables** | `stock_movements`, `inventory` |
 
@@ -177,7 +189,55 @@ Every movement record captures:
 
 ---
 
-## 9.6 Module: Blanket Orders
+## 9.7 Module: Packing
+
+| Aspect | Detail |
+|--------|--------|
+| **Components** | `PackingModule.tsx` (18KB), `PackingDetail.tsx` (58KB), `PackingDetails.tsx` (74KB), `PackingList.tsx` (26KB), `PackingListInvoice.tsx` (19KB), `PackingListSubInvoice.tsx` (20KB), `StickerPrint.tsx` (18KB) |
+| **Service** | `packingService.ts` (31KB) |
+| **Types** | `src/types/packing.ts` (10KB) |
+| **Purpose** | End-to-end FG packing workflow with sticker generation and box-level stock transfer |
+| **Tables** | `packing_requests`, `packing_boxes`, `packing_audit_log`, `packing_details` |
+
+### Packing Workflow
+```
+Movement Approved → Packing Request Created → Packing Started →
+Boxes Created (each gets PKG-XXXXXXXX) → Stickers Printed →
+Partial Stock Transfer → Complete Packing (full transfer to FG Warehouse)
+```
+
+### Packing Request Status Machine
+| Status | Description |
+|--------|-------------|
+| `APPROVED` | Supervisor approved — packing can begin, no stock moved |
+| `REJECTED` | Supervisor rejected — no stock movement |
+| `PACKING_IN_PROGRESS` | Operator started packing — creating boxes |
+| `PARTIALLY_TRANSFERRED` | Some boxes packed & stock partially moved to FG Warehouse |
+| `COMPLETED` | All boxes packed, all stock transferred to FG Warehouse |
+
+### Sub-Views (Accordion Navigation)
+| View | Component | Purpose |
+|------|-----------|---------|
+| Sticker Generation | `PackingModule.tsx` | Create boxes, print stickers with barcodes |
+| Packing Details | `PackingDetails.tsx` | Manage packing specs (dimensions, qty per box) |
+| Packing List — Invoice | `PackingListInvoice.tsx` | Packing list against invoice |
+| Packing List — Sub Invoice | `PackingListSubInvoice.tsx` | Packing list against sub-invoice |
+
+### Audit Actions
+| Action | Description |
+|--------|-------------|
+| `PACKING_CREATED` | Packing request created |
+| `PACKING_STARTED` | Packing started by operator |
+| `BOX_CREATED` | Box added with unique PKG ID |
+| `BOX_DELETED` | Box removed |
+| `STICKER_PRINTED` | Sticker printed for box |
+| `STOCK_PARTIAL_TRANSFER` | Partial stock moved to FG Warehouse |
+| `STOCK_FULL_TRANSFER` | Full stock moved to FG Warehouse |
+| `PACKING_COMPLETED` | Packing completed |
+
+---
+
+## 9.8 Module: Blanket Orders
 
 | Aspect | Detail |
 |--------|--------|
@@ -199,7 +259,7 @@ ACTIVE → PARTIALLY_RELEASED → FULLY_RELEASED → COMPLETED → CLOSED
 
 ---
 
-## 9.7 Module: Blanket Releases
+## 9.9 Module: Blanket Releases
 
 | Aspect | Detail |
 |--------|--------|
@@ -220,7 +280,7 @@ PENDING → IN_PROGRESS → SHIPPED → DELIVERED → COMPLETED
 
 ---
 
-## 9.8 Module: Forecasting
+## 9.10 Module: Forecasting
 
 | Aspect | Detail |
 |--------|--------|
@@ -247,7 +307,7 @@ Forecast: Fₜ₊ₕ = (Lₜ + h × Tₜ) × Sₜ₊ₕ₋ₘ
 
 ---
 
-## 9.9 Module: MRP Planning
+## 9.11 Module: MRP Planning
 
 | Aspect | Detail |
 |--------|--------|
@@ -272,6 +332,22 @@ Forecast: Fₜ₊ₕ = (Lₜ + h × Tₜ) × Sₜ₊ₕ₋ₘ
 | 🟠 **HIGH** | Stock depleted within lead time |
 | 🟡 **MEDIUM** | Stock adequate but action needed |
 | 🟢 **LOW** | Informational, no immediate action |
+
+---
+
+## 9.12 Module: Notifications
+
+| Aspect | Detail |
+|--------|--------|
+| **Component** | `NotificationBell.tsx` (17KB) |
+| **Service** | `notificationService.ts` (12KB) |
+| **Purpose** | Real-time notification system for stock events, approvals, and system alerts |
+
+### Features
+- Notification bell with unread count badge in the top bar
+- Real-time updates via Supabase subscriptions
+- Mark individual or all notifications as read
+- Notification categories: stock alerts, approval requests, system events
 
 ---
 
