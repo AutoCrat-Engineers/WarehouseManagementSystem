@@ -1,7 +1,7 @@
 # 🏗️ WMS — Enterprise Architecture Documentation
 
 > **Project**: AutoCrat Engineers — Warehouse Management System (WMS)  
-> **Version**: 0.2.0  
+> **Version**: 0.3.2  
 > **Last Updated**: February 2026  
 > **Document Owner**: Team Optimus
 

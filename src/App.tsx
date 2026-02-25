@@ -488,7 +488,7 @@ export default function App() {
                 textAlign: 'center',
                 backdropFilter: 'blur(4px)',
               }}>
-                v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.3.0'}
+                v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.3.2'}
               </span>
             </div>
           </div>

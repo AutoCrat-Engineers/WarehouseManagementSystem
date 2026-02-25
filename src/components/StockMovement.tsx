@@ -152,7 +152,7 @@ const VALID_ROUTES: MovementRoute[] = [
   { from: 'US', to: 'IT', movementType: 'RETURN_TO_PRODUCTION_FLOW', flow: 'REVERSE', label: 'US → In-Transit' },
   { from: 'IT', to: 'PW', movementType: 'RETURN_TO_PRODUCTION_FLOW', flow: 'REVERSE', label: 'In-Transit → PW' },
   { from: 'PW', to: 'PRODUCTION', movementType: 'RETURN_TO_PRODUCTION', flow: 'REVERSE', label: 'PW → Production' },
-  { from: 'PW', to: 'PF', movementType: 'REJECTION_DISPOSAL', flow: 'REVERSE', label: 'PW → Production Floor (Disposal)' },
+  { from: 'PW', to: 'PF', movementType: 'REJECTION_DISPOSAL', flow: 'REVERSE', label: 'PW → Rejection Warehouse' },
 ];
 
 const MOVEMENT_TYPE_LABELS: Record<string, string> = {
@@ -163,7 +163,7 @@ const MOVEMENT_TYPE_LABELS: Record<string, string> = {
   CUSTOMER_RETURN: 'Customer Return',
   RETURN_TO_PRODUCTION_FLOW: 'Return to Production Flow',
   RETURN_TO_PRODUCTION: 'Return to Production',
-  REJECTION_DISPOSAL: 'Rejection Disposal (Final Removal)',
+  REJECTION_DISPOSAL: 'Rejection Stock Out',
 };
 
 // Reverse-flow movement types = Rejection; everything else = Stock In
@@ -1697,7 +1697,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
                                 : resolveWarehouseLabel(m.source_warehouse_id, m.source_warehouse)}
                         </td>
                         <td style={{ ...tdStyle, fontSize: '13px' }}>
-                          {m.movement_type === 'REJECTION_DISPOSAL' ? 'Production Floor (Disposal)'
+                          {m.movement_type === 'REJECTION_DISPOSAL' ? 'Rejection Warehouse'
                             : m.movement_type === 'PRODUCTION_RECEIPT' ? 'FG Warehouse'
                               : m.movement_type === 'CUSTOMER_SALE' ? 'Customer'
                                 : resolveWarehouseLabel(m.destination_warehouse_id, m.destination_warehouse)}
@@ -2159,7 +2159,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
                 : reviewMovement.movement_type === 'CUSTOMER_RETURN' ? 'Customer'
                   : resolveWarehouseLabel(reviewMovement.source_warehouse_id, reviewMovement.source_warehouse, 'External');
           const toLabel =
-            reviewMovement.movement_type === 'REJECTION_DISPOSAL' ? 'Production Floor (Disposal)'
+            reviewMovement.movement_type === 'REJECTION_DISPOSAL' ? 'Rejection Warehouse'
               : reviewMovement.movement_type === 'PRODUCTION_RECEIPT' ? 'FG Warehouse'
                 : reviewMovement.movement_type === 'CUSTOMER_SALE' ? 'Customer'
                   : resolveWarehouseLabel(reviewMovement.destination_warehouse_id, reviewMovement.destination_warehouse, 'External');

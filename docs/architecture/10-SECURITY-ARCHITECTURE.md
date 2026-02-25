@@ -171,6 +171,11 @@ CREATE TABLE audit_logs (
 | Item deleted | `DELETE_ITEM` | Deleted item data |
 | Stock movement | `STOCK_IN` / `STOCK_OUT` | Qty, balance, reason |
 | Password change | `PASSWORD_CHANGE` | User ID only |
+| Packing created | `PACKING_CREATED` | Item code, movement number, approved qty |
+| Box added | `BOX_CREATED` | Box number, qty, PKG ID |
+| Sticker printed | `STICKER_PRINTED` | Box details, PKG ID |
+| Stock transferred | `STOCK_PARTIAL_TRANSFER` / `STOCK_FULL_TRANSFER` | Transferred qty, box count |
+| Packing completed | `PACKING_COMPLETED` | Total packed qty, box count |
 
 ---
 
@@ -205,6 +210,8 @@ CREATE TABLE audit_logs (
 | 10 | Input validation on forms | ✅ |
 | 11 | Auto token refresh on 401 | ✅ |
 | 12 | Temporary passwords expire in 24h | ✅ |
+| 13 | Mutable search path fixed on all functions | ✅ |
+| 14 | Packing audit log tracks all packing operations | ✅ |
 
 ---
 
