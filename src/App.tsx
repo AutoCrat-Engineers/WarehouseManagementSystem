@@ -15,6 +15,8 @@ import { PackingModule, PackingDetails, PackingListInvoice, PackingListSubInvoic
 import { LoadingPage } from './components/LoadingPage';
 import { UserManagement } from './auth/users/UserManagement';
 import { NotificationBell } from './components/notifications/NotificationBell';
+import { getUserPermissions } from './auth/services/permissionService';
+import type { PermissionMap } from './auth/components/GrantAccessModal';
 import {
   LayoutDashboard,
   Package,
@@ -94,6 +96,45 @@ export default function App() {
   // SAP-style accordion states
   const [packingMenuOpen, setPackingMenuOpen] = useState(false);
   const [packingListOpen, setPackingListOpen] = useState(false);
+  // Granular permission state (loaded from localStorage)
+  const [userPerms, setUserPerms] = useState<PermissionMap>({});
+
+  // ============================================================================
+  // PERMISSION ENFORCEMENT: Map view IDs → permission keys
+  // ============================================================================
+  const VIEW_PERMISSION_MAP: Record<string, string> = {
+    'dashboard': 'dashboard.view',
+    'items': 'items.view',
+    'inventory': 'inventory.view',
+    'stock-movements': 'stock-movements.view',
+    'packing': 'packing.sticker-generation.view',
+    'packing-sticker': 'packing.sticker-generation.view',
+    'packing-details': 'packing.packing-details.view',
+    'packing-list-invoice': 'packing.packing-list-invoice.view',
+    'packing-list-sub-invoice': 'packing.packing-list-sub-invoice.view',
+    'orders': 'orders.view',
+    'releases': 'releases.view',
+    'forecast': 'forecast.view',
+    'planning': 'planning.view',
+    'users': 'users.view',
+  };
+
+  /**
+   * Check if the current user can access a view.
+   * L3 users always have full access (they grant permissions).
+   * L1/L2 users must have the specific view permission.
+   */
+  const canAccessView = (view: string): boolean => {
+    // L3 always has full access
+    if (userRole === 'L3') return true;
+    // If no permissions have been assigned yet, allow everything
+    // (prevents lockout for existing users before permissions are set)
+    const hasAnyPermission = Object.values(userPerms).some(v => v === true);
+    if (!hasAnyPermission) return true;
+    // Check specific permission
+    const permKey = VIEW_PERMISSION_MAP[view];
+    return permKey ? userPerms[permKey] === true : true;
+  };
 
   // ============================================================================
   // RESPONSIVE: Detect mobile/tablet screen size
@@ -239,6 +280,12 @@ export default function App() {
       if (data && data.is_active) {
         console.log('✅ User role set to:', data.role);
         setUserRole(data.role as UserRole);
+        // Load granular permissions from localStorage
+        if (data.role !== 'L3') {
+          const perms = getUserPermissions(userId);
+          setUserPerms(perms);
+          console.log('🔐 Loaded permissions:', Object.keys(perms).filter(k => perms[k]).length, 'granted');
+        }
       } else if (data && !data.is_active) {
         // User is inactive
         console.warn('⚠️ User account is inactive');
@@ -325,47 +372,43 @@ export default function App() {
       case 'dashboard':
         return <DashboardNew accessToken={accessToken} onNavigate={(view) => setCurrentView(view as View)} />;
       case 'items':
+        if (!canAccessView('items')) return renderAccessDenied('Item Master');
         return <ItemMasterSupabase userRole={userRole} />;
       case 'inventory':
+        if (!canAccessView('inventory')) return renderAccessDenied('Inventory');
         return <InventoryGrid />;
       case 'stock-movements':
+        if (!canAccessView('stock-movements')) return renderAccessDenied('Stock Movements');
         return <StockMovement accessToken={accessToken} userRole={userRole} />;
       case 'packing':
       case 'packing-sticker':
+        if (!canAccessView('packing-sticker')) return renderAccessDenied('Packing — Sticker Generation');
         return <PackingModule accessToken={accessToken} userRole={userRole} />;
       case 'packing-details':
+        if (!canAccessView('packing-details')) return renderAccessDenied('Packing — Details');
         return <PackingDetails accessToken={accessToken} userRole={userRole} onNavigate={(v) => setCurrentView(v as View)} />;
       case 'packing-list-invoice':
+        if (!canAccessView('packing-list-invoice')) return renderAccessDenied('Packing List — Invoice');
         return <PackingListInvoice accessToken={accessToken} userRole={userRole} onNavigate={(v) => setCurrentView(v as View)} />;
       case 'packing-list-sub-invoice':
+        if (!canAccessView('packing-list-sub-invoice')) return renderAccessDenied('Packing List — Sub Invoice');
         return <PackingListSubInvoice accessToken={accessToken} userRole={userRole} onNavigate={(v) => setCurrentView(v as View)} />;
       case 'orders':
+        if (!canAccessView('orders')) return renderAccessDenied('Blanket Orders');
         return <BlanketOrders accessToken={accessToken} />;
       case 'releases':
+        if (!canAccessView('releases')) return renderAccessDenied('Blanket Releases');
         return <BlanketReleases accessToken={accessToken} />;
       case 'forecast':
+        if (!canAccessView('forecast')) return renderAccessDenied('Forecasting');
         return <ForecastingModule accessToken={accessToken} />;
       case 'planning':
+        if (!canAccessView('planning')) return renderAccessDenied('MRP Planning');
         return <PlanningModule accessToken={accessToken} />;
       case 'users':
         // Only L3 can access user management
         if (userRole !== 'L3') {
-          return (
-            <div style={{
-              padding: '32px',
-              backgroundColor: '#fef3c7',
-              borderRadius: '12px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              color: '#92400e',
-            }}>
-              <Shield size={24} />
-              <div>
-                <strong>Access Denied:</strong> Only L3 Managers can access User Management.
-              </div>
-            </div>
-          );
+          return renderAccessDenied('User Management');
         }
         return <UserManagement currentUserId={user?.id || ''} />;
       default:
@@ -373,19 +416,66 @@ export default function App() {
     }
   };
 
-  // Build menu items dynamically based on user role
+  // Access denied component
+  const renderAccessDenied = (moduleName: string) => (
+    <div style={{
+      padding: '48px 32px',
+      display: 'flex',
+      flexDirection: 'column' as const,
+      alignItems: 'center',
+      justifyContent: 'center',
+      textAlign: 'center' as const,
+      gap: '16px',
+    }}>
+      <div style={{
+        width: '64px', height: '64px', borderRadius: '16px',
+        background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        boxShadow: '0 4px 12px rgba(245, 158, 11, 0.2)',
+      }}>
+        <Shield size={32} style={{ color: '#d97706' }} />
+      </div>
+      <div>
+        <h3 style={{ fontSize: '18px', fontWeight: '700', color: '#111827', margin: '0 0 6px' }}>
+          Access Restricted
+        </h3>
+        <p style={{ fontSize: '14px', color: '#6b7280', margin: '0', maxWidth: '360px' }}>
+          You don't have permission to access <strong>{moduleName}</strong>. Contact your L3 Manager to request access.
+        </p>
+      </div>
+    </div>
+  );
+
+  // Build menu items dynamically based on user role + granular permissions
   const getMenuItems = () => {
-    const baseItems = menuItems;
-    console.log('🎯 getMenuItems called, userRole:', userRole);
+    let items = [...menuItems];
+
     // Add User Management for L3 users
     if (userRole === 'L3') {
       console.log('✅ Adding User Management menu for L3');
-      return [
-        ...baseItems,
-        { id: 'users' as View, label: 'User Management', icon: Users, description: 'Manage Users & Roles' }
-      ];
+      items.push({ id: 'users' as View, label: 'User Management', icon: Users, description: 'Manage Users & Roles' });
     }
-    return baseItems;
+
+    // For L1/L2 users with assigned permissions, filter menu items
+    if (userRole !== 'L3') {
+      const hasAnyPermission = Object.values(userPerms).some(v => v === true);
+      if (hasAnyPermission) {
+        items = items.filter(item => {
+          // Packing parent: show if ANY packing submodule has view permission
+          if (item.id === 'packing') {
+            return (
+              userPerms['packing.sticker-generation.view'] ||
+              userPerms['packing.packing-details.view'] ||
+              userPerms['packing.packing-list-invoice.view'] ||
+              userPerms['packing.packing-list-sub-invoice.view']
+            );
+          }
+          return canAccessView(item.id);
+        });
+      }
+    }
+
+    return items;
   };
 
   // Log current role for debugging
@@ -559,115 +649,127 @@ export default function App() {
                       backgroundColor: 'rgba(30, 58, 138, 0.02)',
                     }}>
                       {/* 1. Generate Sticker */}
-                      <button
-                        onClick={() => handleNavigation('packing-sticker')}
-                        style={{
-                          width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
-                          padding: '9px 24px 9px 44px', border: 'none',
-                          backgroundColor: isStickerActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                          borderLeft: isStickerActive ? '3px solid #1e3a8a' : '3px solid transparent',
-                          color: isStickerActive ? '#1e3a8a' : 'var(--enterprise-gray-600)',
-                          textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                          fontWeight: isStickerActive ? '600' : '400', fontSize: '13px',
-                        }}
-                        onMouseEnter={(e) => { if (!isStickerActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                        onMouseLeave={(e) => { if (!isStickerActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
-                      >
-                        <Printer size={15} strokeWidth={isStickerActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isStickerActive ? 1 : 0.6 }} />
-                        <span>Sticker Generation</span>
-                      </button>
+                      {canAccessView('packing-sticker') && (
+                        <button
+                          onClick={() => handleNavigation('packing-sticker')}
+                          style={{
+                            width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                            padding: '9px 24px 9px 44px', border: 'none',
+                            backgroundColor: isStickerActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                            borderLeft: isStickerActive ? '3px solid #1e3a8a' : '3px solid transparent',
+                            color: isStickerActive ? '#1e3a8a' : 'var(--enterprise-gray-600)',
+                            textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
+                            fontWeight: isStickerActive ? '600' : '400', fontSize: '13px',
+                          }}
+                          onMouseEnter={(e) => { if (!isStickerActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                          onMouseLeave={(e) => { if (!isStickerActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
+                        >
+                          <Printer size={15} strokeWidth={isStickerActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isStickerActive ? 1 : 0.6 }} />
+                          <span>Sticker Generation</span>
+                        </button>
+                      )}
 
                       {/* 2. Packing Details */}
-                      <button
-                        onClick={() => handleNavigation('packing-details')}
-                        style={{
-                          width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
-                          padding: '9px 24px 9px 44px', border: 'none',
-                          backgroundColor: isDetailsActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                          borderLeft: isDetailsActive ? '3px solid #1e3a8a' : '3px solid transparent',
-                          color: isDetailsActive ? '#1e3a8a' : 'var(--enterprise-gray-600)',
-                          textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                          fontWeight: isDetailsActive ? '600' : '400', fontSize: '13px',
-                        }}
-                        onMouseEnter={(e) => { if (!isDetailsActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                        onMouseLeave={(e) => { if (!isDetailsActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
-                      >
-                        <ClipboardList size={15} strokeWidth={isDetailsActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isDetailsActive ? 1 : 0.6 }} />
-                        <span>Packing Details</span>
-                      </button>
-
-                      {/* 3. Packing List (expandable — Level 2) */}
-                      <button
-                        onClick={() => setPackingListOpen(!packingListOpen)}
-                        style={{
-                          width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
-                          padding: '9px 24px 9px 44px', border: 'none',
-                          backgroundColor: isPackingListActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                          borderLeft: isPackingListActive ? '3px solid #1e3a8a' : '3px solid transparent',
-                          color: isPackingListActive ? '#1e3a8a' : 'var(--enterprise-gray-600)',
-                          textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                          fontWeight: isPackingListActive ? '600' : '400', fontSize: '13px',
-                        }}
-                        onMouseEnter={(e) => { if (!isPackingListActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                        onMouseLeave={(e) => { if (!isPackingListActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
-                      >
-                        <List size={15} strokeWidth={isPackingListActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isPackingListActive ? 1 : 0.6 }} />
-                        <span style={{ flex: 1 }}>Packing List</span>
-                        <ChevronDown
-                          size={14}
-                          style={{
-                            transition: 'transform 250ms ease',
-                            transform: packingListOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-                            color: isPackingListActive ? '#1e3a8a' : '#9ca3af',
-                          }}
-                        />
-                      </button>
-
-                      {/* ─── Level-2: Packing List sub-items ─── */}
-                      <div style={{
-                        maxHeight: packingListOpen ? '200px' : '0',
-                        overflow: 'hidden',
-                        transition: 'max-height 250ms ease',
-                        backgroundColor: 'rgba(30, 58, 138, 0.02)',
-                      }}>
-                        {/* Against Invoice */}
+                      {canAccessView('packing-details') && (
                         <button
-                          onClick={() => handleNavigation('packing-list-invoice')}
+                          onClick={() => handleNavigation('packing-details')}
                           style={{
-                            width: '100%', display: 'flex', alignItems: 'center', gap: '9px',
-                            padding: '8px 24px 8px 62px', border: 'none',
-                            backgroundColor: isListInvActive ? 'rgba(30, 58, 138, 0.1)' : 'transparent',
-                            borderLeft: isListInvActive ? '3px solid #1e3a8a' : '3px solid transparent',
-                            color: isListInvActive ? '#1e3a8a' : 'var(--enterprise-gray-500)',
+                            width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                            padding: '9px 24px 9px 44px', border: 'none',
+                            backgroundColor: isDetailsActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                            borderLeft: isDetailsActive ? '3px solid #1e3a8a' : '3px solid transparent',
+                            color: isDetailsActive ? '#1e3a8a' : 'var(--enterprise-gray-600)',
                             textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                            fontWeight: isListInvActive ? '600' : '400', fontSize: '12px',
+                            fontWeight: isDetailsActive ? '600' : '400', fontSize: '13px',
                           }}
-                          onMouseEnter={(e) => { if (!isListInvActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                          onMouseLeave={(e) => { if (!isListInvActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
+                          onMouseEnter={(e) => { if (!isDetailsActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                          onMouseLeave={(e) => { if (!isDetailsActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
                         >
-                          <FileCheck size={14} strokeWidth={isListInvActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isListInvActive ? 1 : 0.55 }} />
-                          <span>Against Invoice</span>
+                          <ClipboardList size={15} strokeWidth={isDetailsActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isDetailsActive ? 1 : 0.6 }} />
+                          <span>Packing Details</span>
                         </button>
+                      )}
 
-                        {/* Against Sub Invoice */}
-                        <button
-                          onClick={() => handleNavigation('packing-list-sub-invoice')}
-                          style={{
-                            width: '100%', display: 'flex', alignItems: 'center', gap: '9px',
-                            padding: '8px 24px 8px 62px', border: 'none',
-                            backgroundColor: isListSubInvActive ? 'rgba(30, 58, 138, 0.1)' : 'transparent',
-                            borderLeft: isListSubInvActive ? '3px solid #1e3a8a' : '3px solid transparent',
-                            color: isListSubInvActive ? '#1e3a8a' : 'var(--enterprise-gray-500)',
-                            textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                            fontWeight: isListSubInvActive ? '600' : '400', fontSize: '12px',
-                          }}
-                          onMouseEnter={(e) => { if (!isListSubInvActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                          onMouseLeave={(e) => { if (!isListSubInvActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
-                        >
-                          <FileMinus size={14} strokeWidth={isListSubInvActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isListSubInvActive ? 1 : 0.55 }} />
-                          <span>Against Sub Invoice</span>
-                        </button>
-                      </div>
+                      {/* 3. Packing List (expandable — Level 2) — only if at least one child is accessible */}
+                      {(canAccessView('packing-list-invoice') || canAccessView('packing-list-sub-invoice')) && (
+                        <>
+                          <button
+                            onClick={() => setPackingListOpen(!packingListOpen)}
+                            style={{
+                              width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                              padding: '9px 24px 9px 44px', border: 'none',
+                              backgroundColor: isPackingListActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                              borderLeft: isPackingListActive ? '3px solid #1e3a8a' : '3px solid transparent',
+                              color: isPackingListActive ? '#1e3a8a' : 'var(--enterprise-gray-600)',
+                              textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
+                              fontWeight: isPackingListActive ? '600' : '400', fontSize: '13px',
+                            }}
+                            onMouseEnter={(e) => { if (!isPackingListActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                            onMouseLeave={(e) => { if (!isPackingListActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
+                          >
+                            <List size={15} strokeWidth={isPackingListActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isPackingListActive ? 1 : 0.6 }} />
+                            <span style={{ flex: 1 }}>Packing List</span>
+                            <ChevronDown
+                              size={14}
+                              style={{
+                                transition: 'transform 250ms ease',
+                                transform: packingListOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                                color: isPackingListActive ? '#1e3a8a' : '#9ca3af',
+                              }}
+                            />
+                          </button>
+
+                          {/* ─── Level-2: Packing List sub-items ─── */}
+                          <div style={{
+                            maxHeight: packingListOpen ? '200px' : '0',
+                            overflow: 'hidden',
+                            transition: 'max-height 250ms ease',
+                            backgroundColor: 'rgba(30, 58, 138, 0.02)',
+                          }}>
+                            {/* Against Invoice */}
+                            {canAccessView('packing-list-invoice') && (
+                              <button
+                                onClick={() => handleNavigation('packing-list-invoice')}
+                                style={{
+                                  width: '100%', display: 'flex', alignItems: 'center', gap: '9px',
+                                  padding: '8px 24px 8px 62px', border: 'none',
+                                  backgroundColor: isListInvActive ? 'rgba(30, 58, 138, 0.1)' : 'transparent',
+                                  borderLeft: isListInvActive ? '3px solid #1e3a8a' : '3px solid transparent',
+                                  color: isListInvActive ? '#1e3a8a' : 'var(--enterprise-gray-500)',
+                                  textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
+                                  fontWeight: isListInvActive ? '600' : '400', fontSize: '12px',
+                                }}
+                                onMouseEnter={(e) => { if (!isListInvActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                                onMouseLeave={(e) => { if (!isListInvActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
+                              >
+                                <FileCheck size={14} strokeWidth={isListInvActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isListInvActive ? 1 : 0.55 }} />
+                                <span>Against Invoice</span>
+                              </button>
+                            )}
+
+                            {/* Against Sub Invoice */}
+                            {canAccessView('packing-list-sub-invoice') && (
+                              <button
+                                onClick={() => handleNavigation('packing-list-sub-invoice')}
+                                style={{
+                                  width: '100%', display: 'flex', alignItems: 'center', gap: '9px',
+                                  padding: '8px 24px 8px 62px', border: 'none',
+                                  backgroundColor: isListSubInvActive ? 'rgba(30, 58, 138, 0.1)' : 'transparent',
+                                  borderLeft: isListSubInvActive ? '3px solid #1e3a8a' : '3px solid transparent',
+                                  color: isListSubInvActive ? '#1e3a8a' : 'var(--enterprise-gray-500)',
+                                  textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
+                                  fontWeight: isListSubInvActive ? '600' : '400', fontSize: '12px',
+                                }}
+                                onMouseEnter={(e) => { if (!isListSubInvActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                                onMouseLeave={(e) => { if (!isListSubInvActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
+                              >
+                                <FileMinus size={14} strokeWidth={isListSubInvActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isListSubInvActive ? 1 : 0.55 }} />
+                                <span>Against Sub Invoice</span>
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 );
