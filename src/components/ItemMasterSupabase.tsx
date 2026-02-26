@@ -1391,7 +1391,7 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
       </SharedFilterBar>
 
       {/* Items Table - PRIMARY IDENTIFIER: Part Number */}
-      <Card style={{ padding: 0, overflow: 'hidden' }}>
+      <Card style={{ padding: 0 }}>
         {filteredItems.length === 0 ? (
           <EmptyState
             icon={<Package size={48} />}
@@ -1472,10 +1472,10 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
                               <div
                                 style={{
                                   position: 'absolute',
-                                  top: '100%',
+                                  bottom: '100%',
                                   right: '0',
-                                  marginTop: '4px',
-                                  zIndex: 50,
+                                  marginBottom: '4px',
+                                  zIndex: 9999,
                                   width: '180px',
                                   backgroundColor: 'white',
                                   borderRadius: '12px',
