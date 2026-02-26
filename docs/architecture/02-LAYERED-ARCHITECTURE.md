@@ -21,6 +21,10 @@ graph TB
         PM[PlanningModule]
         UM[UserManagement]
         SDC[StockDistributionCard]
+        PKG[PackingModule]
+        PKD[PackingDetails]
+        PKL[PackingListInvoice]
+        NB[NotificationBell]
         EB[ErrorBoundary]
         LOAD[LoadingPage]
     end
@@ -57,6 +61,8 @@ graph TB
         ISB[itemsSupabase]
         SV[services API]
         FWA[fetchWithAuth]
+        PKS[packingService]
+        NS[notificationService]
     end
 
     subgraph BACKEND["☁️ BACKEND — Supabase Edge Functions (Hono)"]
@@ -137,7 +143,7 @@ graph TB
 | **Error Display** | `ErrorBoundary` wraps the entire app tree |
 | **Loading States** | `LoadingPage` provides branded loading experience |
 
-**Key Files**: `App.tsx`, `src/components/*.tsx`
+**Key Files**: `App.tsx`, `src/components/*.tsx`, `src/components/packing/*.tsx`, `src/components/notifications/*.tsx`
 
 ---
 
@@ -163,9 +169,11 @@ graph TB
 | **User API** | `userService.ts` — CRUD for user accounts (L3 only) |
 | **Inventory API** | `inventoryService.ts` — dashboard, distribution, warehouse ops |
 | **Items API** | `itemsSupabase.ts` — item CRUD, cascading deletes |
+| **Packing API** | `packingService.ts` — packing requests, boxes, stickers, stock transfer |
+| **Notifications** | `notificationService.ts` — notification management |
 | **Token Injection** | `fetchWithAuth.ts` — wraps `fetch()` with JWT headers |
 
-**Key Files**: `src/auth/services/*.ts`, `src/services/*.ts`, `src/utils/api/*.ts`
+**Key Files**: `src/auth/services/*.ts`, `src/services/*.ts`, `src/utils/api/*.ts`, `src/components/packing/packingService.ts`, `src/utils/notifications/notificationService.ts`
 
 ---
 
@@ -186,11 +194,11 @@ graph TB
 
 | Responsibility | Details |
 |----------------|---------|
-| **Storage** | 15+ tables across 6 business domains |
+| **Storage** | 20+ tables across 7 business domains |
 | **Integrity** | Foreign keys, check constraints, unique constraints |
 | **Security** | Row Level Security policies per role |
 | **Computed Data** | Database views for dashboards and reports |
-| **Audit Trail** | Triggers log mutations to `audit_logs` |
+| **Audit Trail** | Triggers log mutations to `audit_logs` and `packing_audit_log` |
 
 **Key Files**: `.db_reference/presentschema.sql`, `.db_reference/rbac.sql`
 

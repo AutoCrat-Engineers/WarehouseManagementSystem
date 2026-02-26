@@ -224,6 +224,55 @@ graph TD
 
 ---
 
+## 8.7 Packing Workflow Data Flow
+
+```mermaid
+sequenceDiagram
+    participant SUP as Supervisor (L2+)
+    participant OP as Operator (L1+)
+    participant PKG as PackingModule UI
+    participant SVC as packingService
+    participant DB as PostgreSQL
+
+    SUP->>PKG: Approve stock movement
+    PKG->>SVC: createPackingRequest({ movement_id, item_code })
+    SVC->>DB: INSERT packing_requests (status: APPROVED)
+    DB->>DB: INSERT packing_audit_log (PACKING_CREATED)
+    DB-->>SVC: packing_request_id
+    SVC-->>PKG: Request created
+
+    OP->>PKG: Start packing
+    PKG->>SVC: startPacking(request_id)
+    SVC->>DB: UPDATE status = PACKING_IN_PROGRESS
+    DB->>DB: INSERT packing_audit_log (PACKING_STARTED)
+
+    loop Add boxes
+        OP->>PKG: Add box (qty)
+        PKG->>SVC: createBox({ request_id, qty })
+        SVC->>SVC: generatePackingId(box_uuid) → PKG-XXXXXXXX
+        SVC->>DB: INSERT packing_boxes
+        DB->>DB: INSERT packing_audit_log (BOX_CREATED)
+    end
+
+    OP->>PKG: Print sticker for box
+    PKG->>PKG: Generate barcode + sticker layout
+    PKG->>SVC: markStickerPrinted(box_id)
+    SVC->>DB: UPDATE sticker_printed = true
+
+    OP->>PKG: Transfer stock (partial or complete)
+    PKG->>SVC: transferStock({ request_id, box_ids })
+    SVC->>DB: UPDATE packing_boxes SET is_transferred = true
+    SVC->>DB: UPDATE packing_requests SET transferred_qty
+    DB->>DB: INSERT packing_audit_log (STOCK_PARTIAL/FULL_TRANSFER)
+
+    Note over DB: Stock moves from Production → FG Warehouse
+
+    SVC-->>PKG: Transfer complete
+    PKG-->>OP: Success toast + updated status
+```
+
+---
+
 **← Previous**: [07-DATABASE-ARCHITECTURE.md](./07-DATABASE-ARCHITECTURE.md) | **Next**: [09-MODULE-BREAKDOWN.md](./09-MODULE-BREAKDOWN.md) →
 
 ---

@@ -20,7 +20,11 @@ WarehouseManagementSystem/
 ├── 📄 README.md                          ← Project README
 │
 ├── 📁 public/                            ← Static assets (served as-is)
-│   └── 📄 logo.png                       ← Application logo
+│   ├── 📄 logo.png                       ← Application logo
+│   ├── 📄 a-logo.png                     ← Alternate logo
+│   ├── 📄 backgroundlogin.png            ← Login background image
+│   └── 📁 data/
+│       └── 📄 quotes.json                ← Motivational quotes data
 │
 ├── 📁 config/                            ← Configuration & migration scripts
 │   ├── 📄 current-database-schema.sql    ← Compact schema reference
@@ -31,7 +35,15 @@ WarehouseManagementSystem/
 │   ├── 📄 presentschema.sql              ← Full current schema (12KB)
 │   ├── 📄 rbac.sql                       ← RBAC setup script (19KB)
 │   ├── 📄 supabasesetup.sql              ← Initial DB setup (22KB)
-│   └── 📄 003_add_employee_columns.sql   ← Employee columns migration
+│   ├── 📄 003_add_employee_columns.sql   ← Employee columns migration
+│   ├── 📄 packing.sql                    ← Packing module schema
+│   ├── 📄 packing_module_migration.sql   ← Packing table migration
+│   ├── 📄 packing_data_migration.sql     ← Packing data migration
+│   ├── 📄 packing_view.sql               ← Packing detail views
+│   ├── 📄 fix_profiles_rls.sql           ← RLS policy fixes
+│   ├── 📄 fix_supabase_lint_errors.sql   ← Supabase lint error fixes
+│   ├── 📄 fix_remaining_lint_warnings.sql← Remaining lint warning fixes
+│   └── 📄 today.sql                      ← Latest consolidated SQL
 │
 ├── 📁 docs/                              ← Documentation
 │   ├── 📄 architecture.md                ← Legacy architecture overview
@@ -63,7 +75,7 @@ WarehouseManagementSystem/
 src/
 │
 ├── 📄 main.tsx                           ← React root mount point
-├── 📄 App.tsx                            ← Application shell (700 lines)
+├── 📄 App.tsx                            ← Application shell (~900 lines)
 │                                            Auth, navigation, view routing
 ├── 📄 index.css                          ← Design system (43KB)
 ├── 📄 vite-env.d.ts                      ← Vite type declarations
@@ -85,9 +97,9 @@ src/
 │
 ├── 📁 components/                        ← 📦 Feature Components
 │   ├── 📄 DashboardNew.tsx               ← Dashboard with KPIs (16KB)
-│   ├── 📄 ItemMasterSupabase.tsx         ← Item CRUD (80KB)
-│   ├── 📄 InventoryGrid.tsx              ← Multi-warehouse grid (51KB)
-│   ├── 📄 StockMovement.tsx              ← Movement ledger (132KB) ⭐ Largest
+│   ├── 📄 ItemMasterSupabase.tsx         ← Item CRUD (74KB)
+│   ├── 📄 InventoryGrid.tsx              ← Multi-warehouse grid (42KB)
+│   ├── 📄 StockMovement.tsx              ← Movement ledger (137KB) ⭐ Largest
 │   ├── 📄 BlanketOrders.tsx              ← Order management (25KB)
 │   ├── 📄 BlanketReleases.tsx            ← Release tracking (23KB)
 │   ├── 📄 ForecastingModule.tsx          ← Demand forecasting (19KB)
@@ -97,8 +109,24 @@ src/
 │   ├── 📄 ErrorBoundary.tsx              ← Error boundary wrapper (3KB)
 │   ├── 📄 LoadingPage.tsx                ← Branded loading screen (17KB)
 │   ├── 📄 LoginPage.tsx                  ← Legacy login redirect (257B)
-│   └── 📁 ui/                            ← 🎨 UI Primitives (50 files)
+│   │
+│   ├── 📁 packing/                       ← 📦 FG Packing Module
+│   │   ├── 📄 index.ts                   ← Barrel exports
+│   │   ├── 📄 PackingModule.tsx          ← Main packing workflow (18KB)
+│   │   ├── 📄 PackingDetail.tsx          ← Single packing detail view (58KB)
+│   │   ├── 📄 PackingDetails.tsx         ← Packing specifications (74KB)
+│   │   ├── 📄 PackingList.tsx            ← Packing list component (26KB)
+│   │   ├── 📄 PackingListInvoice.tsx     ← Packing list against invoice (19KB)
+│   │   ├── 📄 PackingListSubInvoice.tsx  ← Packing list against sub-invoice (20KB)
+│   │   ├── 📄 StickerPrint.tsx           ← Sticker/barcode generation (18KB)
+│   │   └── 📄 packingService.ts          ← Packing business logic (31KB)
+│   │
+│   ├── 📁 notifications/                ← 🔔 Notification System
+│   │   └── 📄 NotificationBell.tsx       ← Notification bell component (17KB)
+│   │
+│   └── 📁 ui/                            ← 🎨 UI Primitives (51 files)
 │       ├── 📄 EnterpriseUI.tsx           ← Enterprise layout shell
+│       ├── 📄 SharedComponents.tsx       ← Shared reusable components
 │       ├── 📄 RotatingQuote.tsx          ← Login page quotes
 │       ├── 📄 utils.ts                   ← cn() class merge utility
 │       ├── 📄 use-mobile.ts             ← Responsive hook
@@ -124,7 +152,8 @@ src/
 │
 ├── 📁 types/                             ← 📋 TypeScript Type Definitions
 │   ├── 📄 index.ts                       ← Domain + API types
-│   └── 📄 inventory.ts                   ← Inventory-specific types
+│   ├── 📄 inventory.ts                   ← Inventory-specific types
+│   └── 📄 packing.ts                     ← Packing module types (v5)
 │
 ├── 📁 utils/                             ← 🛠️ Utility Functions
 │   ├── 📁 api/
@@ -132,6 +161,8 @@ src/
 │   │   ├── 📄 fetchWithAuth.ts           ← Authenticated fetch wrapper
 │   │   ├── 📄 itemsSupabase.ts           ← Item Master API
 │   │   └── 📄 services.ts               ← General API services
+│   ├── 📁 notifications/
+│   │   └── 📄 notificationService.ts     ← Notification management
 │   └── 📁 supabase/
 │       ├── 📄 auth.ts                    ← Supabase auth helpers
 │       ├── 📄 client.tsx                 ← Supabase client initialisation
@@ -163,16 +194,17 @@ src/
 
 | Category | Files | Total Size | Largest File |
 |----------|-------|------------|--------------|
-| Feature Components | 13 | ~420KB | `StockMovement.tsx` (132KB) |
-| UI Primitives | 50 | ~120KB | `sidebar.tsx` (22KB) |
+| Feature Components | 13 | ~395KB | `StockMovement.tsx` (137KB) |
+| Packing Module | 9 | ~287KB | `PackingDetails.tsx` (74KB) |
+| UI Primitives | 51 | ~120KB | `sidebar.tsx` (22KB) |
 | Auth Module | 8 | ~135KB | `UserManagement.tsx` (78KB) |
 | Hooks | 2 | ~22KB | `useInventory.ts` (17KB) |
 | Services | 4 | ~50KB | `fetchWithAuth.ts` (23KB) |
 | Backend Services | 6 | ~67KB | `PlanningService.ts` (16KB) |
 | Backend Repos | 3 | ~19KB | `BlanketOrderRepository.ts` (8KB) |
-| Types | 2 | ~14KB | `inventory.ts` (10KB) |
-| Database Scripts | 7 | ~67KB | `supabasesetup.sql` (22KB) |
-| Styles | 2 | ~44KB | `index.css` (43KB) |
+| Types | 3 | ~24KB | `packing.ts` (10KB) |
+| Database Scripts | 15 | ~165KB | `today.sql` (23KB) |
+| Styles | 2 | ~60KB | `index.css` (43KB) |
 
 ---
 
