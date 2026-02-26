@@ -37,21 +37,15 @@ export function useDashboard(accessToken: string | null) {
       setLoading(true);
       setError(null);
 
-      // Fetch items
-      const { data: items, error: itemsError } = await supabase
-        .from('items')
-        .select('*');
+      // Fetch stock data from the SAME view the Inventory module uses
+      // This ensures Dashboard and Inventory show consistent numbers
+      const { data: stockItems, error: stockError } = await supabase
+        .from('vw_item_stock_dashboard')
+        .select('item_code, item_name, stock_status, net_available_for_customer, total_on_hand');
 
-      if (itemsError) throw itemsError;
+      if (stockError) throw stockError;
 
-      // Fetch inventory
-      const { data: inventory, error: inventoryError } = await supabase
-        .from('inventory')
-        .select('*');
-
-      if (inventoryError) throw inventoryError;
-
-      // Fetch blanket orders
+      // Fetch blanket orders (for recent activity)
       const { data: blanketOrders, error: ordersError } = await supabase
         .from('blanket_orders')
         .select('*')
@@ -60,52 +54,42 @@ export function useDashboard(accessToken: string | null) {
 
       if (ordersError) throw ordersError;
 
-      // Calculate summary
-      const totalItems = items?.length || 0;
+      // Calculate summary from the DB view's stock_status
+      const totalItems = stockItems?.length || 0;
       let lowStockCount = 0;
       let totalStockValue = 0;
 
-      items?.forEach((item: any) => {
-        const inv = inventory?.find((i: any) => i.item_code === item.item_code);
-        if (inv) {
-          const currentStock = inv.current_stock || 0;
-          const minStock = item.min_stock_level || 0;
-          const reorderPoint = item.reorder_point || 0;
-
-          if (currentStock <= Math.max(minStock, reorderPoint)) {
-            lowStockCount++;
-          }
-
-          totalStockValue += currentStock * (item.unit_price || 0);
+      stockItems?.forEach((item: any) => {
+        const status = (item.stock_status || '').toUpperCase();
+        // Count CRITICAL and LOW as "low stock" — matches Inventory module
+        if (status === 'CRITICAL' || status === 'LOW') {
+          lowStockCount++;
         }
+        totalStockValue += item.total_on_hand || 0;
       });
 
       const healthyStockCount = totalItems - lowStockCount;
 
-      // Generate alerts
+      // Generate alerts from the view data
       const alerts: any[] = [];
-      items?.forEach((item: any) => {
-        const inv = inventory?.find((i: any) => i.item_code === item.item_code);
-        if (inv) {
-          const currentStock = inv.current_stock || 0;
-          const minStock = item.min_stock_level || 0;
-          const reorderPoint = item.reorder_point || 0;
+      stockItems?.forEach((item: any) => {
+        const status = (item.stock_status || '').toUpperCase();
+        const netAvailable = item.net_available_for_customer || 0;
 
-          if (currentStock <= minStock) {
-            alerts.push({
-              message: `${item.item_name} is critically low (${currentStock} ${item.uom})`,
-              severity: 'critical' as const,
-              itemCode: item.item_code,
-              timestamp: new Date().toISOString(),
-            });
-          } else if (currentStock <= reorderPoint) {
-            alerts.push({
-              message: `${item.item_name} below reorder point (${currentStock} ${item.uom})`,
-              severity: 'warning' as const,
-              itemCode: item.item_code,
-              timestamp: new Date().toISOString(),
-            });
-          }
+        if (status === 'CRITICAL') {
+          alerts.push({
+            message: `${item.item_name || item.item_code} is critically low (${netAvailable} available)`,
+            severity: 'critical' as const,
+            itemCode: item.item_code,
+            timestamp: new Date().toISOString(),
+          });
+        } else if (status === 'LOW') {
+          alerts.push({
+            message: `${item.item_name || item.item_code} is below reorder point (${netAvailable} available)`,
+            severity: 'warning' as const,
+            itemCode: item.item_code,
+            timestamp: new Date().toISOString(),
+          });
         }
       });
 

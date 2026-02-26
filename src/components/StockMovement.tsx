@@ -30,6 +30,7 @@ import {
   Eye,
   CalendarDays,
   Printer,
+  Package,
 } from 'lucide-react';
 import { Card, Button, Badge, Modal, LoadingSpinner, EmptyState, ModuleLoader } from './ui/EnterpriseUI';
 import {
@@ -313,6 +314,8 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   const [approvedQty, setApprovedQty] = useState<number>(0);
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [reviewReasonCode, setReviewReasonCode] = useState<ReasonCode | null>(null);
+  // Box breakdown info for review modal (Production Receipt only)
+  const [reviewBoxInfo, setReviewBoxInfo] = useState<{ boxes: number; perBox: number; total: number } | null>(null);
 
   // Toast notification state
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; title: string; text: string } | null>(null);
@@ -771,6 +774,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
     setApprovedQty(m.requested_quantity || 0);
     setSupervisorNote('');
     setReviewReasonCode(null);
+    setReviewBoxInfo(null);
 
     // Look up reason code from cached data by matching reason_code string
     if (m.reason_code) {
@@ -787,6 +791,27 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
         if (data) setReviewReasonCode(data as any);
       }
     }
+
+    // For Production Receipts, fetch packing spec to show box breakdown
+    if (m.movement_type === 'PRODUCTION_RECEIPT' && m.item_code) {
+      try {
+        const { data: spec } = await supabase
+          .from('packing_specifications')
+          .select('inner_box_quantity')
+          .eq('item_code', m.item_code)
+          .eq('is_active', true)
+          .single();
+        if (spec && spec.inner_box_quantity > 0) {
+          const reqQty = m.requested_quantity || 0;
+          const perBox = spec.inner_box_quantity;
+          const boxes = Math.round(reqQty / perBox);
+          setReviewBoxInfo({ boxes, perBox, total: reqQty });
+        }
+      } catch {
+        // Non-critical — box breakdown just won't show
+      }
+    }
+
     setShowReviewModal(true);
   };
 
@@ -2381,6 +2406,60 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
                   </div>
                 </div>
               </div>
+
+              {/* ══════════ SECTION 3.5: BOX BREAKDOWN (Production Receipt only) ══════════ */}
+              {reviewMovement.movement_type === 'PRODUCTION_RECEIPT' && reviewBoxInfo && (
+                <div style={{ padding: '16px 0', borderBottom: '1px solid #f0f2f5' }}>
+                  <div style={{ ...labelStyle, marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Package size={13} style={{ color: '#1e3a8a' }} />
+                    Box Breakdown
+                  </div>
+                  <div style={{
+                    display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr',
+                    alignItems: 'center',
+                    background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)',
+                    borderRadius: '10px', border: '1px solid #bfdbfe',
+                    padding: '16px 20px',
+                  }}>
+                    {/* Boxes */}
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{
+                        fontSize: '11px', fontWeight: 700, color: '#6b7a8d',
+                        textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px',
+                      }}>No. of Boxes</div>
+                      <div style={{ fontSize: '28px', fontWeight: 800, color: '#1e3a8a', lineHeight: '1', letterSpacing: '-0.5px' }}>
+                        {reviewBoxInfo.boxes}
+                      </div>
+                    </div>
+                    {/* × */}
+                    <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>×</div>
+                    {/* Per box */}
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{
+                        fontSize: '11px', fontWeight: 700, color: '#6b7a8d',
+                        textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px',
+                      }}>Qty per Box</div>
+                      <div style={{ fontSize: '28px', fontWeight: 800, color: '#1e3a8a', lineHeight: '1', letterSpacing: '-0.5px' }}>
+                        {reviewBoxInfo.perBox}
+                        <span style={{ fontSize: '13px', fontWeight: 500, color: '#6b7a8d', marginLeft: '4px' }}>PCS</span>
+                      </div>
+                    </div>
+                    {/* = */}
+                    <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>=</div>
+                    {/* Total */}
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{
+                        fontSize: '11px', fontWeight: 700, color: '#6b7a8d',
+                        textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px',
+                      }}>Total Pieces</div>
+                      <div style={{ fontSize: '28px', fontWeight: 800, color: '#16a34a', lineHeight: '1', letterSpacing: '-0.5px' }}>
+                        {reviewBoxInfo.total.toLocaleString()}
+                        <span style={{ fontSize: '13px', fontWeight: 500, color: '#6b7a8d', marginLeft: '4px' }}>PCS</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* ══════════ SECTION 4: METRICS ══════════ */}
               <div style={{
