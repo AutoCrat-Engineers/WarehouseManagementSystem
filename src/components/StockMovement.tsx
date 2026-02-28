@@ -1468,37 +1468,6 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   </table>
 
   <!-- ╔══════════════════════════════════════════════════════════════╗
-       ║  SECTION 5: AUTHORIZATION                                   ║
-       ╚══════════════════════════════════════════════════════════════╝ -->
-  <table class="w100 bdr mt4" cellspacing="0" cellpadding="0">
-    <tr><td colspan="2" class="sec-hdr">Authorization</td></tr>
-    <tr>
-      <!-- Verified By (auto-populated from current session user) -->
-      <td class="vt bdr-r" style="width:50%; padding:10px 14px;">
-        <div class="fs9 fw800 uc tc ls1 c000" style="padding-bottom:4px; margin-bottom:8px; border-bottom:1px solid #ccc;">Verified By</div>
-        <table class="w100" cellspacing="0" cellpadding="0" style="border:none;">
-          <tr><td class="fs9 fw700" style="width:70px; padding:3px 0;">Name</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px; font-weight:600;">${currentUserName || 'System User'}</td></tr>
-          <tr><td class="fs9 fw700" style="padding:3px 0;">Designation</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px; font-weight:500;">Supervisor</td></tr>
-          <tr><td class="fs9 fw700" style="padding:3px 0;">Date</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px; font-weight:500;">${printTimestamp.split(',')[0]}</td></tr>
-        </table>
-        <div class="sig-box" style="margin-top:8px; height:60px;"></div>
-        <div class="sig-caption">Signature</div>
-      </td>
-      <!-- Authorized By -->
-      <td class="vt" style="width:50%; padding:10px 14px;">
-        <div class="fs9 fw800 uc tc ls1 c000" style="padding-bottom:4px; margin-bottom:8px; border-bottom:1px solid #ccc;">Authorized By</div>
-        <table class="w100" cellspacing="0" cellpadding="0" style="border:none;">
-          <tr><td class="fs9 fw700" style="width:70px; padding:3px 0;">Name</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px;">&nbsp;</td></tr>
-          <tr><td class="fs9 fw700" style="padding:3px 0;">Designation</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px;">Manager</td></tr>
-          <tr><td class="fs9 fw700" style="padding:3px 0;">Date</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px;">&nbsp;</td></tr>
-        </table>
-        <div class="sig-box" style="margin-top:8px; height:60px;"></div>
-        <div class="sig-caption">Signature</div>
-      </td>
-    </tr>
-  </table>
-
-  <!-- ╔══════════════════════════════════════════════════════════════╗
        ║  SECTION 6: FOOTER                                          ║
        ╚══════════════════════════════════════════════════════════════╝ -->
   <table class="w100 mt8" cellspacing="0" cellpadding="0" style="border-top:1.5px solid #000;">
