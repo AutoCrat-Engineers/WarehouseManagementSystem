@@ -166,7 +166,7 @@ function exportItemsToExcel(data: itemsApi.Item[], filename: string = 'items_exp
   import('xlsx').then(XLSX => {
     const headers = [
       'Item Code', 'Part Number', 'Master Serial No', 'Item Name', 'Revision',
-      'UOM', 'Weight (kg)', 'Unit Price', 'Standard Cost', 'Lead Time', 'Status', 'Deleted By',
+      'UOM', 'Weight (G)', 'Unit Price', 'Standard Cost', 'Lead Time', 'Status', 'Deleted By',
     ];
 
     const rows = data.map(item => [
@@ -1607,8 +1607,8 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginTop: '16px' }}>
               <div>
-                <Label>Weight (kg)</Label>
-                <Input type="number" value={formData.weight != null ? String(formData.weight) : ''} onChange={(e) => setFormData({ ...formData, weight: e.target.value ? parseFloat(e.target.value) : null })} placeholder="0.00" min={0} step="0.01" />
+                <Label>Weight (G)</Label>
+                <Input type="number" value={formData.weight != null ? String(formData.weight) : ''} onChange={(e) => setFormData({ ...formData, weight: e.target.value ? parseFloat(e.target.value) : null })} placeholder="0.0000" min={0} step="0.0001" />
               </div>
               <div>
                 <Label>Unit Price (₹)</Label>
