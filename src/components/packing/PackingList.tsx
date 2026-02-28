@@ -159,7 +159,7 @@ export function PackingList({ accessToken, userRole, onNavigate }: PackingListPr
                         color: '#374151',
                     }}
                 >
-                    Export CSV
+                    Export Excel
                 </button>
                 <button
                     style={{

@@ -158,57 +158,28 @@ type CardFilter = 'ALL' | 'ACTIVE' | 'INACTIVE';
 
 
 // ============================================================================
-// CSV EXPORT UTILITY
+// EXCEL EXPORT UTILITY
 // ============================================================================
 
-function exportItemsToCSV(data: itemsApi.Item[], filename: string = 'items_export') {
-  const headers = [
-    'Item Code',
-    'Part Number',
-    'Master Serial No',
-    'Item Name',
-    'Revision',
-    'UOM',
-    'Unit Price',
-    'Standard Cost',
-    'Lead Time',
-    'Status',
-    'Deleted By',
-  ];
+function exportItemsToExcel(data: itemsApi.Item[], filename: string = 'items_export') {
+  import('xlsx').then(XLSX => {
+    const headers = [
+      'Item Code', 'Part Number', 'Master Serial No', 'Item Name', 'Revision',
+      'UOM', 'Unit Price', 'Standard Cost', 'Lead Time', 'Status', 'Deleted By',
+    ];
 
-  const rows = data.map(item => [
-    item.item_code,
-    item.part_number || '',
-    item.master_serial_no || '',
-    item.item_name || '',
-    item.revision || '',
-    item.uom,
-    item.unit_price ?? '',
-    item.standard_cost ?? '',
-    item.lead_time_days,
-    item.is_active ? 'Active' : 'Inactive',
-    item.deleted_by || '',
-  ]);
+    const rows = data.map(item => [
+      item.item_code, item.part_number || '', item.master_serial_no || '',
+      item.item_name || '', item.revision || '', item.uom,
+      item.unit_price ?? '', item.standard_cost ?? '', item.lead_time_days,
+      item.is_active ? 'Active' : 'Inactive', item.deleted_by || '',
+    ]);
 
-  const csvContent = [
-    headers.join(','),
-    ...rows.map(row => row.map(cell =>
-      typeof cell === 'string' && (cell.includes(',') || cell.includes('"'))
-        ? `"${cell.replace(/"/g, '""')}"`
-        : cell
-    ).join(','))
-  ].join('\n');
-
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const link = document.createElement('a');
-  const url = URL.createObjectURL(blob);
-
-  link.setAttribute('href', url);
-  link.setAttribute('download', `${filename}_${new Date().toISOString().split('T')[0]}.csv`);
-  link.style.visibility = 'hidden';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Items');
+    XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
+  });
 }
 
 /* ========== DELETE CONFIRMATION MODAL ========== */
@@ -1190,7 +1161,7 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
 
   // Handle export
   const handleExport = () => {
-    exportItemsToCSV(filteredItems, 'item_master');
+    exportItemsToExcel(filteredItems, 'item_master');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {

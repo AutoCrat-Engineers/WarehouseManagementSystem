@@ -1048,18 +1048,18 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   // ============================================================================
 
   const handleExport = () => {
-    const headers = ['Movement #', 'Date', 'Type', 'Status', 'Part Number', 'MSN', 'Qty', 'From', 'To', 'Reason'];
-    const rows = filteredMovements.map(m => [
-      m.movement_number, m.movement_date, MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type,
-      m.status, m.part_number || m.item_code || '', m.master_serial_no || '', m.quantity ?? '', m.source_warehouse || '—',
-      m.destination_warehouse || '—', m.reason_description || '',
-    ]);
-    const csv = [headers.join(','), ...rows.map(r => r.map(c => typeof c === 'string' && c.includes(',') ? `"${c}"` : c).join(','))].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `stock_movements_${new Date().toISOString().split('T')[0]}.csv`;
-    link.click();
+    import('xlsx').then(XLSX => {
+      const headers = ['Movement #', 'Date', 'Type', 'Status', 'Part Number', 'MSN', 'Qty', 'From', 'To', 'Reason'];
+      const rows = filteredMovements.map(m => ([
+        m.movement_number, m.movement_date, MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type,
+        m.status, m.part_number || m.item_code || '', m.master_serial_no || '', m.quantity ?? '', m.source_warehouse || '—',
+        m.destination_warehouse || '—', m.reason_description || '',
+      ]));
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Stock Movements');
+      XLSX.writeFile(wb, `stock_movements_${new Date().toISOString().split('T')[0]}.xlsx`);
+    });
   };
 
   // ============================================================================
@@ -1090,6 +1090,20 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
     const requestedQty = m.requested_quantity ?? m.quantity ?? 0;
     const movementTypeLabel = MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type;
     const stockTypeDisplay = stockTypeLabel === 'REJECTION' ? 'Rejection' : 'Stock In';
+
+    // Parse box breakdown from notes field for Production Receipt movements
+    // Notes format: "Production → FI Warehouse | Boxes: 5 × 100 PCS/box = 500 PCS | Stock Type: ..."
+    let boxBreakdown: { boxes: number; perBox: number; total: number } | null = null;
+    if (m.movement_type === 'PRODUCTION_RECEIPT' && m.notes) {
+      const boxMatch = m.notes.match(/Boxes:\s*(\d+)\s*×\s*(\d+)\s*PCS\/box\s*=\s*(\d+)\s*PCS/i);
+      if (boxMatch) {
+        boxBreakdown = {
+          boxes: parseInt(boxMatch[1], 10),
+          perBox: parseInt(boxMatch[2], 10),
+          total: parseInt(boxMatch[3], 10),
+        };
+      }
+    }
     const printTimestamp = new Date().toLocaleString('en-IN', {
       day: '2-digit', month: 'short', year: 'numeric',
       hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
@@ -1412,6 +1426,15 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
       <td class="bdr-b bdr-r cp-sm tr mono fw700 fs10">${movedQty.toLocaleString()}</td>
       <td class="bdr-b cp-sm mono fs9">${m.master_serial_no || '—'}</td>
     </tr>
+    ${boxBreakdown ? `
+    <!-- Box Breakdown Row (Production Receipt) -->
+    <tr style="background:#f0f7ff;">
+      <td colspan="8" class="bdr-b cp-sm" style="padding:6px 12px;">
+        <span class="fs8 fw800 uc ls1" style="color:#1e3a8a; margin-right:8px;">BOX BREAKDOWN:</span>
+        <span class="mono fw700 fs10" style="color:#1e3a8a;">${boxBreakdown.boxes} Boxes × ${boxBreakdown.perBox} PCS/Box = ${boxBreakdown.total.toLocaleString()} PCS</span>
+      </td>
+    </tr>
+    ` : ''}
     <!-- Blank rows for manual additions -->
     <tr><td class="bdr-b bdr-r cp-sm tc">&nbsp;</td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b cp-sm"></td></tr>
     <tr><td class="bdr-b bdr-r cp-sm tc">&nbsp;</td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b cp-sm"></td></tr>
