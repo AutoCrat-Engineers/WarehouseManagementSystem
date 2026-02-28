@@ -118,6 +118,7 @@ const formDefault: itemsApi.ItemFormData = {
   uom: 'PCS',
   unit_price: null,
   standard_cost: null,
+  weight: null,
   lead_time_days: '',
   is_active: true,
   master_serial_no: '',
@@ -165,13 +166,13 @@ function exportItemsToExcel(data: itemsApi.Item[], filename: string = 'items_exp
   import('xlsx').then(XLSX => {
     const headers = [
       'Item Code', 'Part Number', 'Master Serial No', 'Item Name', 'Revision',
-      'UOM', 'Unit Price', 'Standard Cost', 'Lead Time', 'Status', 'Deleted By',
+      'UOM', 'Weight (kg)', 'Unit Price', 'Standard Cost', 'Lead Time', 'Status', 'Deleted By',
     ];
 
     const rows = data.map(item => [
       item.item_code, item.part_number || '', item.master_serial_no || '',
       item.item_name || '', item.revision || '', item.uom,
-      item.unit_price ?? '', item.standard_cost ?? '', item.lead_time_days,
+      item.weight ?? '', item.unit_price ?? '', item.standard_cost ?? '', item.lead_time_days,
       item.is_active ? 'Active' : 'Inactive', item.deleted_by || '',
     ]);
 
@@ -1056,6 +1057,7 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
 
   // Actions dropdown state (matches UserManagement pattern)
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+  const [dropdownDirection, setDropdownDirection] = useState<'up' | 'down'>('down');
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
   // Toast notification state (same pattern as StockMovement)
@@ -1189,6 +1191,7 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
       uom: item.uom,
       unit_price: item.unit_price ?? null,
       standard_cost: item.standard_cost ?? null,
+      weight: item.weight ?? null,
       lead_time_days: item.lead_time_days ?? '',
       is_active: item.is_active,
       master_serial_no: item.master_serial_no || '',
@@ -1419,7 +1422,16 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
                         <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px', position: 'relative' }}>
                           <div ref={activeDropdown === item.id ? dropdownRef : null} style={{ position: 'relative', display: 'inline-block' }}>
                             <button
-                              onClick={() => setActiveDropdown(activeDropdown === item.id ? null : item.id)}
+                              onClick={(e) => {
+                                if (activeDropdown === item.id) {
+                                  setActiveDropdown(null);
+                                } else {
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  const spaceBelow = window.innerHeight - rect.bottom;
+                                  setDropdownDirection(spaceBelow < 180 ? 'up' : 'down');
+                                  setActiveDropdown(item.id);
+                                }
+                              }}
                               style={{
                                 padding: '8px 12px',
                                 border: '1px solid #e5e7eb',
@@ -1443,14 +1455,17 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
                               <div
                                 style={{
                                   position: 'absolute',
-                                  bottom: '100%',
+                                  ...(dropdownDirection === 'up'
+                                    ? { bottom: '100%', marginBottom: '4px' }
+                                    : { top: '100%', marginTop: '4px' }),
                                   right: '0',
-                                  marginBottom: '4px',
                                   zIndex: 9999,
                                   width: '180px',
                                   backgroundColor: 'white',
                                   borderRadius: '12px',
-                                  boxShadow: '0 10px 40px rgba(0,0,0,0.15)',
+                                  boxShadow: dropdownDirection === 'up'
+                                    ? '0 -10px 40px rgba(0,0,0,0.15)'
+                                    : '0 10px 40px rgba(0,0,0,0.15)',
                                   border: '1px solid #e5e7eb',
                                   overflow: 'hidden',
                                 }}
@@ -1590,7 +1605,11 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
                 </Select>
               </div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '16px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginTop: '16px' }}>
+              <div>
+                <Label>Weight (kg)</Label>
+                <Input type="number" value={formData.weight != null ? String(formData.weight) : ''} onChange={(e) => setFormData({ ...formData, weight: e.target.value ? parseFloat(e.target.value) : null })} placeholder="0.00" min={0} step="0.01" />
+              </div>
               <div>
                 <Label>Unit Price (₹)</Label>
                 <Input type="number" value={formData.unit_price != null ? String(formData.unit_price) : ''} onChange={(e) => setFormData({ ...formData, unit_price: e.target.value ? parseFloat(e.target.value) : null })} placeholder="0.00" min={0} step="0.01" />
