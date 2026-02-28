@@ -607,16 +607,17 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
 
                 <button
                     onClick={() => {
-                        const csv = filteredUsers.map(u =>
-                            `${u.employee_id || ''},${u.full_name},${u.email},${u.role},${u.department || ''},${u.shift || ''},${u.is_active ? 'Active' : 'Inactive'}`
-                        ).join('\n');
-                        const header = 'Employee ID,Name,Email,Role,Department,Shift,Status\n';
-                        const blob = new Blob([header + csv], { type: 'text/csv' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = 'users_export.csv';
-                        a.click();
+                        import('xlsx').then(XLSX => {
+                            const headers = ['Employee ID', 'Name', 'Email', 'Role', 'Department', 'Shift', 'Status'];
+                            const rows = filteredUsers.map(u => [
+                                u.employee_id || '', u.full_name, u.email, u.role,
+                                u.department || '', u.shift || '', u.is_active ? 'Active' : 'Inactive',
+                            ]);
+                            const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+                            const wb = XLSX.utils.book_new();
+                            XLSX.utils.book_append_sheet(wb, ws, 'Users');
+                            XLSX.writeFile(wb, `users_export_${new Date().toISOString().split('T')[0]}.xlsx`);
+                        });
                     }}
                     style={{
                         display: 'flex',
@@ -633,7 +634,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                     }}
                 >
                     <Download size={16} />
-                    Export CSV
+                    Export Excel
                 </button>
 
                 <button

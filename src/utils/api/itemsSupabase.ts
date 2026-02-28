@@ -5,7 +5,7 @@
  * NO TRANSFORMATION LAYER - fields match database 1:1
  * 
  * Database Schema (public.items):
- * id, item_code, item_name, uom, unit_price, standard_cost, lead_time_days,
+ * id, item_code, item_name, uom, unit_price, standard_cost, weight, lead_time_days,
  * is_active, created_at, updated_at, master_serial_no, revision, part_number, deleted_by
  */
 
@@ -22,6 +22,7 @@ export interface Item {
   uom: string;
   unit_price: number | null;
   standard_cost: number | null;
+  weight: number | null;
   lead_time_days: string;
   is_active: boolean;
   created_at: string;
@@ -46,6 +47,7 @@ export const itemFormDefault: ItemFormData = {
   uom: 'PCS',
   unit_price: null,
   standard_cost: null,
+  weight: null,
   lead_time_days: '',
   is_active: true,
   master_serial_no: '',

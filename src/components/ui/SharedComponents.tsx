@@ -217,7 +217,7 @@ export function RefreshButton({
 export function ExportCSVButton({ onClick }: { onClick: () => void }) {
     return (
         <ActionButton
-            label="Export CSV"
+            label="Export Excel"
             icon={<Download size={14} />}
             onClick={onClick}
             variant="secondary"

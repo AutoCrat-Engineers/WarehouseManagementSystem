@@ -368,49 +368,23 @@ function StockDetailModal({ isOpen, onClose, item }: StockDetailModalProps) {
 }
 
 // ============================================================================
-// CSV EXPORT UTILITY
+// EXCEL EXPORT UTILITY
 // ============================================================================
 
-function exportToCSV(data: ItemStockDashboard[], filename: string = 'inventory_export') {
-    const headers = [
-        'Item Code',
-        'Description',
-        'MSN',
-        'Part Number',
-        'Net Available',
-        'Status',
-        'Active'
-    ];
-
-    const rows = data.map(item => [
-        item.itemCode,
-        item.itemName || '',
-        item.masterSerialNo || '',
-        item.partNumber || '',
-        item.netAvailableForCustomer,
-        item.stockStatus || '',
-        (item as ItemStockDashboardExtended).isActive !== false ? 'Active' : 'Inactive'
-    ]);
-
-    const csvContent = [
-        headers.join(','),
-        ...rows.map(row => row.map(cell =>
-            typeof cell === 'string' && (cell.includes(',') || cell.includes('"'))
-                ? `"${cell.replace(/"/g, '""')}"`
-                : cell
-        ).join(','))
-    ].join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-
-    link.setAttribute('href', url);
-    link.setAttribute('download', `${filename}_${new Date().toISOString().split('T')[0]}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+function exportToExcel(data: ItemStockDashboard[], filename: string = 'inventory_export') {
+    import('xlsx').then(XLSX => {
+        const headers = ['Item Code', 'Description', 'MSN', 'Part Number', 'Net Available', 'Status', 'Active'];
+        const rows = data.map(item => [
+            item.itemCode, item.itemName || '', item.masterSerialNo || '',
+            item.partNumber || '', item.netAvailableForCustomer,
+            item.stockStatus || '',
+            (item as ItemStockDashboardExtended).isActive !== false ? 'Active' : 'Inactive',
+        ]);
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
+        XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
+    });
 }
 
 // ============================================================================
@@ -545,7 +519,7 @@ export function InventoryGrid() {
 
     // Handle export
     const handleExport = useCallback(() => {
-        exportToCSV(filteredItems, 'inventory_export');
+        exportToExcel(filteredItems, 'inventory_export');
     }, [filteredItems]);
 
     // Handle view details
@@ -651,7 +625,7 @@ export function InventoryGrid() {
                     )}
                     <RefreshButton onClick={handleRefresh} loading={refreshing} />
                     <ActionButton
-                        label="Export CSV"
+                        label="Export Excel"
                         icon={<Download size={14} />}
                         onClick={handleExport}
                         variant="primary"

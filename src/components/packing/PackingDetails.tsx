@@ -13,7 +13,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { getSupabaseClient } from '../../utils/supabase/client';
 import {
     Card, Button, Badge, Input, Label, Select,
-    Modal, LoadingSpinner, EmptyState,
+    Modal, LoadingSpinner, EmptyState, ModuleLoader,
 } from '../ui/EnterpriseUI';
 import {
     SummaryCard, SummaryCardsGrid,
@@ -547,23 +547,23 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
     const getOuterWtDisplay = (field: keyof PackingFormData) =>
         getDisplayValue(field, v => convertWeight(v, outerFormWU));
 
-    // ── CSV EXPORT ──
+    // ── EXCEL EXPORT ──
     const handleExport = () => {
-        const rows = filtered.map((s, i) => [
-            i + 1, s.item_code, s.master_serial_no || '', s.item_name || '',
-            `${s.inner_box_length_mm}x${s.inner_box_width_mm}x${s.inner_box_height_mm}`,
-            s.inner_box_quantity, s.inner_box_net_weight_kg,
-            `${s.outer_box_length_mm}x${s.outer_box_width_mm}x${s.outer_box_height_mm}`,
-            s.outer_box_gross_weight_kg, s.is_active ? 'Active' : 'Inactive',
-        ]);
-        const header = 'ID,Item Code,MSN,Description,Inner Box Size (mm),Inner Box Qty,Inner Net Wt (kg),Outer Box Size (mm),Outer Gross Wt (kg),Status';
-        const csv = [header, ...rows.map(r => r.join(','))].join('\n');
-        const blob = new Blob([csv], { type: 'text/csv' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = `packing_details_${new Date().toISOString().slice(0, 10)}.csv`;
-        a.click(); URL.revokeObjectURL(url);
-        showToast('success', 'Exported', `${filtered.length} records exported to CSV.`);
+        import('xlsx').then(XLSX => {
+            const header = ['ID', 'Item Code', 'MSN', 'Description', 'Inner Box Size (mm)', 'Inner Box Qty', 'Inner Net Wt (kg)', 'Outer Box Size (mm)', 'Outer Gross Wt (kg)', 'Status'];
+            const rows = filtered.map((s, i) => [
+                i + 1, s.item_code, s.master_serial_no || '', s.item_name || '',
+                `${s.inner_box_length_mm}x${s.inner_box_width_mm}x${s.inner_box_height_mm}`,
+                s.inner_box_quantity, s.inner_box_net_weight_kg,
+                `${s.outer_box_length_mm}x${s.outer_box_width_mm}x${s.outer_box_height_mm}`,
+                s.outer_box_gross_weight_kg, s.is_active ? 'Active' : 'Inactive',
+            ]);
+            const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'Packing Details');
+            XLSX.writeFile(wb, `packing_details_${new Date().toISOString().slice(0, 10)}.xlsx`);
+            showToast('success', 'Exported', `${filtered.length} records exported to Excel.`);
+        });
     };
 
     const hasActiveFilters = cardFilter !== 'ALL';
@@ -605,10 +605,7 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
     // ── LOADING STATE ──
     if (loading) {
         return (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '80px 20px' }}>
-                <LoadingSpinner size={40} />
-                <p style={{ marginTop: '16px', color: 'var(--enterprise-gray-600)', fontSize: '14px' }}>Loading packing specifications...</p>
-            </div>
+            <ModuleLoader moduleName="Packing Details" icon={<ClipboardList size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
         );
     }
 
