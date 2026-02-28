@@ -1085,6 +1085,7 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
 
   // Actions dropdown state (matches UserManagement pattern)
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+  const [dropdownDirection, setDropdownDirection] = useState<'up' | 'down'>('down');
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
   // Toast notification state (same pattern as StockMovement)
@@ -1448,7 +1449,17 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
                         <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px', position: 'relative' }}>
                           <div ref={activeDropdown === item.id ? dropdownRef : null} style={{ position: 'relative', display: 'inline-block' }}>
                             <button
-                              onClick={() => setActiveDropdown(activeDropdown === item.id ? null : item.id)}
+                              onClick={(e) => {
+                                if (activeDropdown === item.id) {
+                                  setActiveDropdown(null);
+                                } else {
+                                  // Detect if we should open upward based on available space
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  const spaceBelow = window.innerHeight - rect.bottom;
+                                  setDropdownDirection(spaceBelow < 160 ? 'up' : 'down');
+                                  setActiveDropdown(item.id);
+                                }
+                              }}
                               style={{
                                 padding: '8px 12px',
                                 border: '1px solid #e5e7eb',
@@ -1472,14 +1483,17 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
                               <div
                                 style={{
                                   position: 'absolute',
-                                  bottom: '100%',
+                                  ...(dropdownDirection === 'up'
+                                    ? { bottom: '100%', marginBottom: '4px' }
+                                    : { top: '100%', marginTop: '4px' }),
                                   right: '0',
-                                  marginBottom: '4px',
                                   zIndex: 9999,
                                   width: '180px',
                                   backgroundColor: 'white',
                                   borderRadius: '12px',
-                                  boxShadow: '0 10px 40px rgba(0,0,0,0.15)',
+                                  boxShadow: dropdownDirection === 'up'
+                                    ? '0 -10px 40px rgba(0,0,0,0.15)'
+                                    : '0 10px 40px rgba(0,0,0,0.15)',
                                   border: '1px solid #e5e7eb',
                                   overflow: 'hidden',
                                 }}
