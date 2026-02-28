@@ -1041,6 +1041,10 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [formData, setFormData] = useState<itemsApi.ItemFormData>(formDefault);
+  // Raw string states to preserve decimal points during typing
+  const [weightStr, setWeightStr] = useState('');
+  const [unitPriceStr, setUnitPriceStr] = useState('');
+  const [standardCostStr, setStandardCostStr] = useState('');
   const [viewItem, setViewItem] = useState<Item | null>(null);
   const [showViewModal, setShowViewModal] = useState(false);
 
@@ -1170,9 +1174,16 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
     e.preventDefault();
     const isEditing = !!editingItem;
     const itemName = formData.part_number || formData.item_code;
+    // Parse raw string values into numbers for submission
+    const submitData = {
+      ...formData,
+      weight: weightStr ? parseFloat(weightStr) : null,
+      unit_price: unitPriceStr ? parseFloat(unitPriceStr) : null,
+      standard_cost: standardCostStr ? parseFloat(standardCostStr) : null,
+    };
     const result = editingItem
-      ? await itemsApi.updateItem(editingItem.id, formData)
-      : await itemsApi.createItem(formData);
+      ? await itemsApi.updateItem(editingItem.id, submitData)
+      : await itemsApi.createItem(submitData);
 
     if (result.error) {
       showToast('error', isEditing ? 'Update Failed' : 'Creation Failed', result.error);
@@ -1185,6 +1196,9 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
 
   const handleEdit = (item: Item) => {
     setEditingItem(item);
+    setWeightStr(item.weight != null ? String(item.weight) : '');
+    setUnitPriceStr(item.unit_price != null ? String(item.unit_price) : '');
+    setStandardCostStr(item.standard_cost != null ? String(item.standard_cost) : '');
     setFormData({
       item_code: item.item_code,
       item_name: item.item_name || '',
@@ -1234,6 +1248,9 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
     setShowModal(false);
     setEditingItem(null);
     setFormData(formDefault);
+    setWeightStr('');
+    setUnitPriceStr('');
+    setStandardCostStr('');
   };
 
   if (loading) return <ModuleLoader moduleName="Item Master" icon={<Package size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
@@ -1608,15 +1625,15 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginTop: '16px' }}>
               <div>
                 <Label>Weight (G)</Label>
-                <Input type="number" value={formData.weight != null ? String(formData.weight) : ''} onChange={(e) => setFormData({ ...formData, weight: e.target.value ? parseFloat(e.target.value) : null })} placeholder="0.0000" min={0} step="0.0001" />
+                <Input type="text" value={weightStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setWeightStr(v); }} placeholder="0.0000" />
               </div>
               <div>
                 <Label>Unit Price (₹)</Label>
-                <Input type="number" value={formData.unit_price != null ? String(formData.unit_price) : ''} onChange={(e) => setFormData({ ...formData, unit_price: e.target.value ? parseFloat(e.target.value) : null })} placeholder="0.00" min={0} step="0.01" />
+                <Input type="text" value={unitPriceStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setUnitPriceStr(v); }} placeholder="0.00" />
               </div>
               <div>
                 <Label>Standard Cost (₹)</Label>
-                <Input type="number" value={formData.standard_cost != null ? String(formData.standard_cost) : ''} onChange={(e) => setFormData({ ...formData, standard_cost: e.target.value ? parseFloat(e.target.value) : null })} placeholder="0.00" min={0} step="0.01" />
+                <Input type="text" value={standardCostStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setStandardCostStr(v); }} placeholder="0.00" />
               </div>
             </div>
           </div>
