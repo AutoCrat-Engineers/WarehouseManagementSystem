@@ -62,9 +62,25 @@ export type {
 } from './services/userService';
 
 // ============================================================================
+// PERMISSION SERVICES (L3 Only)
+// ============================================================================
+export {
+    getUserPermissions as getGranularPermissions,
+    saveUserPermissions,
+    getBulkUserPermissions,
+    checkPermission,
+    hasAnyPermission,
+    hasAllPermissions,
+    getPermissionCount,
+    deleteUserPermissions,
+} from './services/permissionService';
+
+// ============================================================================
 // COMPONENTS
 // ============================================================================
 export { LoginPage } from './login/LoginPage';
 export { UserManagement } from './users/UserManagement';
 export { RoleBadge } from './components/RoleBadge';
 export { ProtectedRoute, useRoleAccess, withRoleAccess } from './components/ProtectedRoute';
+export { GrantAccessModal, MODULE_CONFIG } from './components/GrantAccessModal';
+export type { PermissionMap, PermissionAction, ModuleConfig, SubmoduleConfig } from './components/GrantAccessModal';

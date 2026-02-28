@@ -18,6 +18,7 @@ import {
     Download,
     XCircle,
     Shield,
+    ShieldCheck,
     UserCog,
     Settings,
     ChevronDown,
@@ -37,6 +38,8 @@ import {
 } from '../services/userService';
 import { ROLE_CONFIG, type UserRole } from '../services/authService';
 import { RoleBadge } from '../components/RoleBadge';
+import { GrantAccessModal, type PermissionMap } from '../components/GrantAccessModal';
+import { getUserPermissions, saveUserPermissions, getBulkUserPermissions } from '../services/permissionService';
 
 interface UserManagementProps {
     currentUserId: string;
@@ -70,6 +73,10 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
     const [showEditModal, setShowEditModal] = useState(false);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [showStatusConfirm, setShowStatusConfirm] = useState(false);
+    const [showGrantAccess, setShowGrantAccess] = useState(false);
+    const [grantAccessUser, setGrantAccessUser] = useState<UserListItem | null>(null);
+    const [userPermissions, setUserPermissions] = useState<Record<string, PermissionMap>>({});
+    const [permissionCounts, setPermissionCounts] = useState<Record<string, number>>({});
     const [statusConfirmAction, setStatusConfirmAction] = useState<{ userId: string; newStatus: boolean; userName: string; employeeId: string; role: string; email: string } | null>(null);
     const [deleteEmpIdInput, setDeleteEmpIdInput] = useState('');
     const [deleteReason, setDeleteReason] = useState('');
@@ -122,6 +129,16 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
             setError(null);
             const data = await getAllUsers();
             setUsers(data);
+
+            // Load permission counts for all users from localStorage
+            const userIds = data.map(u => u.id);
+            const bulkPerms = getBulkUserPermissions(userIds);
+            const counts: Record<string, number> = {};
+            Object.entries(bulkPerms).forEach(([uid, permMap]) => {
+                counts[uid] = Object.values(permMap).filter(Boolean).length;
+            });
+            setPermissionCounts(counts);
+            setUserPermissions(bulkPerms);
         } catch (err) {
             setError('Failed to fetch users');
         } finally {
@@ -758,7 +775,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                                                                         : { top: '100%', marginTop: '4px' }),
                                                                     right: '0',
                                                                     zIndex: 50,
-                                                                    width: '180px',
+                                                                    width: '200px',
                                                                     backgroundColor: 'white',
                                                                     borderRadius: '12px',
                                                                     boxShadow: dropdownDirection === 'up'
@@ -768,6 +785,23 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                                                                     overflow: 'hidden',
                                                                 }}
                                                             >
+                                                                {/* Grant Access — Primary action */}
+                                                                <button
+                                                                    onClick={() => {
+                                                                        setActiveDropdown(null);
+                                                                        // Load fresh permissions from localStorage
+                                                                        const perms = getUserPermissions(user.id);
+                                                                        setUserPermissions(prev => ({ ...prev, [user.id]: perms }));
+                                                                        setGrantAccessUser(user);
+                                                                        setShowGrantAccess(true);
+                                                                    }}
+                                                                    style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#1e3a8a', fontWeight: '600' }}
+                                                                    onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#eff6ff'; }}
+                                                                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                                                >
+                                                                    <ShieldCheck size={16} /> Grant Access
+                                                                </button>
+                                                                <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
                                                                 <button
                                                                     onClick={() => openEditModal(user)}
                                                                     style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
@@ -1323,6 +1357,31 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                         flexShrink: 0,
                     }}><X size={16} /></button>
                 </div>
+            )}
+
+            {/* ═══════════ GRANT ACCESS MODAL ═══════════ */}
+            {showGrantAccess && grantAccessUser && (
+                <GrantAccessModal
+                    user={grantAccessUser}
+                    isOpen={showGrantAccess}
+                    onClose={() => { setShowGrantAccess(false); setGrantAccessUser(null); }}
+                    initialPermissions={userPermissions[grantAccessUser.id] || {}}
+                    onSave={(userId, perms) => {
+                        // Save to localStorage
+                        const result = saveUserPermissions(userId, perms);
+
+                        if (result.success) {
+                            setUserPermissions(prev => ({ ...prev, [userId]: perms }));
+                            const grantedCount = result.grantedCount || Object.values(perms).filter(Boolean).length;
+                            setPermissionCounts(prev => ({ ...prev, [userId]: grantedCount }));
+                            showToast('success', 'Permissions Saved', `${grantedCount} permissions granted to "${grantAccessUser.full_name}".`);
+                            setShowGrantAccess(false);
+                            setGrantAccessUser(null);
+                        } else {
+                            showToast('error', 'Save Failed', result.error || 'Failed to save permissions.');
+                        }
+                    }}
+                />
             )}
 
             {/* CSS for spinner + toast animations */}
