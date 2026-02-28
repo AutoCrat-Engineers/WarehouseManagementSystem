@@ -150,23 +150,23 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
     const totalCount = requests.length;
 
     // ============================================================================
-    // CSV EXPORT
+    // EXCEL EXPORT
     // ============================================================================
 
     const handleExport = () => {
-        const headers = ['Movement #', 'Item Code', 'MSN', 'Approved Qty', 'Boxes', 'Status', 'Created'];
-        const rows = filtered.map(r => [
-            r.movement_number, r.item_code, r.master_serial_no || '',
-            r.total_packed_qty, r.boxes_count || 0,
-            PACKING_STATUS_CONFIG[r.status]?.label || r.status,
-            r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN') : '',
-        ]);
-        const csv = [headers.join(','), ...rows.map(r => r.map(c => typeof c === 'string' && c.includes(',') ? `"${c}"` : c).join(','))].join('\n');
-        const blob = new Blob([csv], { type: 'text/csv' });
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = `sticker_generation_${new Date().toISOString().split('T')[0]}.csv`;
-        link.click();
+        import('xlsx').then(XLSX => {
+            const headers = ['Movement #', 'Item Code', 'MSN', 'Approved Qty', 'Boxes', 'Status', 'Created'];
+            const rows = filtered.map(r => ([
+                r.movement_number, r.item_code, r.master_serial_no || '',
+                r.total_packed_qty, r.boxes_count || 0,
+                PACKING_STATUS_CONFIG[r.status]?.label || r.status,
+                r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN') : '',
+            ]));
+            const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'Sticker Generation');
+            XLSX.writeFile(wb, `sticker_generation_${new Date().toISOString().split('T')[0]}.xlsx`);
+        });
     };
 
     // ============================================================================

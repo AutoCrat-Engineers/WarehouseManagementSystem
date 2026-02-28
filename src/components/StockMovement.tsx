@@ -1048,18 +1048,18 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   // ============================================================================
 
   const handleExport = () => {
-    const headers = ['Movement #', 'Date', 'Type', 'Status', 'Part Number', 'MSN', 'Qty', 'From', 'To', 'Reason'];
-    const rows = filteredMovements.map(m => [
-      m.movement_number, m.movement_date, MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type,
-      m.status, m.part_number || m.item_code || '', m.master_serial_no || '', m.quantity ?? '', m.source_warehouse || '—',
-      m.destination_warehouse || '—', m.reason_description || '',
-    ]);
-    const csv = [headers.join(','), ...rows.map(r => r.map(c => typeof c === 'string' && c.includes(',') ? `"${c}"` : c).join(','))].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `stock_movements_${new Date().toISOString().split('T')[0]}.csv`;
-    link.click();
+    import('xlsx').then(XLSX => {
+      const headers = ['Movement #', 'Date', 'Type', 'Status', 'Part Number', 'MSN', 'Qty', 'From', 'To', 'Reason'];
+      const rows = filteredMovements.map(m => ([
+        m.movement_number, m.movement_date, MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type,
+        m.status, m.part_number || m.item_code || '', m.master_serial_no || '', m.quantity ?? '', m.source_warehouse || '—',
+        m.destination_warehouse || '—', m.reason_description || '',
+      ]));
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Stock Movements');
+      XLSX.writeFile(wb, `stock_movements_${new Date().toISOString().split('T')[0]}.xlsx`);
+    });
   };
 
   // ============================================================================
@@ -1090,6 +1090,20 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
     const requestedQty = m.requested_quantity ?? m.quantity ?? 0;
     const movementTypeLabel = MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type;
     const stockTypeDisplay = stockTypeLabel === 'REJECTION' ? 'Rejection' : 'Stock In';
+
+    // Parse box breakdown from notes field for Production Receipt movements
+    // Notes format: "Production → FI Warehouse | Boxes: 5 × 100 PCS/box = 500 PCS | Stock Type: ..."
+    let boxBreakdown: { boxes: number; perBox: number; total: number } | null = null;
+    if (m.movement_type === 'PRODUCTION_RECEIPT' && m.notes) {
+      const boxMatch = m.notes.match(/Boxes:\s*(\d+)\s*×\s*(\d+)\s*PCS\/box\s*=\s*(\d+)\s*PCS/i);
+      if (boxMatch) {
+        boxBreakdown = {
+          boxes: parseInt(boxMatch[1], 10),
+          perBox: parseInt(boxMatch[2], 10),
+          total: parseInt(boxMatch[3], 10),
+        };
+      }
+    }
     const printTimestamp = new Date().toLocaleString('en-IN', {
       day: '2-digit', month: 'short', year: 'numeric',
       hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
@@ -1108,36 +1122,34 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
 <title>SM-${m.movement_number} | Stock Movement Slip | Autocrat Engineers</title>
 <style>
   /* ═══════════════════════════════════════════════════════════════
-     ENTERPRISE PRINT DOCUMENT — A4 PORTRAIT
-     A4 = 210mm × 297mm
+     ENTERPRISE PRINT DOCUMENT — A4 LANDSCAPE
+     A4 Landscape = 297mm × 210mm
      Margins: 12mm left/right, 10mm top, 8mm bottom
-     Printable area: 186mm × 279mm
+     Printable area: 273mm × 192mm
      ═══════════════════════════════════════════════════════════════ */
   @page {
-    size: 210mm 297mm;
-    margin: 10mm 12mm 8mm 12mm;
+    size: A4 landscape;
+    margin: 10mm;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html {
-    width: 210mm;
-  }
-  body {
+  html, body {
+    width: 100%;
+    margin: 0;
+    padding: 0;
     font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
     color: #000;
     font-size: 10px;
     line-height: 1.35;
     background: #fff;
-    width: 186mm;
-    margin: 0 auto;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
 
-  /* Page container — exactly fits A4 printable area */
+  /* Page container — fills available printable area */
   .doc {
-    width: 186mm;
-    max-width: 186mm;
-    margin: 0 auto;
+    width: 100%;
+    margin: 0;
+    padding: 0;
     position: relative;
     overflow: hidden;
   }
@@ -1277,7 +1289,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   /* Print-specific overrides */
   @media print {
     html, body {
-      width: 186mm;
+      width: 100%;
       height: auto;
       margin: 0;
       padding: 0;
@@ -1285,14 +1297,13 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
     }
     .doc {
       width: 100%;
-      max-width: 100%;
       margin: 0;
+      padding: 0;
       page-break-after: avoid;
     }
     .no-print { display: none !important; }
     table { page-break-inside: avoid; }
-    /* Remove browser default headers/footers in print */
-    @page { margin: 10mm 12mm 8mm 12mm; }
+    @page { size: A4 landscape; margin: 10mm; }
   }
 </style>
 </head>
@@ -1412,6 +1423,15 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
       <td class="bdr-b bdr-r cp-sm tr mono fw700 fs10">${movedQty.toLocaleString()}</td>
       <td class="bdr-b cp-sm mono fs9">${m.master_serial_no || '—'}</td>
     </tr>
+    ${boxBreakdown ? `
+    <!-- Box Breakdown Row (Production Receipt) -->
+    <tr>
+      <td colspan="8" class="bdr-b cp-sm" style="padding:6px 12px;">
+        <span class="fs8 fw800 uc ls1" style="color:#000; margin-right:8px;">BOX BREAKDOWN:</span>
+        <span class="mono fw700 fs10" style="color:#000;">${boxBreakdown.boxes} Boxes × ${boxBreakdown.perBox} PCS/Box = ${boxBreakdown.total.toLocaleString()} PCS</span>
+      </td>
+    </tr>
+    ` : ''}
     <!-- Blank rows for manual additions -->
     <tr><td class="bdr-b bdr-r cp-sm tc">&nbsp;</td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b cp-sm"></td></tr>
     <tr><td class="bdr-b bdr-r cp-sm tc">&nbsp;</td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b cp-sm"></td></tr>
@@ -1445,37 +1465,6 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   </table>
 
   <!-- ╔══════════════════════════════════════════════════════════════╗
-       ║  SECTION 5: AUTHORIZATION                                   ║
-       ╚══════════════════════════════════════════════════════════════╝ -->
-  <table class="w100 bdr mt4" cellspacing="0" cellpadding="0">
-    <tr><td colspan="2" class="sec-hdr">Authorization</td></tr>
-    <tr>
-      <!-- Verified By (auto-populated from current session user) -->
-      <td class="vt bdr-r" style="width:50%; padding:10px 14px;">
-        <div class="fs9 fw800 uc tc ls1 c000" style="padding-bottom:4px; margin-bottom:8px; border-bottom:1px solid #ccc;">Verified By</div>
-        <table class="w100" cellspacing="0" cellpadding="0" style="border:none;">
-          <tr><td class="fs9 fw700" style="width:70px; padding:3px 0;">Name</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px; font-weight:600;">${currentUserName || 'System User'}</td></tr>
-          <tr><td class="fs9 fw700" style="padding:3px 0;">Designation</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px; font-weight:500;">Supervisor</td></tr>
-          <tr><td class="fs9 fw700" style="padding:3px 0;">Date</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px; font-weight:500;">${printTimestamp.split(',')[0]}</td></tr>
-        </table>
-        <div class="sig-box" style="margin-top:8px; height:60px;"></div>
-        <div class="sig-caption">Signature</div>
-      </td>
-      <!-- Authorized By -->
-      <td class="vt" style="width:50%; padding:10px 14px;">
-        <div class="fs9 fw800 uc tc ls1 c000" style="padding-bottom:4px; margin-bottom:8px; border-bottom:1px solid #ccc;">Authorized By</div>
-        <table class="w100" cellspacing="0" cellpadding="0" style="border:none;">
-          <tr><td class="fs9 fw700" style="width:70px; padding:3px 0;">Name</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px;">&nbsp;</td></tr>
-          <tr><td class="fs9 fw700" style="padding:3px 0;">Designation</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px;">Manager</td></tr>
-          <tr><td class="fs9 fw700" style="padding:3px 0;">Date</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px;">&nbsp;</td></tr>
-        </table>
-        <div class="sig-box" style="margin-top:8px; height:60px;"></div>
-        <div class="sig-caption">Signature</div>
-      </td>
-    </tr>
-  </table>
-
-  <!-- ╔══════════════════════════════════════════════════════════════╗
        ║  SECTION 6: FOOTER                                          ║
        ╚══════════════════════════════════════════════════════════════╝ -->
   <table class="w100 mt8" cellspacing="0" cellpadding="0" style="border-top:1.5px solid #000;">
@@ -1501,7 +1490,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
 <script>window.onload = function() { window.print(); };<\/script>
 </body></html>`;
 
-    const printWindow = window.open('', '_blank', 'width=850,height=1100');
+    const printWindow = window.open('', '_blank', 'width=1100,height=800');
     if (printWindow) {
       printWindow.document.write(html);
       printWindow.document.close();

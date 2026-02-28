@@ -118,6 +118,7 @@ const formDefault: itemsApi.ItemFormData = {
   uom: 'PCS',
   unit_price: null,
   standard_cost: null,
+  weight: null,
   lead_time_days: '',
   is_active: true,
   master_serial_no: '',
@@ -158,57 +159,28 @@ type CardFilter = 'ALL' | 'ACTIVE' | 'INACTIVE';
 
 
 // ============================================================================
-// CSV EXPORT UTILITY
+// EXCEL EXPORT UTILITY
 // ============================================================================
 
-function exportItemsToCSV(data: itemsApi.Item[], filename: string = 'items_export') {
-  const headers = [
-    'Item Code',
-    'Part Number',
-    'Master Serial No',
-    'Item Name',
-    'Revision',
-    'UOM',
-    'Unit Price',
-    'Standard Cost',
-    'Lead Time',
-    'Status',
-    'Deleted By',
-  ];
+function exportItemsToExcel(data: itemsApi.Item[], filename: string = 'items_export') {
+  import('xlsx').then(XLSX => {
+    const headers = [
+      'Item Code', 'Part Number', 'Master Serial No', 'Item Name', 'Revision',
+      'UOM', 'Weight (G)', 'Unit Price', 'Standard Cost', 'Lead Time', 'Status', 'Deleted By',
+    ];
 
-  const rows = data.map(item => [
-    item.item_code,
-    item.part_number || '',
-    item.master_serial_no || '',
-    item.item_name || '',
-    item.revision || '',
-    item.uom,
-    item.unit_price ?? '',
-    item.standard_cost ?? '',
-    item.lead_time_days,
-    item.is_active ? 'Active' : 'Inactive',
-    item.deleted_by || '',
-  ]);
+    const rows = data.map(item => [
+      item.item_code, item.part_number || '', item.master_serial_no || '',
+      item.item_name || '', item.revision || '', item.uom,
+      item.weight ?? '', item.unit_price ?? '', item.standard_cost ?? '', item.lead_time_days,
+      item.is_active ? 'Active' : 'Inactive', item.deleted_by || '',
+    ]);
 
-  const csvContent = [
-    headers.join(','),
-    ...rows.map(row => row.map(cell =>
-      typeof cell === 'string' && (cell.includes(',') || cell.includes('"'))
-        ? `"${cell.replace(/"/g, '""')}"`
-        : cell
-    ).join(','))
-  ].join('\n');
-
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const link = document.createElement('a');
-  const url = URL.createObjectURL(blob);
-
-  link.setAttribute('href', url);
-  link.setAttribute('download', `${filename}_${new Date().toISOString().split('T')[0]}.csv`);
-  link.style.visibility = 'hidden';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Items');
+    XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
+  });
 }
 
 /* ========== DELETE CONFIRMATION MODAL ========== */
@@ -1069,6 +1041,10 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [formData, setFormData] = useState<itemsApi.ItemFormData>(formDefault);
+  // Raw string states to preserve decimal points during typing
+  const [weightStr, setWeightStr] = useState('');
+  const [unitPriceStr, setUnitPriceStr] = useState('');
+  const [standardCostStr, setStandardCostStr] = useState('');
   const [viewItem, setViewItem] = useState<Item | null>(null);
   const [showViewModal, setShowViewModal] = useState(false);
 
@@ -1191,16 +1167,23 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
 
   // Handle export
   const handleExport = () => {
-    exportItemsToCSV(filteredItems, 'item_master');
+    exportItemsToExcel(filteredItems, 'item_master');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const isEditing = !!editingItem;
     const itemName = formData.part_number || formData.item_code;
+    // Parse raw string values into numbers for submission
+    const submitData = {
+      ...formData,
+      weight: weightStr ? parseFloat(weightStr) : null,
+      unit_price: unitPriceStr ? parseFloat(unitPriceStr) : null,
+      standard_cost: standardCostStr ? parseFloat(standardCostStr) : null,
+    };
     const result = editingItem
-      ? await itemsApi.updateItem(editingItem.id, formData)
-      : await itemsApi.createItem(formData);
+      ? await itemsApi.updateItem(editingItem.id, submitData)
+      : await itemsApi.createItem(submitData);
 
     if (result.error) {
       showToast('error', isEditing ? 'Update Failed' : 'Creation Failed', result.error);
@@ -1213,12 +1196,16 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
 
   const handleEdit = (item: Item) => {
     setEditingItem(item);
+    setWeightStr(item.weight != null ? String(item.weight) : '');
+    setUnitPriceStr(item.unit_price != null ? String(item.unit_price) : '');
+    setStandardCostStr(item.standard_cost != null ? String(item.standard_cost) : '');
     setFormData({
       item_code: item.item_code,
       item_name: item.item_name || '',
       uom: item.uom,
       unit_price: item.unit_price ?? null,
       standard_cost: item.standard_cost ?? null,
+      weight: item.weight ?? null,
       lead_time_days: item.lead_time_days ?? '',
       is_active: item.is_active,
       master_serial_no: item.master_serial_no || '',
@@ -1261,6 +1248,9 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
     setShowModal(false);
     setEditingItem(null);
     setFormData(formDefault);
+    setWeightStr('');
+    setUnitPriceStr('');
+    setStandardCostStr('');
   };
 
   if (loading) return <ModuleLoader moduleName="Item Master" icon={<Package size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
@@ -1633,14 +1623,18 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
                 </Select>
               </div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '16px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginTop: '16px' }}>
+              <div>
+                <Label>Weight (G)</Label>
+                <Input type="text" value={weightStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setWeightStr(v); }} placeholder="0.0000" />
+              </div>
               <div>
                 <Label>Unit Price (₹)</Label>
-                <Input type="number" value={formData.unit_price != null ? String(formData.unit_price) : ''} onChange={(e) => setFormData({ ...formData, unit_price: e.target.value ? parseFloat(e.target.value) : null })} placeholder="0.00" min={0} step="0.01" />
+                <Input type="text" value={unitPriceStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setUnitPriceStr(v); }} placeholder="0.00" />
               </div>
               <div>
                 <Label>Standard Cost (₹)</Label>
-                <Input type="number" value={formData.standard_cost != null ? String(formData.standard_cost) : ''} onChange={(e) => setFormData({ ...formData, standard_cost: e.target.value ? parseFloat(e.target.value) : null })} placeholder="0.00" min={0} step="0.01" />
+                <Input type="text" value={standardCostStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setStandardCostStr(v); }} placeholder="0.00" />
               </div>
             </div>
           </div>
