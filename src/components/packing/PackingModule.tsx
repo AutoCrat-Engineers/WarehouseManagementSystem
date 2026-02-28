@@ -25,7 +25,7 @@ import {
     SearchBox, StatusFilter, DateRangeFilter,
     ExportCSVButton, RefreshButton,
 } from '../ui/SharedComponents';
-import { Printer, CheckCircle2, Clock, Package } from 'lucide-react';
+import { Printer, CheckCircle2, Clock, PackageOpen } from 'lucide-react';
 import { PackingDetail } from './PackingDetail';
 import * as svc from './packingService';
 import { PACKING_STATUS_CONFIG } from '../../types/packing';
@@ -214,7 +214,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
             <SummaryCardsGrid>
                 <SummaryCard
                     label="Total Records" value={totalCount}
-                    icon={<Package size={22} style={{ color: '#1e3a8a' }} />} color="#1e3a8a" bgColor="#eff6ff"
+                    icon={<PackageOpen size={22} style={{ color: '#1e3a8a' }} />} color="#1e3a8a" bgColor="#eff6ff"
                     isActive={statusFilter === 'ALL'} onClick={() => setStatusFilter('ALL')}
                 />
                 <SummaryCard
@@ -271,7 +271,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
                     <ModuleLoader moduleName="Sticker Generation" icon={<Printer size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
                 ) : filtered.length === 0 ? (
                     <EmptyState
-                        icon={<Package size={48} style={{ color: 'var(--enterprise-gray-400)' }} />}
+                        icon={<PackageOpen size={48} style={{ color: 'var(--enterprise-gray-400)' }} />}
                         title="No Sticker Generation Records"
                         description="Approved stock movements will appear here automatically for sticker printing."
                     />

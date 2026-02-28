@@ -21,7 +21,7 @@ import {
     SearchBox, ClearFiltersButton, ExportCSVButton, RefreshButton, AddButton,
 } from '../ui/SharedComponents';
 import {
-    Package, Search, Plus, Eye, Edit2, Download,
+    PackageOpen, Search, Plus, Eye, Edit2, Download,
     X, CheckCircle2, XCircle, AlertTriangle, Info,
     ClipboardList, Ruler, Weight, Box, ChevronDown,
     RefreshCw, Filter, Trash2, Settings,
@@ -225,7 +225,7 @@ function ViewModal({ isOpen, onClose, spec, item }: {
             {/* Item Info */}
             <div style={{ ...sectionStyle, background: 'linear-gradient(135deg, rgba(30,58,138,0.03), rgba(30,58,138,0.08))', border: '1px solid rgba(30,58,138,0.1)' }}>
                 <p style={{ fontSize: '12px', fontWeight: 700, color: 'var(--enterprise-primary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Package size={14} /> Item Information
+                    <PackageOpen size={14} /> Item Information
                 </p>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                     <div><Label>Item Code</Label><Input value={spec.item_code} disabled /></div>
@@ -257,7 +257,7 @@ function ViewModal({ isOpen, onClose, spec, item }: {
             {/* Outer Box */}
             <div style={{ ...sectionStyle, background: 'linear-gradient(135deg, rgba(168,85,247,0.03), rgba(168,85,247,0.08))', border: '1px solid rgba(168,85,247,0.15)', marginBottom: 0 }}>
                 <p style={{ fontSize: '12px', fontWeight: 700, color: 'rgb(168,85,247)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Package size={14} /> Outer Box
+                    <PackageOpen size={14} /> Outer Box
                 </p>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
                     <div style={detailCard}><p style={lblStyle}>Size (L × W × H)</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{fmtSize(spec.outer_box_length_mm, spec.outer_box_width_mm, spec.outer_box_height_mm)}</p></div>
@@ -881,7 +881,7 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                         <div style={{ ...sectionStyle, background: 'linear-gradient(135deg, rgba(30,58,138,0.03), rgba(30,58,138,0.08))', border: '1px solid rgba(30,58,138,0.1)' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                                 <p style={{ fontSize: '12px', fontWeight: 700, color: 'var(--enterprise-primary)', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                    <Package size={14} /> Selected Item
+                                    <PackageOpen size={14} /> Selected Item
                                 </p>
                                 <Button variant="tertiary" size="sm" onClick={() => setSelectedItem(null)}>Change Item</Button>
                             </div>
@@ -898,7 +898,7 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                     {editSpec && (
                         <div style={{ ...sectionStyle, background: 'linear-gradient(135deg, rgba(30,58,138,0.03), rgba(30,58,138,0.08))', border: '1px solid rgba(30,58,138,0.1)' }}>
                             <p style={{ fontSize: '12px', fontWeight: 700, color: 'var(--enterprise-primary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <Package size={14} /> Item Information (Read Only)
+                                <PackageOpen size={14} /> Item Information (Read Only)
                             </p>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                                 <div><Label>Item Code</Label><Input value={editSpec.item_code} disabled /></div>
@@ -938,7 +938,7 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                             <div style={{ ...sectionStyle, background: 'linear-gradient(135deg, rgba(168,85,247,0.03), rgba(168,85,247,0.08))', border: '1px solid rgba(168,85,247,0.15)' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
                                     <p style={{ fontSize: '12px', fontWeight: 700, color: 'rgb(168,85,247)', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
-                                        <Package size={14} /> Outer Box Specifications
+                                        <PackageOpen size={14} /> Outer Box Specifications
                                     </p>
                                     <div style={{ display: 'flex', gap: '12px' }}>
                                         <UnitToggle<LengthUnit> units={['mm', 'cm', 'inches']} active={outerFormLU} onChange={setOuterFormLU} icon={<Ruler size={14} />} />

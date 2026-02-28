@@ -41,6 +41,7 @@
 
   /* Layout */
   --sidebar-width: 260px;
+  --sidebar-collapsed-width: 72px;
   --topbar-height: 64px;
   --content-max-width: 1600px;
 

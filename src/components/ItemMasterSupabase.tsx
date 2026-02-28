@@ -1443,9 +1443,10 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
                                 if (activeDropdown === item.id) {
                                   setActiveDropdown(null);
                                 } else {
+                                  // Detect if we should open upward based on available space
                                   const rect = e.currentTarget.getBoundingClientRect();
                                   const spaceBelow = window.innerHeight - rect.bottom;
-                                  setDropdownDirection(spaceBelow < 180 ? 'up' : 'down');
+                                  setDropdownDirection(spaceBelow < 160 ? 'up' : 'down');
                                   setActiveDropdown(item.id);
                                 }
                               }}
