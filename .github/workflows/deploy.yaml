@@ -55,6 +55,8 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_KEY }}
           script: |
+            set -e
+
             echo "===== DOCKER CLEANUP ====="
             docker stop wms || true
             docker rm wms || true
@@ -62,7 +64,7 @@ jobs:
             docker rm wms-new || true
 
             echo "===== REMOVE UNUSED IMAGES ====="
-            docker image prune -af
+            docker image prune -af || true
 
             echo "===== PULL LATEST IMAGE ====="
             docker pull shravanaweb/wms:latest
@@ -70,34 +72,29 @@ jobs:
             echo "===== START VALIDATION CONTAINER ====="
             docker run -d \
               --name wms-new \
-              -p 8080:3000 \
+              -p 8080:80 \
               --restart unless-stopped \
               shravanaweb/wms:latest
 
             echo "Waiting for container startup..."
             sleep 15
 
-            echo "===== VALIDATE CONTAINER ====="
+            echo "===== VALIDATE CONTAINER PROCESS ====="
             docker ps | grep wms-new
 
-            if [ $? -eq 0 ]; then
-              echo "Validation success → switching production container"
+            echo "===== VALIDATE HTTP RESPONSE ====="
+            curl -f http://localhost:8080 || exit 1
 
-              docker stop wms-new
-              docker rm wms-new
+            echo "Validation success → switching production container"
 
-              docker run -d \
-                --name wms \
-                -p 80:3000 \
-                --restart unless-stopped \
-                shravanaweb/wms:latest
+            docker stop wms-new
+            docker rm wms-new
 
-              echo "===== DEPLOYMENT SUCCESS ====="
-              docker ps
-            else
-              echo "===== DEPLOYMENT FAILED ====="
-              docker logs wms-new
-              docker stop wms-new || true
-              docker rm wms-new || true
-              exit 1
-            fi
+            docker run -d \
+              --name wms \
+              -p 80:80 \
+              --restart unless-stopped \
+              shravanaweb/wms:latest
+
+            echo "===== DEPLOYMENT SUCCESS ====="
+            docker ps
