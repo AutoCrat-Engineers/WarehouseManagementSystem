@@ -1122,18 +1122,18 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
 <title>SM-${m.movement_number} | Stock Movement Slip | Autocrat Engineers</title>
 <style>
   /* ═══════════════════════════════════════════════════════════════
-     ENTERPRISE PRINT DOCUMENT — A4 PORTRAIT
-     A4 = 210mm × 297mm
+     ENTERPRISE PRINT DOCUMENT — A4 LANDSCAPE
+     A4 Landscape = 297mm × 210mm
      Margins: 12mm left/right, 10mm top, 8mm bottom
-     Printable area: 186mm × 279mm
+     Printable area: 273mm × 192mm
      ═══════════════════════════════════════════════════════════════ */
   @page {
-    size: 210mm 297mm;
+    size: 297mm 210mm;
     margin: 10mm 12mm 8mm 12mm;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html {
-    width: 210mm;
+    width: 297mm;
   }
   body {
     font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
@@ -1141,16 +1141,16 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
     font-size: 10px;
     line-height: 1.35;
     background: #fff;
-    width: 186mm;
+    width: 273mm;
     margin: 0 auto;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
 
-  /* Page container — exactly fits A4 printable area */
+  /* Page container — exactly fits A4 landscape printable area */
   .doc {
-    width: 186mm;
-    max-width: 186mm;
+    width: 273mm;
+    max-width: 273mm;
     margin: 0 auto;
     position: relative;
     overflow: hidden;
@@ -1428,10 +1428,10 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
     </tr>
     ${boxBreakdown ? `
     <!-- Box Breakdown Row (Production Receipt) -->
-    <tr style="background:#f0f7ff;">
+    <tr>
       <td colspan="8" class="bdr-b cp-sm" style="padding:6px 12px;">
-        <span class="fs8 fw800 uc ls1" style="color:#1e3a8a; margin-right:8px;">BOX BREAKDOWN:</span>
-        <span class="mono fw700 fs10" style="color:#1e3a8a;">${boxBreakdown.boxes} Boxes × ${boxBreakdown.perBox} PCS/Box = ${boxBreakdown.total.toLocaleString()} PCS</span>
+        <span class="fs8 fw800 uc ls1" style="color:#000; margin-right:8px;">BOX BREAKDOWN:</span>
+        <span class="mono fw700 fs10" style="color:#000;">${boxBreakdown.boxes} Boxes × ${boxBreakdown.perBox} PCS/Box = ${boxBreakdown.total.toLocaleString()} PCS</span>
       </td>
     </tr>
     ` : ''}
