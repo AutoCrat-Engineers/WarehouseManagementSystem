@@ -1128,30 +1128,28 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
      Printable area: 273mm × 192mm
      ═══════════════════════════════════════════════════════════════ */
   @page {
-    size: 297mm 210mm;
-    margin: 10mm 12mm 8mm 12mm;
+    size: A4 landscape;
+    margin: 10mm;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html {
-    width: 297mm;
-  }
-  body {
+  html, body {
+    width: 100%;
+    margin: 0;
+    padding: 0;
     font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
     color: #000;
     font-size: 10px;
     line-height: 1.35;
     background: #fff;
-    width: 273mm;
-    margin: 0 auto;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
 
-  /* Page container — exactly fits A4 landscape printable area */
+  /* Page container — fills available printable area */
   .doc {
-    width: 273mm;
-    max-width: 273mm;
-    margin: 0 auto;
+    width: 100%;
+    margin: 0;
+    padding: 0;
     position: relative;
     overflow: hidden;
   }
@@ -1291,7 +1289,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   /* Print-specific overrides */
   @media print {
     html, body {
-      width: 186mm;
+      width: 100%;
       height: auto;
       margin: 0;
       padding: 0;
@@ -1299,14 +1297,13 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
     }
     .doc {
       width: 100%;
-      max-width: 100%;
       margin: 0;
+      padding: 0;
       page-break-after: avoid;
     }
     .no-print { display: none !important; }
     table { page-break-inside: avoid; }
-    /* Remove browser default headers/footers in print */
-    @page { margin: 10mm 12mm 8mm 12mm; }
+    @page { size: A4 landscape; margin: 10mm; }
   }
 </style>
 </head>
@@ -1493,7 +1490,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
 <script>window.onload = function() { window.print(); };<\/script>
 </body></html>`;
 
-    const printWindow = window.open('', '_blank', 'width=850,height=1100');
+    const printWindow = window.open('', '_blank', 'width=1100,height=800');
     if (printWindow) {
       printWindow.document.write(html);
       printWindow.document.close();
