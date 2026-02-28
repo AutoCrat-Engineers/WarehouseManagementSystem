@@ -20,6 +20,7 @@ import type { PermissionMap } from './auth/components/GrantAccessModal';
 import {
   LayoutDashboard,
   Package,
+  PackageOpen,
   FileText,
   TrendingUp,
   Calendar,
@@ -38,13 +39,16 @@ import {
   ClipboardList,
   List,
   FileCheck,
-  FileMinus
+  FileMinus,
+  Lock,
+  Unlock
 } from 'lucide-react';
 
 declare const __APP_VERSION__: string;
 
 const supabase = getSupabaseClient();
 const logoImage = '/logo.png';
+const compactLogoImage = '/a-logo.png';
 
 // User role type for RBAC
 type UserRole = 'L1' | 'L2' | 'L3' | null;
@@ -76,7 +80,7 @@ const menuItems: MenuItem[] = [
   { id: 'items', label: 'Item Master', icon: Package, description: 'FG Catalog' },
   { id: 'inventory', label: 'Inventory', icon: Boxes, description: 'Multi-Warehouse Stock' },
   { id: 'stock-movements', label: 'Stock Movements', icon: ArrowRightLeft, description: 'Audit Trail' },
-  { id: 'packing', label: 'Packing', icon: Package, description: 'FG Packing Workflow', hasSubmenu: true },
+  { id: 'packing', label: 'Packing', icon: PackageOpen, description: 'FG Packing Workflow', hasSubmenu: true },
   { id: 'orders', label: 'Blanket Orders', icon: FileText, description: 'Customer Orders' },
   { id: 'releases', label: 'Blanket Releases', icon: Calendar, description: 'Delivery Schedule' },
   { id: 'forecast', label: 'Forecasting', icon: TrendingUp, description: 'Demand Prediction' },
@@ -89,10 +93,26 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [userRole, setUserRole] = useState<UserRole>(null);
   const [currentView, setCurrentView] = useState<View>('dashboard');
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true); // mobile only
+  const [isSidebarHovered, setIsSidebarHovered] = useState(false);
+  const [isSidebarLocked, setIsSidebarLocked] = useState(() => {
+    // Persist lock preference in localStorage
+    try { return localStorage.getItem('sidebar_locked') === 'true'; } catch { return false; }
+  });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isMobile, setIsMobile] = useState(false);
+
+  // Desktop: sidebar expands on hover OR when locked; Mobile: uses isSidebarOpen toggle
+  const sidebarExpanded = isMobile ? isSidebarOpen : (isSidebarLocked || isSidebarHovered);
+
+  const toggleSidebarLock = () => {
+    const next = !isSidebarLocked;
+    setIsSidebarLocked(next);
+    try { localStorage.setItem('sidebar_locked', String(next)); } catch { }
+  };
+  const SIDEBAR_COLLAPSED_W = 72;
+  const SIDEBAR_EXPANDED_W = 280;
   // SAP-style accordion states
   const [packingMenuOpen, setPackingMenuOpen] = useState(false);
   const [packingListOpen, setPackingListOpen] = useState(false);
@@ -144,7 +164,6 @@ export default function App() {
       const mobile = window.innerWidth < 1024;
       setIsMobile(mobile);
       if (mobile) setIsSidebarOpen(false);
-      else setIsSidebarOpen(true);
     };
     checkMobile();
     window.addEventListener('resize', checkMobile);
@@ -484,7 +503,7 @@ export default function App() {
   // Resolve the current menu item — for packing sub-views, show packing meta
   const packingMeta = PACKING_VIEW_META[currentView];
   const currentMenuItem = packingMeta
-    ? { id: currentView as View, label: packingMeta.label, icon: Package, description: packingMeta.description }
+    ? { id: currentView as View, label: packingMeta.label, icon: PackageOpen, description: packingMeta.description }
     : getMenuItems().find(item => item.id === currentView);
 
   return (
@@ -506,88 +525,142 @@ export default function App() {
         {/* SIDEBAR */}
         <aside
           className={`app-sidebar${isMobile ? (isSidebarOpen ? ' open' : '') : ''}`}
+          onMouseEnter={() => { if (!isMobile) setIsSidebarHovered(true); }}
+          onMouseLeave={() => { if (!isMobile) setIsSidebarHovered(false); }}
           style={{
-            width: isMobile ? '280px' : (isSidebarOpen ? '280px' : '0'),
+            width: isMobile ? '280px' : (sidebarExpanded ? SIDEBAR_EXPANDED_W : SIDEBAR_COLLAPSED_W),
             backgroundColor: 'var(--card-background)',
             borderRight: '1px solid var(--border-color)',
             display: 'flex',
             flexDirection: 'column',
-            transition: isMobile ? 'transform 300ms cubic-bezier(0.4, 0, 0.2, 1)' : 'width 300ms ease',
+            transition: isMobile ? 'transform 300ms cubic-bezier(0.4, 0, 0.2, 1)' : 'width 280ms cubic-bezier(0.4, 0, 0.2, 1)',
             overflow: 'hidden',
-            boxShadow: 'var(--shadow-lg)',
+            boxShadow: sidebarExpanded ? '4px 0 24px rgba(0, 0, 0, 0.12)' : 'var(--shadow-sm)',
+            position: 'fixed' as const,
+            left: 0,
+            top: 0,
+            bottom: 0,
+            zIndex: isMobile ? 999 : 100,
             ...(isMobile ? {
-              position: 'fixed' as const,
-              left: 0,
-              top: 0,
-              bottom: 0,
-              zIndex: 999,
               transform: isSidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
             } : {}),
           }}
         >
-          {/* Logo Section */}
+          {/* ═══ SECTION 1: LOGO ═══ */}
           <div style={{
-            padding: '24px',
+            padding: sidebarExpanded ? '20px' : '12px 8px',
             borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
             backgroundColor: '#1e3a8a',
+            transition: 'padding 280ms cubic-bezier(0.4, 0, 0.2, 1)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: sidebarExpanded ? '12px' : '8px',
           }}>
+            {/* Logo: Full logo when expanded, compact a-logo when collapsed */}
+            <div style={{
+              backgroundColor: 'white',
+              padding: sidebarExpanded ? '14px 18px' : '8px',
+              borderRadius: sidebarExpanded ? '12px' : '10px',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+              transition: 'all 280ms cubic-bezier(0.4, 0, 0.2, 1)',
+              width: sidebarExpanded ? '100%' : '48px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+              <img
+                src={sidebarExpanded ? logoImage : compactLogoImage}
+                alt="Autocrat Engineers"
+                style={{
+                  width: sidebarExpanded ? '100%' : '32px',
+                  height: 'auto',
+                  display: 'block',
+                  transition: 'width 280ms cubic-bezier(0.4, 0, 0.2, 1)',
+                }}
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none';
+                }}
+              />
+            </div>
+            {/* App name: Full name when expanded, "WMS" when collapsed */}
+            <p style={{
+              color: 'rgba(255, 255, 255, 0.95)',
+              fontSize: sidebarExpanded ? '13px' : '10px',
+              margin: '0',
+              fontWeight: sidebarExpanded ? '500' : '700',
+              letterSpacing: sidebarExpanded ? '0.3px' : '1px',
+              textAlign: 'center',
+              whiteSpace: 'nowrap',
+              transition: 'all 280ms cubic-bezier(0.4, 0, 0.2, 1)',
+            }}>
+              {sidebarExpanded ? 'Warehouse Management System' : 'WMS'}
+            </p>
+            {/* Version badge + Lock button */}
             <div style={{
               display: 'flex',
-              flexDirection: 'column',
-              gap: '16px',
+              alignItems: 'center',
+              gap: sidebarExpanded ? '8px' : '0px',
+              justifyContent: 'center',
+              transition: 'all 280ms cubic-bezier(0.4, 0, 0.2, 1)',
             }}>
-              <div style={{
-                backgroundColor: 'white',
-                padding: '16px 20px',
-                borderRadius: '12px',
-                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
-              }}>
-                <img
-                  src={logoImage}
-                  alt="Autocrat Engineers"
-                  style={{
-                    width: '100%',
-                    height: 'auto',
-                    display: 'block',
-                  }}
-                  onError={(e) => {
-                    e.currentTarget.style.display = 'none';
-                  }}
-                />
-              </div>
-              <p style={{
-                color: 'rgba(255, 255, 255, 0.95)',
-                fontSize: '13px',
-                margin: '0',
-                fontWeight: '500',
-                letterSpacing: '0.3px',
-                textAlign: 'center',
-              }}>
-                Warehouse Management System
-              </p>
               <span style={{
                 display: 'inline-block',
-                margin: '0 auto',
-                padding: '2px 10px',
+                padding: sidebarExpanded ? '2px 10px' : '2px 6px',
                 backgroundColor: 'rgba(255, 255, 255, 0.15)',
                 borderRadius: '12px',
-                fontSize: '11px',
+                fontSize: sidebarExpanded ? '11px' : '9px',
                 fontWeight: '600',
                 color: 'rgba(255, 255, 255, 0.9)',
                 letterSpacing: '0.5px',
                 textAlign: 'center',
                 backdropFilter: 'blur(4px)',
+                whiteSpace: 'nowrap',
+                transition: 'all 280ms cubic-bezier(0.4, 0, 0.2, 1)',
               }}>
                 v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.3.2'}
               </span>
+              {/* Lock / Unlock toggle — desktop only */}
+              {!isMobile && sidebarExpanded && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); toggleSidebarLock(); }}
+                  title={isSidebarLocked ? 'Unlock sidebar (hover mode)' : 'Lock sidebar open'}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: '26px',
+                    height: '26px',
+                    border: '1px solid rgba(255, 255, 255, 0.25)',
+                    borderRadius: '8px',
+                    backgroundColor: isSidebarLocked ? 'rgba(255, 255, 255, 0.25)' : 'rgba(255, 255, 255, 0.08)',
+                    color: 'rgba(255, 255, 255, 0.95)',
+                    cursor: 'pointer',
+                    transition: 'all 200ms ease',
+                    padding: 0,
+                    flexShrink: 0,
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.35)';
+                    e.currentTarget.style.transform = 'scale(1.1)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = isSidebarLocked ? 'rgba(255, 255, 255, 0.25)' : 'rgba(255, 255, 255, 0.08)';
+                    e.currentTarget.style.transform = 'scale(1)';
+                  }}
+                >
+                  {isSidebarLocked ? <Lock size={13} strokeWidth={2.5} /> : <Unlock size={13} strokeWidth={2} />}
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Navigation */}
+          {/* ═══ SECTION 2: NAVIGATION ═══ */}
           <nav style={{
             flex: 1,
             overflowY: 'auto',
-            padding: '16px 0',
+            overflowX: 'hidden',
+            padding: sidebarExpanded ? '12px 0' : '8px 0',
           }}>
             {getMenuItems().map((item) => {
               const Icon = item.icon;
@@ -613,8 +686,10 @@ export default function App() {
                         if (!packingMenuOpen) setPackingListOpen(false);
                       }}
                       style={{
-                        width: '100%', display: 'flex', alignItems: 'center', gap: '12px',
-                        padding: '12px 24px', border: 'none',
+                        width: '100%', display: 'flex', alignItems: 'center', gap: sidebarExpanded ? '12px' : '0px',
+                        padding: sidebarExpanded ? '12px 20px' : '12px 0',
+                        justifyContent: sidebarExpanded ? 'flex-start' : 'center',
+                        border: 'none',
                         backgroundColor: isActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
                         borderLeft: isActive ? '3px solid var(--enterprise-primary)' : '3px solid transparent',
                         color: isActive ? 'var(--enterprise-primary)' : 'var(--enterprise-gray-600)',
@@ -624,26 +699,31 @@ export default function App() {
                       onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'var(--enterprise-gray-50)'; }}
                       onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = isActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent'; }}
                     >
-                      <Icon size={20} strokeWidth={isActive ? 2.5 : 2} />
-                      <div style={{ flex: 1 }}>
-                        <div>{item.label}</div>
-                        <div style={{ fontSize: '11px', color: 'var(--enterprise-gray-500)', fontWeight: '400' }}>
-                          {item.description}
+                      <Icon size={20} strokeWidth={isActive ? 2.5 : 2} style={{ flexShrink: 0 }} />
+                      {sidebarExpanded && (
+                        <div style={{ flex: 1, overflow: 'hidden' }}>
+                          <div style={{ whiteSpace: 'nowrap' }}>{item.label}</div>
+                          <div style={{ fontSize: '11px', color: 'var(--enterprise-gray-500)', fontWeight: '400', whiteSpace: 'nowrap' }}>
+                            {item.description}
+                          </div>
                         </div>
-                      </div>
-                      <ChevronDown
-                        size={16}
-                        style={{
-                          transition: 'transform 250ms ease',
-                          transform: packingMenuOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-                          color: isActive ? 'var(--enterprise-primary)' : 'var(--enterprise-gray-400)',
-                        }}
-                      />
+                      )}
+                      {sidebarExpanded && (
+                        <ChevronDown
+                          size={16}
+                          style={{
+                            transition: 'transform 250ms ease',
+                            transform: packingMenuOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                            color: isActive ? 'var(--enterprise-primary)' : 'var(--enterprise-gray-400)',
+                            flexShrink: 0,
+                          }}
+                        />
+                      )}
                     </button>
 
-                    {/* ─── Level-1 Sub-items ─── */}
+                    {/* ─── Level-1 Sub-items (only when expanded) ─── */}
                     <div style={{
-                      maxHeight: packingMenuOpen ? '400px' : '0',
+                      maxHeight: (packingMenuOpen && sidebarExpanded) ? '400px' : '0',
                       overflow: 'hidden',
                       transition: 'max-height 300ms ease',
                       backgroundColor: 'rgba(30, 58, 138, 0.02)',
@@ -780,9 +860,12 @@ export default function App() {
                 <button
                   key={item.id}
                   onClick={() => handleNavigation(item.id)}
+                  title={!sidebarExpanded ? item.label : undefined}
                   style={{
-                    width: '100%', display: 'flex', alignItems: 'center', gap: '12px',
-                    padding: '12px 24px', border: 'none',
+                    width: '100%', display: 'flex', alignItems: 'center', gap: sidebarExpanded ? '12px' : '0px',
+                    padding: sidebarExpanded ? '12px 20px' : '12px 0',
+                    justifyContent: sidebarExpanded ? 'flex-start' : 'center',
+                    border: 'none',
                     backgroundColor: isActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
                     borderLeft: isActive ? '3px solid var(--enterprise-primary)' : '3px solid transparent',
                     color: isActive ? 'var(--enterprise-primary)' : 'var(--enterprise-gray-600)',
@@ -792,89 +875,147 @@ export default function App() {
                   onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'var(--enterprise-gray-50)'; }}
                   onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
                 >
-                  <Icon size={20} strokeWidth={isActive ? 2.5 : 2} />
-                  <div style={{ flex: 1 }}>
-                    <div>{item.label}</div>
-                    <div style={{ fontSize: '11px', color: 'var(--enterprise-gray-500)', fontWeight: '400' }}>
-                      {item.description}
+                  <Icon size={20} strokeWidth={isActive ? 2.5 : 2} style={{ flexShrink: 0 }} />
+                  {sidebarExpanded && (
+                    <div style={{ flex: 1, overflow: 'hidden' }}>
+                      <div style={{ whiteSpace: 'nowrap' }}>{item.label}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--enterprise-gray-500)', fontWeight: '400', whiteSpace: 'nowrap' }}>
+                        {item.description}
+                      </div>
                     </div>
-                  </div>
-                  {isActive && <ChevronRight size={16} />}
+                  )}
+                  {isActive && sidebarExpanded && <ChevronRight size={16} style={{ flexShrink: 0 }} />}
                 </button>
               );
             })}
           </nav>
 
-          {/* User Section */}
+          {/* ═══ SECTION 3: USER & LOGOUT ═══ */}
           <div style={{
-            padding: '16px 24px',
+            padding: sidebarExpanded ? '16px 20px' : '12px 8px',
             borderTop: '1px solid var(--border-color)',
             backgroundColor: 'var(--enterprise-gray-50)',
+            transition: 'padding 280ms cubic-bezier(0.4, 0, 0.2, 1)',
           }}>
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              marginBottom: '12px',
-            }}>
+            {sidebarExpanded ? (
+              /* ── Expanded: full user info ── */
+              <>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  marginBottom: '12px',
+                }}>
+                  <div style={{
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: '50%',
+                    backgroundColor: 'var(--enterprise-primary)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'white',
+                    fontWeight: '600',
+                    fontSize: '13px',
+                    flexShrink: 0,
+                  }}>
+                    {user?.email?.charAt(0).toUpperCase() || 'U'}
+                  </div>
+                  <div style={{ flex: 1, overflow: 'hidden' }}>
+                    <div style={{
+                      fontSize: '13px',
+                      fontWeight: '500',
+                      color: 'var(--enterprise-gray-900)',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {user?.user_metadata?.name || user?.email || 'User'}
+                    </div>
+                    <div style={{
+                      fontSize: '11px',
+                      color: userRole === 'L3' ? '#1e40af' : userRole === 'L2' ? '#ca8a04' : '#6b7280',
+                      fontWeight: '600',
+                    }}>
+                      {userRole === 'L3' ? 'Manager (Admin)' : userRole === 'L2' ? 'Supervisor' : 'Operator'}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  disabled={isLoading}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    padding: '10px',
+                    border: '1px solid var(--border-color)',
+                    backgroundColor: isLoading ? '#f3f4f6' : 'white',
+                    borderRadius: 'var(--border-radius-md)',
+                    color: isLoading ? '#9ca3af' : 'var(--enterprise-primary)',
+                    fontSize: '13px',
+                    fontWeight: '500',
+                    cursor: isLoading ? 'not-allowed' : 'pointer',
+                    transition: 'all 200ms ease',
+                    opacity: isLoading ? 0.6 : 1,
+                  }}
+                >
+                  <LogOut size={16} />
+                  {isLoading ? 'Signing out...' : 'Sign Out'}
+                </button>
+              </>
+            ) : (
+              /* ── Collapsed: avatar + logout icon stacked ── */
               <div style={{
-                width: '36px',
-                height: '36px',
-                borderRadius: '50%',
-                backgroundColor: 'var(--enterprise-primary)',
                 display: 'flex',
+                flexDirection: 'column',
                 alignItems: 'center',
-                justifyContent: 'center',
-                color: 'white',
-                fontWeight: '600',
-                fontSize: '13px',
+                gap: '12px',
               }}>
-                {user?.email?.charAt(0).toUpperCase() || 'U'}
-              </div>
-              <div style={{ flex: 1, overflow: 'hidden' }}>
-                <div style={{
-                  fontSize: '13px',
-                  fontWeight: '500',
-                  color: 'var(--enterprise-gray-900)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}>
-                  {user?.user_metadata?.name || user?.email || 'User'}
+                <div
+                  title={user?.user_metadata?.name || user?.email || 'User'}
+                  style={{
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: '50%',
+                    backgroundColor: 'var(--enterprise-primary)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'white',
+                    fontWeight: '600',
+                    fontSize: '13px',
+                    flexShrink: 0,
+                  }}
+                >
+                  {user?.email?.charAt(0).toUpperCase() || 'U'}
                 </div>
-                <div style={{
-                  fontSize: '11px',
-                  color: userRole === 'L3' ? '#1e40af' : userRole === 'L2' ? '#ca8a04' : '#6b7280',
-                  fontWeight: '600',
-                }}>
-                  {userRole === 'L3' ? 'Manager (Admin)' : userRole === 'L2' ? 'Supervisor' : 'Operator'}
-                </div>
+                <button
+                  onClick={handleLogout}
+                  disabled={isLoading}
+                  title="Sign Out"
+                  style={{
+                    width: '36px',
+                    height: '36px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: '1px solid var(--border-color)',
+                    backgroundColor: isLoading ? '#f3f4f6' : 'white',
+                    borderRadius: '50%',
+                    color: isLoading ? '#9ca3af' : 'var(--enterprise-primary)',
+                    cursor: isLoading ? 'not-allowed' : 'pointer',
+                    transition: 'all 200ms ease',
+                    opacity: isLoading ? 0.6 : 1,
+                    padding: 0,
+                  }}
+                >
+                  <LogOut size={16} />
+                </button>
               </div>
-            </div>
-            <button
-              onClick={handleLogout}
-              disabled={isLoading}
-              style={{
-                width: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                padding: '10px',
-                border: '1px solid var(--border-color)',
-                backgroundColor: isLoading ? '#f3f4f6' : 'white',
-                borderRadius: 'var(--border-radius-md)',
-                color: isLoading ? '#9ca3af' : 'var(--enterprise-primary)',
-                fontSize: '13px',
-                fontWeight: '500',
-                cursor: isLoading ? 'not-allowed' : 'pointer',
-                transition: 'all 200ms ease',
-                opacity: isLoading ? 0.6 : 1,
-              }}
-            >
-              <LogOut size={16} />
-              {isLoading ? 'Signing out...' : 'Sign Out'}
-            </button>
+            )}
           </div>
         </aside>
 
@@ -884,6 +1025,8 @@ export default function App() {
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
+          marginLeft: isMobile ? 0 : (sidebarExpanded ? SIDEBAR_EXPANDED_W : SIDEBAR_COLLAPSED_W),
+          transition: 'margin-left 280ms cubic-bezier(0.4, 0, 0.2, 1)',
         }}>
           {/* TOP BAR */}
           <header className="app-topbar" style={{
@@ -897,30 +1040,33 @@ export default function App() {
             boxShadow: 'var(--shadow-sm)',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <button
-                onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                style={{
-                  width: '40px',
-                  height: '40px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  border: 'none',
-                  backgroundColor: 'transparent',
-                  borderRadius: 'var(--border-radius-md)',
-                  color: 'var(--enterprise-gray-600)',
-                  cursor: 'pointer',
-                  transition: 'all 200ms ease',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = 'var(--enterprise-gray-100)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = 'transparent';
-                }}
-              >
-                {isSidebarOpen ? <ChevronLeft size={20} /> : <Menu size={20} />}
-              </button>
+              {/* Mobile: hamburger menu button */}
+              {isMobile && (
+                <button
+                  onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                  style={{
+                    width: '40px',
+                    height: '40px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: 'none',
+                    backgroundColor: 'transparent',
+                    borderRadius: 'var(--border-radius-md)',
+                    color: 'var(--enterprise-gray-600)',
+                    cursor: 'pointer',
+                    transition: 'all 200ms ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = 'var(--enterprise-gray-100)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }}
+                >
+                  {isSidebarOpen ? <ChevronLeft size={20} /> : <Menu size={20} />}
+                </button>
+              )}
 
               {currentMenuItem && (
                 <div>
