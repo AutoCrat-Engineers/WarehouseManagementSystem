@@ -55,7 +55,6 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_KEY }}
           script: |
-
             echo "===== DOCKER CLEANUP ====="
             docker stop wms || true
             docker rm wms || true
@@ -71,7 +70,7 @@ jobs:
             echo "===== START VALIDATION CONTAINER ====="
             docker run -d \
               --name wms-new \
-              -p 3000:3000 \
+              -p 8080:3000 \
               --restart unless-stopped \
               shravanaweb/wms:latest
 
@@ -95,7 +94,6 @@ jobs:
 
               echo "===== DEPLOYMENT SUCCESS ====="
               docker ps
-
             else
               echo "===== DEPLOYMENT FAILED ====="
               docker logs wms-new
