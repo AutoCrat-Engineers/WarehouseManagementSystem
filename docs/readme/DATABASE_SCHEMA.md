@@ -402,6 +402,64 @@ CREATE INDEX idx_planning_status ON planning_recommendations(status);
 
 ---
 
+### 10. User Permissions — Granular RBAC (v0.4.0)
+
+```sql
+CREATE TABLE user_permissions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    module_name VARCHAR NOT NULL REFERENCES module_registry(module_key),
+    can_view BOOLEAN DEFAULT false,
+    can_create BOOLEAN DEFAULT false,
+    can_edit BOOLEAN DEFAULT false,
+    can_delete BOOLEAN DEFAULT false,
+    override_mode VARCHAR CHECK (override_mode IN ('grant', 'full_control')),
+    source_role VARCHAR,
+    overridden_by UUID REFERENCES profiles(id),
+    overridden_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT uk_user_module UNIQUE (user_id, module_name)
+);
+
+CREATE INDEX idx_user_perms_user ON user_permissions(user_id);
+CREATE INDEX idx_user_perms_module ON user_permissions(module_name);
+```
+
+---
+
+### 11. Module Registry (v0.4.0)
+
+```sql
+CREATE TABLE module_registry (
+    module_key VARCHAR PRIMARY KEY,
+    display_name VARCHAR NOT NULL,
+    parent_module VARCHAR,
+    sort_order INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT true
+);
+```
+
+---
+
+### 12. System Settings (v0.4.0)
+
+```sql
+CREATE TABLE system_settings (
+    key VARCHAR PRIMARY KEY,
+    value JSONB NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_by UUID REFERENCES profiles(id)
+);
+
+-- Key setting: permission_source controls RBAC engine mode
+-- Values: 'localStorage', 'db_with_fallback', 'db_only', 'cleanup_done'
+INSERT INTO system_settings (key, value)
+VALUES ('permission_source', '"db_only"'::jsonb);
+```
+
+---
+
 ## Database Triggers (Automatic Business Logic)
 
 ### Trigger 1: Auto-Update Inventory on Stock Movement
@@ -536,4 +594,6 @@ CREATE POLICY "Authenticated users can modify items"
 
 ---
 
-This schema is designed by a **Principal Database Architect** for a **real ERP system**.
+This schema is designed by a **Principal Database Architect** for a **real ERP system**.  
+**Version:** 0.4.0 | **Last Updated:** March 2026  
+For RBAC-specific database details, see [`DB_RBAC_REFERENCE.md`](DB_RBAC_REFERENCE.md).

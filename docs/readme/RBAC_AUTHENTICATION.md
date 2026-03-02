@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the Role-Based Access Control (RBAC) system implemented for the Supply Chain Management System. The system follows enterprise security standards (ABB/GE Healthcare level) with a three-tier role hierarchy and **NO public signup**.
+This document describes the Role-Based Access Control (RBAC) system implemented for the Supply Chain Management System. The system follows enterprise security standards with a three-tier role hierarchy, **NO public signup**, and **granular per-user permissions** (v0.4.0).
 
 ## Role Hierarchy
 
@@ -20,10 +20,12 @@ This document describes the Role-Based Access Control (RBAC) system implemented 
 - ✅ L3 provides credentials directly to new users
 - ✅ L3 can reset passwords for any user
 
-### 2. Permission Inheritance
-- L3 has all permissions of L2 and L1, plus admin capabilities
-- L2 has all permissions of L1, plus oversight capabilities
-- Each higher level inherits lower level permissions
+### 2. Permission Inheritance + Granular Overrides (v0.4.0)
+- L3 has **ALL permissions always** (cannot be restricted)
+- L2 and L1 start with role defaults
+- L3 can grant or restrict specific permissions per user via **Grant Access Modal**
+- Overrides are stored in `user_permissions` table with `override_mode = 'full_control'`
+- The `get_effective_permissions()` PostgreSQL function merges role defaults with user-specific overrides
 
 ### 3. Server-Side Validation
 - All role checks happen on the backend
@@ -39,14 +41,16 @@ src/auth/
 │   └── AuthContext.tsx         # React context for global auth state
 ├── services/
 │   ├── authService.ts          # Authentication operations
-│   └── userService.ts          # User management (L3 only)
+│   ├── userService.ts          # User management (L3 only)
+│   └── permissionService.ts    # DB-backed granular RBAC engine (v0.4.0)
 ├── components/
 │   ├── ProtectedRoute.tsx      # Role-based route protection
-│   └── RoleBadge.tsx           # Role display component
+│   ├── RoleBadge.tsx           # Role display component
+│   └── GrantAccessModal.tsx    # Granular permission editor (v0.4.0)
 ├── login/
 │   └── LoginPage.tsx           # Enterprise login (no signup)
 └── users/
-    └── UserManagement.tsx      # User CRUD (L3 only)
+    └── UserManagement.tsx      # User CRUD + permission management
 ```
 
 ## Database Schema
@@ -99,6 +103,38 @@ Tracks all security-relevant actions.
 | old_value | jsonb | Previous state |
 | new_value | jsonb | New state |
 | created_at | timestamp | When it happened |
+
+#### `user_permissions` (v0.4.0)
+Granular per-user permission overrides.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| user_id | uuid | FK to profiles(id) |
+| module_name | varchar | FK to module_registry(module_key) |
+| can_view | boolean | View permission |
+| can_create | boolean | Create permission |
+| can_edit | boolean | Edit permission |
+| can_delete | boolean | Delete permission |
+| override_mode | varchar | 'grant' or 'full_control' |
+| overridden_by | uuid | L3 user who set the override |
+
+#### `system_settings` (v0.4.0)
+Feature flags for RBAC rollout.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| key | varchar | Setting key (e.g., `permission_source`) |
+| value | jsonb | Setting value (e.g., `"db_only"`) |
+
+#### `module_registry` (v0.4.0)
+Registry of all WMS modules for RBAC.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| module_key | varchar | Module identifier (e.g., `items`, `stock-movements`) |
+| display_name | varchar | Human-readable name |
+| parent_module | varchar | Parent for submodules (null for top-level) |
+| is_active | boolean | Whether module is active |
 
 ## API Endpoints
 
@@ -169,28 +205,63 @@ Tracks all security-relevant actions.
 | L2 | ❌ | ❌ | ❌ | ❌ |
 | L1 | ❌ | ❌ | ❌ | ❌ |
 
+> **Note (v0.4.0):** The above matrices represent **role defaults**. L3 managers can override any individual permission for L1/L2 users via the Grant Access Modal. See [`DB_RBAC_REFERENCE.md`](DB_RBAC_REFERENCE.md) for full details.
+
+## Granular Permissions (v0.4.0)
+
+### Permission Keys
+
+Permissions follow the pattern `module.action`:
+
+| Module | Keys |
+|--------|------|
+| Item Master | `items.view`, `items.create`, `items.edit`, `items.delete` |
+| Stock Movements | `stock-movements.view`, `.create`, `.edit`, `.delete` |
+| Packing Details | `packing.packing-details.view`, `.create`, `.edit`, `.delete` |
+| Packing Sticker | `packing.sticker-generation.view`, `.create`, `.edit` |
+| Inventory | `inventory.view`, `inventory.create`, `inventory.edit` |
+| Dashboard | `dashboard.view` |
+| Orders | `orders.view`, `orders.create`, `orders.edit`, `orders.delete` |
+| Releases | `releases.view`, `releases.create`, `releases.edit`, `releases.delete` |
+| Forecasting | `forecast.view`, `forecast.create`, `forecast.edit` |
+| MRP Planning | `planning.view`, `planning.create`, `planning.edit` |
+| User Management | `users.view`, `users.create`, `users.edit`, `users.delete` |
+
+### Permission Flow
+
+```
+App.tsx → getUserPermissions(userId)
+  → permissionService.ts checks in-memory cache (60s TTL)
+  → If miss: reads system_settings.permission_source (cached 5 min)
+  → Calls RPC: get_effective_permissions(p_user_id)
+  → Returns flat PermissionMap: { 'items.view': true, 'items.create': false, ... }
+  → Components check: userPerms['module.action'] === true
+```
+
+### Performance
+
+- Profile + permissions loaded **in parallel** via `Promise.allSettled()`
+- Permission source cached for **5 minutes** (rarely changes)
+- User permissions cached for **60 seconds** (avoids redundant DB calls)
+- Cache invalidated on permission save via `invalidateUserPermCache()`
+
 ## Usage Examples
 
 ### Frontend: Using Auth Context
 
 ```tsx
-import { useAuth, ProtectedRoute, RoleBadge } from '../auth';
+import { getUserPermissions } from '../auth/services/permissionService';
 
-function MyComponent() {
-  const { user, isL3, hasRole, logout } = useAuth();
+function MyComponent({ userRole, userPerms }) {
+  // Granular RBAC check (v0.4.0)
+  const hasPerms = Object.keys(userPerms).length > 0;
+  const canCreate = userRole === 'L3' || (hasPerms ? userPerms['items.create'] === true : false);
+  const canEdit = userRole === 'L3' || (hasPerms ? userPerms['items.edit'] === true : userRole === 'L2');
 
   return (
     <div>
-      <p>Welcome, {user?.full_name}</p>
-      <RoleBadge role={user.role} />
-      
-      {/* Only show to L3 */}
-      {isL3 && <AdminPanel />}
-      
-      {/* Only show to L2 or above */}
-      {hasRole('L2') && <ApprovalButton />}
-      
-      <button onClick={logout}>Sign Out</button>
+      {canCreate && <button>Create Item</button>}
+      {canEdit && <button>Edit Item</button>}
     </div>
   );
 }
@@ -269,3 +340,7 @@ To migrate from the old auth system:
 4. ✅ Remove old auth files: `AuthDebug.tsx`, `AuthDebugPanel.tsx`
 5. ✅ Update `App.tsx` to use new auth context
 6. ✅ Remove `signUpWithEmail` from auth utilities
+7. ✅ Deploy granular RBAC tables (`user_permissions`, `module_registry`, `system_settings`)
+8. ✅ Set `permission_source = 'db_only'` in `system_settings`
+9. ✅ Replace hardcoded role checks with `userPerms['module.action']` pattern
+10. ✅ Add in-memory permission caching (60s TTL) for performance

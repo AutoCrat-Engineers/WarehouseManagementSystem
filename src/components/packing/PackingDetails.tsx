@@ -36,6 +36,7 @@ type UserRole = 'L1' | 'L2' | 'L3' | null;
 interface PackingDetailsProps {
     accessToken: string;
     userRole?: UserRole;
+    userPerms?: Record<string, boolean>;
     onNavigate?: (view: string) => void;
 }
 
@@ -275,10 +276,13 @@ function ViewModal({ isOpen, onClose, spec, item }: {
 // MAIN COMPONENT
 // ============================================================================
 
-export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
-    const canAdd = userRole === 'L2' || userRole === 'L3';
-    const canEdit = userRole === 'L3';
-    const canAction = userRole === 'L2' || userRole === 'L3';
+export function PackingDetails({ accessToken, userRole, userPerms = {} }: PackingDetailsProps) {
+    // RBAC helpers — granular permissions with role-based fallback
+    const hasPerms = Object.keys(userPerms).length > 0;
+    const canAdd = userRole === 'L3' || (hasPerms ? userPerms['packing.packing-details.create'] === true : userRole === 'L2');
+    const canEdit = userRole === 'L3' || (hasPerms ? userPerms['packing.packing-details.edit'] === true : false);
+    const canDelete = userRole === 'L3' || (hasPerms ? userPerms['packing.packing-details.delete'] === true : false);
+    const canAction = canEdit || canDelete;
 
     // Data state
     const [specs, setSpecs] = useState<PackingSpec[]>([]);
@@ -781,23 +785,27 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                                                                         boxShadow: '0 10px 40px rgba(0,0,0,0.15)', border: '1px solid #e5e7eb', overflow: 'hidden',
                                                                     }}
                                                                 >
-                                                                    <button
-                                                                        onClick={() => { openEdit(s); setActiveDropdown(null); }}
-                                                                        style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
-                                                                        onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
-                                                                        onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-                                                                    >
-                                                                        <Edit2 size={16} /> Edit Specs
-                                                                    </button>
-                                                                    <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
-                                                                    <button
-                                                                        onClick={() => { handleDeleteClick(s); setActiveDropdown(null); }}
-                                                                        style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
-                                                                        onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#fef2f2'; }}
-                                                                        onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-                                                                    >
-                                                                        <Trash2 size={16} /> Delete Specs
-                                                                    </button>
+                                                                    {canEdit && (
+                                                                        <button
+                                                                            onClick={() => { openEdit(s); setActiveDropdown(null); }}
+                                                                            style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
+                                                                            onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
+                                                                            onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                                                        >
+                                                                            <Edit2 size={16} /> Edit Specs
+                                                                        </button>
+                                                                    )}
+                                                                    {canEdit && canDelete && <div style={{ borderTop: '1px solid #f3f4f6' }}></div>}
+                                                                    {canDelete && (
+                                                                        <button
+                                                                            onClick={() => { handleDeleteClick(s); setActiveDropdown(null); }}
+                                                                            style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
+                                                                            onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#fef2f2'; }}
+                                                                            onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                                                        >
+                                                                            <Trash2 size={16} /> Delete Specs
+                                                                        </button>
+                                                                    )}
                                                                 </div>
                                                             );
                                                         })()}
