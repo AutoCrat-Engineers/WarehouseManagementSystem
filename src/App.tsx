@@ -11,6 +11,7 @@ import { BlanketReleases } from './components/BlanketReleases';
 import { ForecastingModule } from './components/ForecastingModule';
 import { PlanningModule } from './components/PlanningModule';
 import { StockMovement } from './components/StockMovement';
+import { RackView } from './components/RackView';
 import { PackingModule, PackingDetails, PackingListInvoice, PackingListSubInvoice } from './components/packing';
 import { LoadingPage } from './components/LoadingPage';
 import { UserManagement } from './auth/users/UserManagement';
@@ -29,6 +30,7 @@ import {
   Menu,
   ChevronLeft,
   ArrowRightLeft,
+  Grid3X3,
   ChevronRight,
   ChevronDown,
   AlertCircle,
@@ -53,7 +55,7 @@ const compactLogoImage = '/a-logo.png';
 // User role type for RBAC
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
-type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'packing' | 'packing-sticker' | 'packing-details' | 'packing-list-invoice' | 'packing-list-sub-invoice' | 'users';
+type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'rack-view' | 'packing' | 'packing-sticker' | 'packing-details' | 'packing-list-invoice' | 'packing-list-sub-invoice' | 'users';
 
 interface MenuItem {
   id: View;
@@ -80,6 +82,7 @@ const menuItems: MenuItem[] = [
   { id: 'items', label: 'Item Master', icon: Package, description: 'FG Catalog' },
   { id: 'inventory', label: 'Inventory', icon: Boxes, description: 'Multi-Warehouse Stock' },
   { id: 'stock-movements', label: 'Stock Movements', icon: ArrowRightLeft, description: 'Audit Trail' },
+  { id: 'rack-view', label: 'Rack View', icon: Grid3X3, description: 'US Warehouse Racks' },
   { id: 'packing', label: 'Packing', icon: PackageOpen, description: 'FG Packing Workflow', hasSubmenu: true },
   { id: 'orders', label: 'Blanket Orders', icon: FileText, description: 'Customer Orders' },
   { id: 'releases', label: 'Blanket Releases', icon: Calendar, description: 'Delivery Schedule' },
@@ -127,6 +130,7 @@ export default function App() {
     'items': 'items.view',
     'inventory': 'inventory.view',
     'stock-movements': 'stock-movements.view',
+    'rack-view': 'rack-view.view',
     'packing': 'packing.sticker-generation.view',
     'packing-sticker': 'packing.sticker-generation.view',
     'packing-details': 'packing.packing-details.view',
@@ -388,6 +392,10 @@ export default function App() {
         return <InventoryGrid />;
       case 'stock-movements':
         if (!canAccessView('stock-movements')) return renderAccessDenied('Stock Movements');
+        return <StockMovement accessToken={accessToken} userRole={userRole} />;
+      case 'rack-view':
+        if (!canAccessView('rack-view')) return renderAccessDenied('Rack View');
+        return <RackView />;
         return <StockMovement accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
       case 'packing':
       case 'packing-sticker':
