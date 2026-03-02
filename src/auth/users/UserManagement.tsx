@@ -39,7 +39,7 @@ import {
 import { ROLE_CONFIG, type UserRole } from '../services/authService';
 import { RoleBadge } from '../components/RoleBadge';
 import { GrantAccessModal, type PermissionMap } from '../components/GrantAccessModal';
-import { getUserPermissions, saveUserPermissions, getBulkUserPermissions } from '../services/permissionService';
+import { getUserOverrides, saveUserPermissions, getBulkUserOverrides, invalidateUserPermCache, type OverrideMode } from '../services/permissionService';
 
 interface UserManagementProps {
     currentUserId: string;
@@ -76,6 +76,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
     const [showGrantAccess, setShowGrantAccess] = useState(false);
     const [grantAccessUser, setGrantAccessUser] = useState<UserListItem | null>(null);
     const [userPermissions, setUserPermissions] = useState<Record<string, PermissionMap>>({});
+    const [userOverrideModes, setUserOverrideModes] = useState<Record<string, Record<string, OverrideMode>>>({});
     const [permissionCounts, setPermissionCounts] = useState<Record<string, number>>({});
     const [statusConfirmAction, setStatusConfirmAction] = useState<{ userId: string; newStatus: boolean; userName: string; employeeId: string; role: string; email: string } | null>(null);
     const [deleteEmpIdInput, setDeleteEmpIdInput] = useState('');
@@ -130,15 +131,19 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
             const data = await getAllUsers();
             setUsers(data);
 
-            // Load permission counts for all users from localStorage
+            // Load override counts for all users (only explicit overrides, not role defaults)
             const userIds = data.map(u => u.id);
-            const bulkPerms = getBulkUserPermissions(userIds);
-            const counts: Record<string, number> = {};
-            Object.entries(bulkPerms).forEach(([uid, permMap]) => {
-                counts[uid] = Object.values(permMap).filter(Boolean).length;
-            });
-            setPermissionCounts(counts);
-            setUserPermissions(bulkPerms);
+            try {
+                const bulkPerms = await getBulkUserOverrides(userIds);
+                const counts: Record<string, number> = {};
+                Object.entries(bulkPerms).forEach(([uid, permMap]) => {
+                    counts[uid] = Object.values(permMap).filter(Boolean).length;
+                });
+                setPermissionCounts(counts);
+                setUserPermissions(bulkPerms);
+            } catch (permErr) {
+                console.warn('⚠️ Failed to load bulk permissions:', permErr);
+            }
         } catch (err) {
             setError('Failed to fetch users');
         } finally {
@@ -788,11 +793,16 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                                                             >
                                                                 {/* Grant Access — Primary action */}
                                                                 <button
-                                                                    onClick={() => {
+                                                                    onClick={async () => {
                                                                         setActiveDropdown(null);
-                                                                        // Load fresh permissions from localStorage
-                                                                        const perms = getUserPermissions(user.id);
-                                                                        setUserPermissions(prev => ({ ...prev, [user.id]: perms }));
+                                                                        // Load ONLY explicit overrides (not role defaults)
+                                                                        try {
+                                                                            const result = await getUserOverrides(user.id);
+                                                                            setUserPermissions(prev => ({ ...prev, [user.id]: result.permissions }));
+                                                                            setUserOverrideModes(prev => ({ ...prev, [user.id]: result.overrideModes }));
+                                                                        } catch (err) {
+                                                                            console.warn('⚠️ Could not pre-load permissions:', err);
+                                                                        }
                                                                         setGrantAccessUser(user);
                                                                         setShowGrantAccess(true);
                                                                     }}
@@ -1367,14 +1377,18 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                     isOpen={showGrantAccess}
                     onClose={() => { setShowGrantAccess(false); setGrantAccessUser(null); }}
                     initialPermissions={userPermissions[grantAccessUser.id] || {}}
-                    onSave={(userId, perms) => {
-                        // Save to localStorage
-                        const result = saveUserPermissions(userId, perms);
+                    initialOverrideModes={userOverrideModes[grantAccessUser.id] || {}}
+                    onSave={async (userId, perms, overrideModes) => {
+                        // Save to DB (or localStorage based on feature flag)
+                        const result = await saveUserPermissions(userId, perms, overrideModes);
 
                         if (result.success) {
                             setUserPermissions(prev => ({ ...prev, [userId]: perms }));
+                            setUserOverrideModes(prev => ({ ...prev, [userId]: overrideModes || {} }));
                             const grantedCount = result.grantedCount || Object.values(perms).filter(Boolean).length;
                             setPermissionCounts(prev => ({ ...prev, [userId]: grantedCount }));
+                            // Invalidate cached permissions so changes take effect immediately
+                            invalidateUserPermCache(userId);
                             showToast('success', 'Permissions Saved', `${grantedCount} permissions granted to "${grantAccessUser.full_name}".`);
                             setShowGrantAccess(false);
                             setGrantAccessUser(null);
