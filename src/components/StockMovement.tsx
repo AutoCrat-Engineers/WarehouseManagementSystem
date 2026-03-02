@@ -52,6 +52,7 @@ type UserRole = 'L1' | 'L2' | 'L3' | null;
 interface StockMovementProps {
   accessToken: string;
   userRole?: UserRole;
+  userPerms?: Record<string, boolean>;
 }
 
 interface ItemResult {
@@ -257,10 +258,12 @@ const tdStyle: React.CSSProperties = {
 // MAIN COMPONENT
 // ============================================================================
 
-export function StockMovement({ accessToken, userRole }: StockMovementProps) {
-  // RBAC helpers
-  const isOperator = userRole === 'L1';
-  const canApprove = userRole === 'L2' || userRole === 'L3'; // Supervisor or Manager
+export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMovementProps) {
+  // RBAC helpers — granular permissions with role-based fallback
+  const hasPerms = Object.keys(userPerms).length > 0;
+  const canCreate = userRole === 'L3' || (hasPerms ? userPerms['stock-movements.create'] === true : true); // all roles can create by default
+  const canApprove = userRole === 'L3' || (hasPerms ? userPerms['stock-movements.edit'] === true : userRole === 'L2'); // L2+ can approve
+  const isOperator = !canApprove; // if you can't approve, you're effectively an operator
   const supabase = getSupabaseClient();
 
   // Main page state
@@ -1625,7 +1628,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
             <ClearFiltersButton onClick={() => { setSearchTerm(''); setFilterType('ALL'); setFilterStatus('ALL'); setFilterStockType('ALL'); setFilterDateFrom(''); setFilterDateTo(''); }} />
           )}
           <ExportCSVButton onClick={handleExport} />
-          <AddButton label="New Movement" onClick={openModal} />
+          {canCreate && <AddButton label="New Movement" onClick={openModal} />}
         </ActionBar>
       </FilterBar>
 
@@ -1637,7 +1640,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
           icon={<ArrowRightLeft size={48} style={{ color: 'var(--enterprise-gray-400)' }} />}
           title="No Stock Movements"
           description={'Click "New Movement" to record your first stock movement.'}
-          action={{ label: 'New Movement', onClick: openModal }}
+          action={canCreate ? { label: 'New Movement', onClick: openModal } : undefined}
         />
       ) : (
         <>

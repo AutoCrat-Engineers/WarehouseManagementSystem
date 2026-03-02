@@ -1,0 +1,1345 @@
+# 🔐 Production RBAC Migration Plan
+## localStorage → Database | Zero-Downtime, Zero Data Loss
+
+> [!CAUTION]
+> **LIVE PRODUCTION MIGRATION — NO BACKUP EXISTS**
+> Every step must be reversible. Every query must be idempotent.
+> This document is the single source of truth for the migration.
+
+---
+
+## Architecture Overview
+
+### Current State (BROKEN)
+```
+┌─────────────┐                  ┌──────────────────┐
+│   Browser    │                  │    Supabase DB    │
+│             │                  │                  │
+│ localStorage ├──── READS ──────▶│  (NEVER USED)    │
+│ wms_user_    │                  │  permissions tbl │
+│ permissions  │                  │  (role defaults) │
+│             │                  │                  │
+│ per-user     │                  │  profiles.role   │
+│ { key: bool }│                  │  (L1/L2/L3)      │
+└─────────────┘                  └──────────────────┘
+   ⚠️ SOURCE OF TRUTH              ❌ IGNORED
+```
+
+### Target State (SECURE)
+```
+┌─────────────┐                  ┌──────────────────────────┐
+│   Browser    │                  │       Supabase DB        │
+│             │     API CALL     │                          │
+│  App.tsx     ├────────────────▶│  user_permissions tbl    │
+│  reads perms │                  │  (per-user overrides)    │
+│  from DB     │                  │         ↓ merges with    │
+│             │                  │  permissions tbl         │
+│ localStorage │                  │  (role defaults)         │
+│  REMOVED     │                  │         ↓                │
+└─────────────┘                  │  get_effective_perms()   │
+                                 │  (single function call)  │
+                                 └──────────────────────────┘
+                                    ✅ SINGLE SOURCE OF TRUTH
+```
+
+### Permission Resolution Priority
+```
+1. user_permissions   (per-user override — highest priority)
+       ↓
+2. permissions        (role default — L1/L2/L3 baseline)
+       ↓
+3. DENY BY DEFAULT    (no row = no access)
+```
+
+---
+
+## Risk Analysis (PHASE 0)
+
+### Identified Risks
+
+| # | Risk | Likelihood | Impact | Mitigation |
+|---|------|:----------:|:------:|------------|
+| R1 | New table creation fails mid-transaction | Low | Low | Wrapped in `BEGIN/COMMIT`, idempotent `IF NOT EXISTS` |
+| R2 | RLS policies lock out L3 users | Medium | **Critical** | Policies tested before enabling; `SECURITY DEFINER` helpers |
+| R3 | Module name mismatch causes silent permission denial | High | High | Normalization mapping + validation queries |
+| R4 | localStorage data lost before DB ingestion | Medium | Medium | Frontend exports data before deleting; staging table holds copy |
+| R5 | Partial migration leaves split-brain state | Medium | **Critical** | Feature flag controls read source; rollback restores localStorage |
+| R6 | `get_effective_permissions()` is slow | Low | Medium | Indexed columns; function result cached per-session |
+| R7 | Concurrent L3 edits during migration | Low | Low | Single `ON CONFLICT` upsert prevents duplicates |
+
+### Rollback Checkpoints
+
+| Checkpoint | Trigger Condition | Action |
+|------------|-------------------|--------|
+| CP-0 | Before any DDL | Snapshot `permissions` count |
+| CP-1 | After table creation | Verify table exists, zero rows |
+| CP-2 | After data ingestion | Row count matches expected |
+| CP-3 | After feature flag flip | Sanity check: L3 admin can still operate |
+| CP-4 | After localStorage removal | Final parity check |
+
+---
+
+## PHASE 1 — Schema Design
+
+### Entity Relationship
+
+```mermaid
+erDiagram
+    profiles ||--o{ user_permissions : "has overrides"
+    profiles ||--|| roles : "has role"
+    roles ||--o{ permissions : "has defaults"
+    profiles ||--o{ perm_migration_staging : "staging data"
+
+    profiles {
+        uuid id PK
+        varchar role FK
+        boolean is_active
+    }
+
+    roles {
+        varchar id PK
+        varchar name
+        int level
+    }
+
+    permissions {
+        uuid id PK
+        varchar role_id FK
+        varchar module
+        varchar action
+        boolean is_allowed
+    }
+
+    user_permissions {
+        uuid id PK
+        uuid user_id FK
+        varchar module_name
+        boolean can_view
+        boolean can_create
+        boolean can_edit
+        boolean can_delete
+        varchar source_role
+        uuid overridden_by
+        timestamptz overridden_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    perm_migration_staging {
+        uuid id PK
+        uuid user_id FK
+        jsonb raw_permissions
+        varchar migration_status
+        timestamptz ingested_at
+    }
+```
+
+---
+
+## PHASE 2 — Forward Migration SQL
+
+> [!IMPORTANT]
+> Run this in the **Supabase SQL Editor** as a single transaction.
+> It is fully idempotent — safe to re-run if it fails partway.
+
+### Script 1: `001_create_user_permissions.sql`
+
+```sql
+-- ============================================================================
+-- MIGRATION 001: CREATE user_permissions TABLE
+-- Purpose: Per-user granular permission overrides
+-- Safety: Idempotent, backward compatible, does NOT modify existing tables
+-- Rollback: Script 001_rollback.sql
+-- ============================================================================
+
+BEGIN;
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- CHECKPOINT CP-0: Snapshot existing state
+-- ──────────────────────────────────────────────────────────────────────────────
+DO $$
+DECLARE
+  _profiles_count int;
+  _perms_count int;
+BEGIN
+  SELECT count(*) INTO _profiles_count FROM public.profiles WHERE deleted_at IS NULL;
+  SELECT count(*) INTO _perms_count FROM public.permissions;
+  RAISE NOTICE '╔══════════════════════════════════════════════╗';
+  RAISE NOTICE '║  PRE-MIGRATION SNAPSHOT                      ║';
+  RAISE NOTICE '║  Active profiles: %                          ', _profiles_count;
+  RAISE NOTICE '║  Permission rows: %                          ', _perms_count;
+  RAISE NOTICE '╚══════════════════════════════════════════════╝';
+END $$;
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- 1. CREATE MODULE NAME NORMALIZATION MAP
+-- ──────────────────────────────────────────────────────────────────────────────
+-- This mapping table bridges frontend ↔ DB naming differences.
+-- It is the SINGLE SOURCE OF TRUTH for module identifiers going forward.
+
+CREATE TABLE IF NOT EXISTS public.module_registry (
+  module_key    varchar NOT NULL,               -- canonical key (e.g. 'stock-movements')
+  display_name  varchar NOT NULL,               -- human label
+  parent_module varchar,                        -- null for top-level, parent key for subs
+  sort_order    int DEFAULT 0,
+  is_active     boolean DEFAULT true,
+  created_at    timestamptz DEFAULT now(),
+  CONSTRAINT module_registry_pkey PRIMARY KEY (module_key)
+);
+
+-- Seed canonical module list (idempotent via ON CONFLICT)
+INSERT INTO public.module_registry (module_key, display_name, parent_module, sort_order) VALUES
+  ('dashboard',                   'Dashboard',                      NULL, 10),
+  ('items',                       'Item Master',                    NULL, 20),
+  ('inventory',                   'Inventory',                      NULL, 30),
+  ('stock-movements',             'Stock Movements',                NULL, 40),
+  ('packing.sticker-generation',  'Sticker Generation',            'packing', 50),
+  ('packing.packing-details',     'Packing Details',               'packing', 51),
+  ('packing.packing-list-invoice','Packing List — Invoice',        'packing', 52),
+  ('packing.packing-list-sub-invoice','Packing List — Sub Invoice','packing', 53),
+  ('orders',                      'Blanket Orders',                 NULL, 60),
+  ('releases',                    'Blanket Releases',               NULL, 70),
+  ('forecast',                    'Forecasting',                    NULL, 80),
+  ('planning',                    'MRP Planning',                   NULL, 90),
+  ('users',                       'User Management',                NULL, 100),
+  ('notifications',               'Notifications',                  NULL, 110)
+ON CONFLICT (module_key) DO NOTHING;
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- 2. CREATE user_permissions TABLE
+-- ──────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS public.user_permissions (
+  id              uuid NOT NULL DEFAULT uuid_generate_v4(),
+  user_id         uuid NOT NULL,
+  module_name     varchar NOT NULL,           -- references module_registry.module_key
+  can_view        boolean NOT NULL DEFAULT false,
+  can_create      boolean NOT NULL DEFAULT false,
+  can_edit        boolean NOT NULL DEFAULT false,
+  can_delete      boolean NOT NULL DEFAULT false,
+  source_role     varchar,                    -- role at time of override (audit trail)
+  overridden_by   uuid,                       -- L3 user who set this override
+  overridden_at   timestamptz,                -- when the override was set
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT user_permissions_pkey PRIMARY KEY (id),
+  CONSTRAINT user_permissions_user_fkey FOREIGN KEY (user_id)
+    REFERENCES public.profiles(id) ON DELETE CASCADE,
+  CONSTRAINT user_permissions_module_fkey FOREIGN KEY (module_name)
+    REFERENCES public.module_registry(module_key),
+  CONSTRAINT user_permissions_overrider_fkey FOREIGN KEY (overridden_by)
+    REFERENCES public.profiles(id),
+  CONSTRAINT user_permissions_unique UNIQUE (user_id, module_name)
+);
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- 3. INDEXES
+-- ──────────────────────────────────────────────────────────────────────────────
+
+CREATE INDEX IF NOT EXISTS idx_user_perms_user_id
+  ON public.user_permissions(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_user_perms_module
+  ON public.user_permissions(module_name);
+
+CREATE INDEX IF NOT EXISTS idx_user_perms_user_module
+  ON public.user_permissions(user_id, module_name);
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- 4. AUTO-UPDATE updated_at TRIGGER
+-- ──────────────────────────────────────────────────────────────────────────────
+
+-- Reuse existing trigger function if available, else create
+CREATE OR REPLACE FUNCTION public.set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SET search_path = public;
+
+DROP TRIGGER IF EXISTS trigger_user_permissions_updated_at ON public.user_permissions;
+CREATE TRIGGER trigger_user_permissions_updated_at
+  BEFORE UPDATE ON public.user_permissions
+  FOR EACH ROW
+  EXECUTE FUNCTION public.set_updated_at();
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- 5. PERMISSION CHANGE AUDIT TRIGGER
+-- ──────────────────────────────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION public.audit_permission_change()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.audit_log (
+    user_id,
+    action,
+    target_type,
+    target_id,
+    old_value,
+    new_value
+  ) VALUES (
+    COALESCE(NEW.overridden_by, auth.uid()),
+    CASE TG_OP
+      WHEN 'INSERT' THEN 'GRANT_PERMISSION'
+      WHEN 'UPDATE' THEN 'UPDATE_PERMISSION'
+      WHEN 'DELETE' THEN 'REVOKE_PERMISSION'
+    END,
+    'user_permission',
+    COALESCE(NEW.user_id, OLD.user_id)::text,
+    CASE WHEN TG_OP = 'INSERT' THEN NULL ELSE jsonb_build_object(
+      'module', OLD.module_name,
+      'can_view', OLD.can_view,
+      'can_create', OLD.can_create,
+      'can_edit', OLD.can_edit,
+      'can_delete', OLD.can_delete
+    ) END,
+    CASE WHEN TG_OP = 'DELETE' THEN NULL ELSE jsonb_build_object(
+      'module', NEW.module_name,
+      'can_view', NEW.can_view,
+      'can_create', NEW.can_create,
+      'can_edit', NEW.can_edit,
+      'can_delete', NEW.can_delete
+    ) END
+  );
+  RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+DROP TRIGGER IF EXISTS trigger_audit_perm_change ON public.user_permissions;
+CREATE TRIGGER trigger_audit_perm_change
+  AFTER INSERT OR UPDATE OR DELETE ON public.user_permissions
+  FOR EACH ROW
+  EXECUTE FUNCTION public.audit_permission_change();
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- CHECKPOINT CP-1: Verify table created
+-- ──────────────────────────────────────────────────────────────────────────────
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables
+             WHERE table_schema = 'public' AND table_name = 'user_permissions') THEN
+    RAISE NOTICE '✅ CP-1: user_permissions table created successfully';
+  ELSE
+    RAISE EXCEPTION '❌ CP-1 FAILED: user_permissions table was NOT created';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables
+             WHERE table_schema = 'public' AND table_name = 'module_registry') THEN
+    RAISE NOTICE '✅ CP-1: module_registry table created successfully';
+  ELSE
+    RAISE EXCEPTION '❌ CP-1 FAILED: module_registry table was NOT created';
+  END IF;
+END $$;
+
+COMMIT;
+```
+
+---
+
+## PHASE 3 — Module Name Normalization
+
+### Script 2: `002_normalize_permissions_table.sql`
+
+```sql
+-- ============================================================================
+-- MIGRATION 002: NORMALIZE existing permissions table module names
+-- Maps old DB names → canonical frontend-compatible names
+-- Safety: Updates IN PLACE but preserves original values in notes column first
+-- ============================================================================
+
+BEGIN;
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- 1. ADD backup column to permissions (if not exists)
+-- ──────────────────────────────────────────────────────────────────────────────
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'permissions'
+      AND column_name = 'original_module'
+  ) THEN
+    ALTER TABLE public.permissions ADD COLUMN original_module varchar;
+    RAISE NOTICE '✅ Added original_module backup column to permissions';
+  ELSE
+    RAISE NOTICE 'ℹ️  original_module column already exists — skipping';
+  END IF;
+END $$;
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- 2. BACKUP original values (only once — don't overwrite on re-run)
+-- ──────────────────────────────────────────────────────────────────────────────
+UPDATE public.permissions
+SET original_module = module
+WHERE original_module IS NULL;
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- 3. NORMALIZE module names (idempotent — uses canonical keys)
+-- ──────────────────────────────────────────────────────────────────────────────
+-- Map: DB old name → canonical frontend name
+
+UPDATE public.permissions SET module = 'stock-movements'     WHERE module = 'stock_movements';
+UPDATE public.permissions SET module = 'orders'              WHERE module = 'blanket_orders';
+UPDATE public.permissions SET module = 'releases'            WHERE module = 'blanket_releases';
+UPDATE public.permissions SET module = 'forecast'            WHERE module = 'forecasting';
+
+-- NOTE: 'reports', 'settings' have no frontend equivalent yet — leave as-is.
+-- They will still work via the DB but won't be visible in the UI.
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- 4. ADD MISSING MODULES to permissions table (packing submodules, notifications)
+-- These were only in the frontend GrantAccessModal, never in DB.
+-- ──────────────────────────────────────────────────────────────────────────────
+
+-- L3 gets full access to new modules
+INSERT INTO public.permissions (role_id, module, action, is_allowed) VALUES
+  -- Packing submodules
+  ('L3', 'packing.sticker-generation',       'view',   true),
+  ('L3', 'packing.sticker-generation',       'create', true),
+  ('L3', 'packing.sticker-generation',       'edit',   true),
+  ('L3', 'packing.packing-details',          'view',   true),
+  ('L3', 'packing.packing-details',          'create', true),
+  ('L3', 'packing.packing-details',          'edit',   true),
+  ('L3', 'packing.packing-details',          'delete', true),
+  ('L3', 'packing.packing-list-invoice',     'view',   true),
+  ('L3', 'packing.packing-list-invoice',     'create', true),
+  ('L3', 'packing.packing-list-invoice',     'edit',   true),
+  ('L3', 'packing.packing-list-invoice',     'delete', true),
+  ('L3', 'packing.packing-list-sub-invoice', 'view',   true),
+  ('L3', 'packing.packing-list-sub-invoice', 'create', true),
+  ('L3', 'packing.packing-list-sub-invoice', 'edit',   true),
+  ('L3', 'packing.packing-list-sub-invoice', 'delete', true),
+  ('L3', 'notifications',                    'view',   true),
+  -- L2 gets view + create on packing, view on notifications
+  ('L2', 'packing.sticker-generation',       'view',   true),
+  ('L2', 'packing.sticker-generation',       'create', true),
+  ('L2', 'packing.sticker-generation',       'edit',   true),
+  ('L2', 'packing.packing-details',          'view',   true),
+  ('L2', 'packing.packing-details',          'create', true),
+  ('L2', 'packing.packing-details',          'edit',   true),
+  ('L2', 'packing.packing-details',          'delete', false),
+  ('L2', 'packing.packing-list-invoice',     'view',   true),
+  ('L2', 'packing.packing-list-invoice',     'create', true),
+  ('L2', 'packing.packing-list-invoice',     'edit',   true),
+  ('L2', 'packing.packing-list-invoice',     'delete', false),
+  ('L2', 'packing.packing-list-sub-invoice', 'view',   true),
+  ('L2', 'packing.packing-list-sub-invoice', 'create', true),
+  ('L2', 'packing.packing-list-sub-invoice', 'edit',   true),
+  ('L2', 'packing.packing-list-sub-invoice', 'delete', false),
+  ('L2', 'notifications',                    'view',   true),
+  -- L1 gets view only on packing, view on notifications
+  ('L1', 'packing.sticker-generation',       'view',   true),
+  ('L1', 'packing.sticker-generation',       'create', true),
+  ('L1', 'packing.sticker-generation',       'edit',   false),
+  ('L1', 'packing.packing-details',          'view',   true),
+  ('L1', 'packing.packing-details',          'create', false),
+  ('L1', 'packing.packing-details',          'edit',   false),
+  ('L1', 'packing.packing-details',          'delete', false),
+  ('L1', 'packing.packing-list-invoice',     'view',   true),
+  ('L1', 'packing.packing-list-invoice',     'create', false),
+  ('L1', 'packing.packing-list-invoice',     'edit',   false),
+  ('L1', 'packing.packing-list-invoice',     'delete', false),
+  ('L1', 'packing.packing-list-sub-invoice', 'view',   true),
+  ('L1', 'packing.packing-list-sub-invoice', 'create', false),
+  ('L1', 'packing.packing-list-sub-invoice', 'edit',   false),
+  ('L1', 'packing.packing-list-sub-invoice', 'delete', false),
+  ('L1', 'notifications',                    'view',   true)
+ON CONFLICT (role_id, module, action) DO NOTHING;
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- 5. VERIFICATION
+-- ──────────────────────────────────────────────────────────────────────────────
+DO $$
+DECLARE
+  _old_names int;
+BEGIN
+  SELECT count(*) INTO _old_names
+  FROM public.permissions
+  WHERE module IN ('stock_movements', 'blanket_orders', 'blanket_releases', 'forecasting');
+
+  IF _old_names = 0 THEN
+    RAISE NOTICE '✅ All module names normalized — no legacy names remain';
+  ELSE
+    RAISE WARNING '⚠️  % rows still have legacy module names!', _old_names;
+  END IF;
+END $$;
+
+COMMIT;
+```
+
+---
+
+## PHASE 4 — Data Backfill Strategy (localStorage → Staging → DB)
+
+### Script 3: `003_create_staging_table.sql`
+
+```sql
+-- ============================================================================
+-- MIGRATION 003: STAGING TABLE for localStorage → DB ingestion
+-- The frontend will push localStorage JSON here via Supabase insert.
+-- Then a merge script moves validated data → user_permissions.
+-- ============================================================================
+
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS public.perm_migration_staging (
+  id                uuid NOT NULL DEFAULT uuid_generate_v4(),
+  user_id           uuid NOT NULL,
+  raw_permissions   jsonb NOT NULL,           -- exact copy of localStorage JSON
+  migration_status  varchar NOT NULL DEFAULT 'PENDING',
+                    -- PENDING → VALIDATED → MERGED → FAILED
+  validation_errors jsonb,                    -- any issues found
+  merged_at         timestamptz,
+  ingested_at       timestamptz NOT NULL DEFAULT now(),
+  ingested_by       uuid,                     -- the L3 admin who triggered it
+
+  CONSTRAINT perm_migration_staging_pkey PRIMARY KEY (id),
+  CONSTRAINT perm_migration_staging_user_fkey FOREIGN KEY (user_id)
+    REFERENCES public.profiles(id) ON DELETE CASCADE
+);
+
+-- RLS: Only L3 can insert/read staging data
+ALTER TABLE public.perm_migration_staging ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "L3 manage staging" ON public.perm_migration_staging;
+CREATE POLICY "L3 manage staging" ON public.perm_migration_staging
+  FOR ALL TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.profiles
+      WHERE id = auth.uid() AND role = 'L3' AND is_active = true
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.profiles
+      WHERE id = auth.uid() AND role = 'L3' AND is_active = true
+    )
+  );
+
+RAISE NOTICE '✅ Staging table created';
+
+COMMIT;
+```
+
+### Script 4: `004_merge_staging_to_user_permissions.sql`
+
+```sql
+-- ============================================================================
+-- MIGRATION 004: MERGE validated staging data → user_permissions
+-- Run AFTER frontend has pushed localStorage data to staging table.
+--
+-- This script:
+--   1. Validates staging rows
+--   2. Transforms localStorage key format → relational rows
+--   3. Upserts into user_permissions
+--   4. Marks staging rows as MERGED
+-- ============================================================================
+
+BEGIN;
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- MODULE NAME MAP: localStorage key prefixes → canonical module_name
+-- ──────────────────────────────────────────────────────────────────────────────
+-- localStorage format: "module.action" or "module.submodule.action"
+-- We need to derive:
+--   module_name = "module" or "module.submodule"
+--   action = "view" | "create" | "edit" | "delete"
+
+-- Step 1: Validate staging entries
+UPDATE public.perm_migration_staging
+SET migration_status = 'VALIDATED',
+    validation_errors = NULL
+WHERE migration_status = 'PENDING'
+  AND user_id IN (SELECT id FROM public.profiles WHERE deleted_at IS NULL);
+
+-- Mark orphans
+UPDATE public.perm_migration_staging
+SET migration_status = 'FAILED',
+    validation_errors = '{"error": "user_id not found in profiles"}'::jsonb
+WHERE migration_status = 'PENDING'
+  AND user_id NOT IN (SELECT id FROM public.profiles WHERE deleted_at IS NULL);
+
+-- Step 2: Transform and merge
+-- For each VALIDATED staging row, extract permissions and upsert
+DO $$
+DECLARE
+  _row RECORD;
+  _key TEXT;
+  _value BOOLEAN;
+  _parts TEXT[];
+  _module TEXT;
+  _action TEXT;
+  _user_role TEXT;
+  _merged_count INT := 0;
+  _skipped_count INT := 0;
+BEGIN
+  FOR _row IN
+    SELECT s.id, s.user_id, s.raw_permissions, p.role
+    FROM public.perm_migration_staging s
+    JOIN public.profiles p ON p.id = s.user_id
+    WHERE s.migration_status = 'VALIDATED'
+  LOOP
+    _user_role := _row.role;
+
+    -- Iterate over each key in the JSON
+    FOR _key, _value IN
+      SELECT key, (value)::boolean
+      FROM jsonb_each_text(_row.raw_permissions)
+    LOOP
+      -- Parse the key: split by '.'
+      _parts := string_to_array(_key, '.');
+
+      IF array_length(_parts, 1) = 2 THEN
+        -- Format: module.action (e.g. "items.view")
+        _module := _parts[1];
+        _action := _parts[2];
+      ELSIF array_length(_parts, 1) = 3 THEN
+        -- Format: module.submodule.action (e.g. "packing.sticker-generation.view")
+        _module := _parts[1] || '.' || _parts[2];
+        _action := _parts[3];
+      ELSE
+        _skipped_count := _skipped_count + 1;
+        CONTINUE;  -- skip malformed keys
+      END IF;
+
+      -- Validate module exists in registry
+      IF NOT EXISTS (SELECT 1 FROM public.module_registry WHERE module_key = _module) THEN
+        _skipped_count := _skipped_count + 1;
+        CONTINUE;
+      END IF;
+
+      -- Validate action is known
+      IF _action NOT IN ('view', 'create', 'edit', 'delete') THEN
+        _skipped_count := _skipped_count + 1;
+        CONTINUE;
+      END IF;
+
+      -- Upsert the permission
+      INSERT INTO public.user_permissions (
+        user_id, module_name, source_role,
+        can_view, can_create, can_edit, can_delete,
+        overridden_by, overridden_at
+      )
+      VALUES (
+        _row.user_id,
+        _module,
+        _user_role,
+        CASE WHEN _action = 'view'   THEN _value ELSE false END,
+        CASE WHEN _action = 'create' THEN _value ELSE false END,
+        CASE WHEN _action = 'edit'   THEN _value ELSE false END,
+        CASE WHEN _action = 'delete' THEN _value ELSE false END,
+        auth.uid(),
+        now()
+      )
+      ON CONFLICT (user_id, module_name) DO UPDATE SET
+        can_view   = CASE WHEN _action = 'view'   THEN _value ELSE user_permissions.can_view   END,
+        can_create = CASE WHEN _action = 'create' THEN _value ELSE user_permissions.can_create END,
+        can_edit   = CASE WHEN _action = 'edit'   THEN _value ELSE user_permissions.can_edit   END,
+        can_delete = CASE WHEN _action = 'delete' THEN _value ELSE user_permissions.can_delete END,
+        source_role    = _user_role,
+        overridden_by  = auth.uid(),
+        overridden_at  = now(),
+        updated_at     = now();
+
+      _merged_count := _merged_count + 1;
+    END LOOP;
+
+    -- Mark staging row as merged
+    UPDATE public.perm_migration_staging
+    SET migration_status = 'MERGED', merged_at = now()
+    WHERE id = _row.id;
+  END LOOP;
+
+  RAISE NOTICE '✅ Merged % permission entries, skipped %', _merged_count, _skipped_count;
+END $$;
+
+COMMIT;
+```
+
+---
+
+## PHASE 5 — Permission Resolution Engine
+
+### Script 5: `005_effective_permissions_function.sql`
+
+```sql
+-- ============================================================================
+-- MIGRATION 005: PERMISSION RESOLUTION ENGINE
+--
+-- get_effective_permissions(p_user_id uuid)
+--
+-- Priority:
+--   1. user_permissions (per-user override) — HIGHEST
+--   2. permissions (role default)           — BASELINE
+--   3. DENY                                 — DEFAULT
+--
+-- Returns one row per module with resolved can_view/create/edit/delete
+-- ============================================================================
+
+BEGIN;
+
+CREATE OR REPLACE FUNCTION public.get_effective_permissions(p_user_id uuid)
+RETURNS TABLE (
+  module_name   varchar,
+  can_view      boolean,
+  can_create    boolean,
+  can_edit      boolean,
+  can_delete    boolean,
+  source        varchar   -- 'override' or 'role_default'
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  _user_role varchar;
+BEGIN
+  -- Get user's role
+  SELECT role INTO _user_role
+  FROM public.profiles
+  WHERE id = p_user_id AND is_active = true AND deleted_at IS NULL;
+
+  IF _user_role IS NULL THEN
+    -- User not found or inactive: return empty set (deny all)
+    RETURN;
+  END IF;
+
+  -- L3 users: ALWAYS get full access (bypass overrides entirely)
+  IF _user_role = 'L3' THEN
+    RETURN QUERY
+    SELECT
+      mr.module_key::varchar,
+      true::boolean,
+      true::boolean,
+      true::boolean,
+      true::boolean,
+      'l3_full_access'::varchar
+    FROM public.module_registry mr
+    WHERE mr.is_active = true;
+    RETURN;
+  END IF;
+
+  -- For L1/L2: merge role defaults with user overrides
+  RETURN QUERY
+  SELECT
+    mr.module_key::varchar AS module_name,
+    -- Override takes priority, else role default, else false
+    COALESCE(
+      up.can_view,
+      (SELECT p.is_allowed FROM public.permissions p
+       WHERE p.role_id = _user_role AND p.module = mr.module_key AND p.action = 'view'),
+      false
+    )::boolean AS can_view,
+    COALESCE(
+      up.can_create,
+      (SELECT p.is_allowed FROM public.permissions p
+       WHERE p.role_id = _user_role AND p.module = mr.module_key AND p.action = 'create'),
+      false
+    )::boolean AS can_create,
+    COALESCE(
+      up.can_edit,
+      (SELECT p.is_allowed FROM public.permissions p
+       WHERE p.role_id = _user_role AND p.module = mr.module_key AND p.action = 'edit'),
+      false
+    )::boolean AS can_edit,
+    COALESCE(
+      up.can_delete,
+      (SELECT p.is_allowed FROM public.permissions p
+       WHERE p.role_id = _user_role AND p.module = mr.module_key AND p.action = 'delete'),
+      false
+    )::boolean AS can_delete,
+    CASE
+      WHEN up.id IS NOT NULL THEN 'override'
+      ELSE 'role_default'
+    END::varchar AS source
+  FROM public.module_registry mr
+  LEFT JOIN public.user_permissions up
+    ON up.user_id = p_user_id AND up.module_name = mr.module_key
+  WHERE mr.is_active = true;
+END;
+$$;
+
+-- Convenience: check a single permission
+CREATE OR REPLACE FUNCTION public.check_user_permission(
+  p_user_id uuid,
+  p_module varchar,
+  p_action varchar  -- 'view', 'create', 'edit', 'delete'
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  _result boolean;
+  _user_role varchar;
+BEGIN
+  SELECT role INTO _user_role
+  FROM public.profiles
+  WHERE id = p_user_id AND is_active = true AND deleted_at IS NULL;
+
+  IF _user_role IS NULL THEN RETURN false; END IF;
+  IF _user_role = 'L3' THEN RETURN true; END IF;
+
+  -- Check user override first
+  EXECUTE format(
+    'SELECT %I FROM public.user_permissions WHERE user_id = $1 AND module_name = $2',
+    'can_' || p_action
+  ) INTO _result USING p_user_id, p_module;
+
+  IF _result IS NOT NULL THEN RETURN _result; END IF;
+
+  -- Fall back to role default
+  SELECT is_allowed INTO _result
+  FROM public.permissions
+  WHERE role_id = _user_role AND module = p_module AND action = p_action;
+
+  RETURN COALESCE(_result, false);
+END;
+$$;
+
+RAISE NOTICE '✅ Permission resolution functions created';
+
+COMMIT;
+```
+
+---
+
+## PHASE 6 — Feature Flag Strategy
+
+> [!NOTE]
+> The feature flag is implemented via a DB setting + frontend environment variable.
+> This allows instant rollback without code deployment.
+
+### Script 6: `006_feature_flag.sql`
+
+```sql
+-- ============================================================================
+-- MIGRATION 006: FEATURE FLAG
+-- Controls permission read source during migration rollout
+-- ============================================================================
+
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS public.system_settings (
+  key         varchar NOT NULL,
+  value       jsonb NOT NULL,
+  updated_at  timestamptz DEFAULT now(),
+  updated_by  uuid,
+  CONSTRAINT system_settings_pkey PRIMARY KEY (key)
+);
+
+-- Feature flag values:
+--   'localStorage'       → Phase 1: Read from localStorage (current behavior)
+--   'db_with_fallback'   → Phase 2: Read from DB, fall back to localStorage
+--   'db_only'            → Phase 3: DB is sole source of truth
+--   'cleanup_done'       → Phase 4: localStorage code removed
+
+INSERT INTO public.system_settings (key, value) VALUES
+  ('permission_source', '"localStorage"'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+
+-- RLS: All authenticated can read, only L3 can write
+ALTER TABLE public.system_settings ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "All can read settings" ON public.system_settings;
+CREATE POLICY "All can read settings" ON public.system_settings
+  FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "L3 can manage settings" ON public.system_settings;
+CREATE POLICY "L3 can manage settings" ON public.system_settings
+  FOR ALL TO authenticated
+  USING (
+    EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'L3')
+  )
+  WITH CHECK (
+    EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'L3')
+  );
+
+-- Convenience function to get current flag value
+CREATE OR REPLACE FUNCTION public.get_permission_source()
+RETURNS varchar
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+STABLE
+AS $$
+  SELECT (value #>> '{}')::varchar
+  FROM public.system_settings
+  WHERE key = 'permission_source';
+$$;
+
+-- Rollout advancement function (L3 only)
+CREATE OR REPLACE FUNCTION public.advance_permission_rollout(new_phase varchar)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF new_phase NOT IN ('localStorage', 'db_with_fallback', 'db_only', 'cleanup_done') THEN
+    RAISE EXCEPTION 'Invalid phase: %. Must be one of: localStorage, db_with_fallback, db_only, cleanup_done', new_phase;
+  END IF;
+
+  UPDATE public.system_settings
+  SET value = to_jsonb(new_phase),
+      updated_at = now(),
+      updated_by = auth.uid()
+  WHERE key = 'permission_source';
+
+  -- Audit log
+  INSERT INTO public.audit_log (user_id, action, target_type, new_value)
+  VALUES (auth.uid(), 'ADVANCE_PERMISSION_ROLLOUT', 'system', jsonb_build_object('phase', new_phase));
+
+  RAISE NOTICE '✅ Permission source advanced to: %', new_phase;
+END;
+$$;
+
+COMMIT;
+```
+
+### Frontend Rollout Strategy
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    DEPLOYMENT PHASES                         │
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│  Phase 1: 'localStorage'        ← CURRENT DEFAULT           │
+│  ─────────────────────────                                   │
+│  • Read from localStorage                                    │
+│  • DB tables exist but unused by frontend                    │
+│  • Safe: zero behavior change                                │
+│                                                              │
+│  Phase 2: 'db_with_fallback'    ← AFTER DATA INGESTION      │
+│  ────────────────────────────                                │
+│  • Read from DB via get_effective_permissions()              │
+│  • If DB returns empty AND localStorage has data → use LS    │
+│  • Compare results and log mismatches                        │
+│  • Duration: 1-3 days monitoring                             │
+│                                                              │
+│  Phase 3: 'db_only'             ← AFTER VALIDATION          │
+│  ─────────────────────                                       │
+│  • Read ONLY from DB                                         │
+│  • localStorage ignored completely                           │
+│  • GrantAccessModal saves to DB instead of localStorage      │
+│  • Duration: 1 week monitoring                               │
+│                                                              │
+│  Phase 4: 'cleanup_done'        ← FINAL                     │
+│  ──────────────────────                                      │
+│  • localStorage code removed from codebase                   │
+│  • permissionService.ts rewritten to use DB                  │
+│  • Staging table dropped                                     │
+│                                                              │
+│  🔴 ROLLBACK AT ANY PHASE:                                   │
+│  SELECT advance_permission_rollout('localStorage');          │
+│  → Instantly reverts to localStorage behavior                │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## PHASE 7 — Security Hardening
+
+### Script 7: `007_security_hardening.sql`
+
+```sql
+-- ============================================================================
+-- MIGRATION 007: SECURITY HARDENING
+-- RLS policies, privilege escalation prevention, immutable audit
+-- ============================================================================
+
+BEGIN;
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- 1. RLS ON user_permissions
+-- ──────────────────────────────────────────────────────────────────────────────
+ALTER TABLE public.user_permissions ENABLE ROW LEVEL SECURITY;
+
+-- Users can read their OWN permissions
+DROP POLICY IF EXISTS "Users read own permissions" ON public.user_permissions;
+CREATE POLICY "Users read own permissions" ON public.user_permissions
+  FOR SELECT TO authenticated
+  USING (user_id = auth.uid());
+
+-- L3 can read ALL user permissions
+DROP POLICY IF EXISTS "L3 read all permissions" ON public.user_permissions;
+CREATE POLICY "L3 read all permissions" ON public.user_permissions
+  FOR SELECT TO authenticated
+  USING (
+    EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'L3' AND is_active = true)
+  );
+
+-- L3 can INSERT/UPDATE/DELETE user permissions
+DROP POLICY IF EXISTS "L3 manage permissions" ON public.user_permissions;
+CREATE POLICY "L3 manage permissions" ON public.user_permissions
+  FOR ALL TO authenticated
+  USING (
+    EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'L3' AND is_active = true)
+  )
+  WITH CHECK (
+    EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'L3' AND is_active = true)
+  );
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- 2. PRIVILEGE ESCALATION PREVENTION
+-- Prevent non-L3 users from granting themselves higher permissions
+-- ──────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.prevent_self_escalation()
+RETURNS TRIGGER AS $$
+DECLARE
+  _caller_role varchar;
+BEGIN
+  -- Get caller's role
+  SELECT role INTO _caller_role
+  FROM public.profiles
+  WHERE id = auth.uid() AND is_active = true;
+
+  -- Only L3 can modify permissions
+  IF _caller_role IS DISTINCT FROM 'L3' THEN
+    RAISE EXCEPTION 'PRIVILEGE ESCALATION BLOCKED: Only L3 managers can modify user permissions. Your role: %', COALESCE(_caller_role, 'UNKNOWN');
+  END IF;
+
+  -- L3 cannot grant permissions to themselves (already full access)
+  IF NEW.user_id = auth.uid() THEN
+    RAISE EXCEPTION 'SELF-GRANT BLOCKED: L3 users cannot modify their own permission overrides.';
+  END IF;
+
+  -- Stamp the override metadata
+  NEW.overridden_by := auth.uid();
+  NEW.overridden_at := now();
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+DROP TRIGGER IF EXISTS trigger_prevent_escalation ON public.user_permissions;
+CREATE TRIGGER trigger_prevent_escalation
+  BEFORE INSERT OR UPDATE ON public.user_permissions
+  FOR EACH ROW
+  EXECUTE FUNCTION public.prevent_self_escalation();
+
+-- ──────────────────────────────────────────────────────────────────────────────
+-- 3. RLS ON module_registry (read-only for all, writable by L3)
+-- ──────────────────────────────────────────────────────────────────────────────
+ALTER TABLE public.module_registry ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "All can read modules" ON public.module_registry;
+CREATE POLICY "All can read modules" ON public.module_registry
+  FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "L3 can manage modules" ON public.module_registry;
+CREATE POLICY "L3 can manage modules" ON public.module_registry
+  FOR ALL TO authenticated
+  USING (
+    EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'L3')
+  )
+  WITH CHECK (
+    EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'L3')
+  );
+
+RAISE NOTICE '✅ Security hardening complete';
+
+COMMIT;
+```
+
+---
+
+## PHASE 8 — Rollback Scripts (CRITICAL)
+
+### Rollback Level 1: Instant Feature Flag Revert
+
+```sql
+-- ROLLBACK LEVEL 1: Switch permission source back to localStorage
+-- Effect: Instant, zero-downtime, no data loss
+-- When: If DB permissions are returning wrong results
+SELECT public.advance_permission_rollout('localStorage');
+-- Frontend will immediately start reading from localStorage again
+```
+
+### Rollback Level 2: Restore Role-Only Behavior
+
+```sql
+-- ROLLBACK LEVEL 2: Disable all user overrides without deleting them
+-- Effect: System falls back to pure role-based permissions (L1/L2/L3 defaults)
+-- When: If user_permissions data is corrupted or incorrect
+
+BEGIN;
+
+-- Option A: Soft-disable by truncating (preserves table structure)
+-- Save a backup first
+CREATE TABLE IF NOT EXISTS public.user_permissions_backup AS
+  SELECT * FROM public.user_permissions;
+
+-- Clear all overrides — system will use role defaults only
+TRUNCATE public.user_permissions;
+
+-- Revert feature flag
+SELECT public.advance_permission_rollout('localStorage');
+
+RAISE NOTICE '✅ Level 2 rollback complete: role-only permissions restored';
+RAISE NOTICE '   Backup saved in user_permissions_backup table';
+
+COMMIT;
+```
+
+### Rollback Level 3: Full Schema Removal (Nuclear Option)
+
+```sql
+-- ROLLBACK LEVEL 3: Drop all new migration objects
+-- Effect: System returns to EXACT pre-migration state
+-- When: ONLY if entire migration must be abandoned
+--
+-- ⚠️  THIS IS DESTRUCTIVE — but safe because:
+--    1. We backup user_permissions first
+--    2. We restore original module names in permissions table
+--    3. Old localStorage code still works
+
+BEGIN;
+
+-- 1. Backup user_permissions before dropping
+CREATE TABLE IF NOT EXISTS public.user_permissions_archive AS
+  SELECT *, now() AS archived_at FROM public.user_permissions;
+
+-- 2. Drop triggers first (dependency order)
+DROP TRIGGER IF EXISTS trigger_prevent_escalation ON public.user_permissions;
+DROP TRIGGER IF EXISTS trigger_audit_perm_change ON public.user_permissions;
+DROP TRIGGER IF EXISTS trigger_user_permissions_updated_at ON public.user_permissions;
+
+-- 3. Drop functions
+DROP FUNCTION IF EXISTS public.get_effective_permissions(uuid);
+DROP FUNCTION IF EXISTS public.check_user_permission(uuid, varchar, varchar);
+DROP FUNCTION IF EXISTS public.prevent_self_escalation();
+DROP FUNCTION IF EXISTS public.audit_permission_change();
+DROP FUNCTION IF EXISTS public.advance_permission_rollout(varchar);
+DROP FUNCTION IF EXISTS public.get_permission_source();
+
+-- 4. Drop tables (order matters due to FKs)
+DROP TABLE IF EXISTS public.perm_migration_staging;
+DROP TABLE IF EXISTS public.user_permissions;
+DROP TABLE IF EXISTS public.system_settings;
+DROP TABLE IF EXISTS public.module_registry;
+
+-- 5. Restore original module names in permissions (if backup column exists)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'permissions'
+      AND column_name = 'original_module'
+  ) THEN
+    UPDATE public.permissions SET module = original_module WHERE original_module IS NOT NULL;
+    ALTER TABLE public.permissions DROP COLUMN original_module;
+    RAISE NOTICE '✅ Restored original module names in permissions table';
+  END IF;
+END $$;
+
+-- 6. Remove packing/notification rows that were added to permissions
+DELETE FROM public.permissions WHERE module LIKE 'packing.%';
+DELETE FROM public.permissions WHERE module = 'notifications';
+
+RAISE NOTICE '╔══════════════════════════════════════════════╗';
+RAISE NOTICE '║  LEVEL 3 ROLLBACK COMPLETE                   ║';
+RAISE NOTICE '║  All new objects dropped.                     ║';
+RAISE NOTICE '║  permissions table restored to original.      ║';
+RAISE NOTICE '║  Archive saved in user_permissions_archive.   ║';
+RAISE NOTICE '╚══════════════════════════════════════════════╝';
+
+COMMIT;
+```
+
+---
+
+## PHASE 9 — Validation Queries
+
+### Script 8: `008_validation_queries.sql`
+
+```sql
+-- ============================================================================
+-- POST-MIGRATION VALIDATION QUERIES
+-- Run these to verify migration integrity
+-- ============================================================================
+
+-- ─── 1. Permission parity check ─────────────────────────────────────────────
+-- Compare user_permissions row count vs expected (from staging)
+SELECT
+  'staging_rows' AS metric,
+  count(*) AS count
+FROM public.perm_migration_staging
+WHERE migration_status = 'MERGED'
+UNION ALL
+SELECT
+  'user_permission_rows',
+  count(*)
+FROM public.user_permissions
+UNION ALL
+SELECT
+  'failed_staging_rows',
+  count(*)
+FROM public.perm_migration_staging
+WHERE migration_status = 'FAILED';
+
+-- ─── 2. Users missing permission overrides ───────────────────────────────────
+-- Users who were in localStorage but have no DB overrides
+SELECT p.id, p.email, p.role, p.full_name
+FROM public.profiles p
+LEFT JOIN public.user_permissions up ON up.user_id = p.id
+WHERE up.id IS NULL
+  AND p.role IN ('L1', 'L2')
+  AND p.is_active = true
+  AND p.deleted_at IS NULL
+ORDER BY p.role, p.email;
+
+-- ─── 3. Orphan overrides (permissions for deleted/inactive users) ────────────
+SELECT up.*, p.email, p.is_active, p.deleted_at
+FROM public.user_permissions up
+JOIN public.profiles p ON p.id = up.user_id
+WHERE p.is_active = false OR p.deleted_at IS NOT NULL;
+
+-- ─── 4. Module coverage check ────────────────────────────────────────────────
+-- Modules in registry vs modules that have role defaults
+SELECT mr.module_key,
+       EXISTS (SELECT 1 FROM public.permissions WHERE module = mr.module_key) AS has_role_defaults,
+       (SELECT count(*) FROM public.user_permissions WHERE module_name = mr.module_key) AS override_count
+FROM public.module_registry mr
+ORDER BY mr.sort_order;
+
+-- ─── 5. Effective permissions sample ─────────────────────────────────────────
+-- Verify get_effective_permissions() works for each role level
+-- Replace UUIDs with actual user IDs from your system
+DO $$
+DECLARE
+  _l1_user uuid;
+  _l2_user uuid;
+  _l3_user uuid;
+  _row RECORD;
+BEGIN
+  SELECT id INTO _l1_user FROM profiles WHERE role = 'L1' AND is_active = true LIMIT 1;
+  SELECT id INTO _l2_user FROM profiles WHERE role = 'L2' AND is_active = true LIMIT 1;
+  SELECT id INTO _l3_user FROM profiles WHERE role = 'L3' AND is_active = true LIMIT 1;
+
+  IF _l1_user IS NOT NULL THEN
+    RAISE NOTICE '── L1 user permissions ──';
+    FOR _row IN SELECT * FROM get_effective_permissions(_l1_user)
+    LOOP
+      RAISE NOTICE '  % | V:% C:% E:% D:% | %', _row.module_name, _row.can_view, _row.can_create, _row.can_edit, _row.can_delete, _row.source;
+    END LOOP;
+  END IF;
+
+  IF _l2_user IS NOT NULL THEN
+    RAISE NOTICE '── L2 user permissions ──';
+    FOR _row IN SELECT * FROM get_effective_permissions(_l2_user)
+    LOOP
+      RAISE NOTICE '  % | V:% C:% E:% D:% | %', _row.module_name, _row.can_view, _row.can_create, _row.can_edit, _row.can_delete, _row.source;
+    END LOOP;
+  END IF;
+
+  IF _l3_user IS NOT NULL THEN
+    RAISE NOTICE '── L3 user permissions (should be all true) ──';
+    FOR _row IN SELECT * FROM get_effective_permissions(_l3_user)
+    LOOP
+      RAISE NOTICE '  % | V:% C:% E:% D:% | %', _row.module_name, _row.can_view, _row.can_create, _row.can_edit, _row.can_delete, _row.source;
+    END LOOP;
+  END IF;
+END $$;
+
+-- ─── 6. Performance check ───────────────────────────────────────────────────
+-- Time the function (should be < 10ms)
+EXPLAIN ANALYZE
+SELECT * FROM public.get_effective_permissions(
+  (SELECT id FROM profiles WHERE role = 'L1' AND is_active = true LIMIT 1)
+);
+
+-- ─── 7. Feature flag status ─────────────────────────────────────────────────
+SELECT * FROM public.system_settings WHERE key = 'permission_source';
+```
+
+---
+
+## Production Execution Checklist
+
+### Pre-Flight (Before ANY SQL)
+
+- [ ] **Read this entire document**
+- [ ] Open Supabase SQL Editor
+- [ ] Have a second browser tab with `profiles` table visible
+- [ ] Note current `profiles` count: `SELECT count(*) FROM profiles WHERE deleted_at IS NULL;`
+- [ ] Note current `permissions` count: `SELECT count(*) FROM permissions;`
+- [ ] Confirm you are logged in as L3 admin
+
+### Execution Order
+
+| Step | Script | Reversible? | Verify Before Next |
+|------|--------|:-----------:|---------------------|
+| 1 | `001_create_user_permissions.sql` | ✅ `DROP TABLE` | Check tables exist in Supabase table editor |
+| 2 | `002_normalize_permissions_table.sql` | ✅ `original_module` column has backups | `SELECT DISTINCT module FROM permissions;` — no `stock_movements` etc. |
+| 3 | `003_create_staging_table.sql` | ✅ `DROP TABLE` | Staging table visible in editor |
+| 4 | **Frontend: Push localStorage data** | N/A | See frontend migration code below |
+| 5 | `004_merge_staging_to_user_permissions.sql` | ✅ Staging has status tracking | `SELECT count(*) FROM user_permissions;` |
+| 6 | `005_effective_permissions_function.sql` | ✅ `DROP FUNCTION` | Run validation query #5 |
+| 7 | `006_feature_flag.sql` | ✅ `advance_permission_rollout('localStorage')` | Flag shows `'localStorage'` |
+| 8 | `007_security_hardening.sql` | ✅ `DROP POLICY` | Test: L1 user can read own perms |
+| 9 | `008_validation_queries.sql` | N/A | All checks pass |
+| 10 | **Frontend: Deploy new permissionService** | ✅ Feature flag controls source | Test app behavior |
+| 11 | Set flag: `db_with_fallback` | ✅ Revert to `localStorage` | Monitor for 1-3 days |
+| 12 | Set flag: `db_only` | ✅ Revert to `db_with_fallback` | Monitor for 1 week |
+| 13 | **Frontend: Remove localStorage code** | ⚠️ Code change (git revert) | Final validation |
+| 14 | Set flag: `cleanup_done` | ✅ | Drop staging table |
+
+### Failure Recovery Plan
+
+```
+IF migration fails at Step 1-3:
+  → DROP new tables. Zero impact on existing system.
+
+IF migration fails at Step 4-5:
+  → Staging table has FAILED status. Fix and re-run.
+  → user_permissions can be TRUNCATEd safely.
+
+IF migration fails at Step 6-8:
+  → DROP new functions/policies.
+  → System falls back to localStorage (still works).
+
+IF migration fails at Step 10-12:
+  → Run: SELECT advance_permission_rollout('localStorage');
+  → Instantly reverts. Zero downtime.
+
+IF everything fails:
+  → Run ROLLBACK LEVEL 3 script.
+  → System returns to exact pre-migration state.
+  → User permissions archive preserved in user_permissions_archive table.
+```
+
+---
+
+## Frontend Code Changes Required
+
+> [!IMPORTANT]
+> These frontend changes are in the NEXT step. The SQL migration above is designed
+> to be deployed and validated BEFORE any frontend code changes are made.
+
+### Files to Modify
+
+| File | Change |
+|------|--------|
+| [src/auth/services/permissionService.ts](file:///c:/Users/extra/OneDrive/Desktop/WMS-AE/WarehouseManagementSystem/src/auth/services/permissionService.ts) | Rewrite to read/write from Supabase instead of localStorage |
+| [src/auth/components/GrantAccessModal.tsx](file:///c:/Users/extra/OneDrive/Desktop/WMS-AE/WarehouseManagementSystem/src/auth/components/GrantAccessModal.tsx) | `onSave` calls Supabase upsert instead of localStorage |
+| [src/App.tsx](file:///c:/Users/extra/OneDrive/Desktop/WMS-AE/WarehouseManagementSystem/src/App.tsx) | [fetchUserRole()](file:///c:/Users/extra/OneDrive/Desktop/WMS-AE/WarehouseManagementSystem/src/App.tsx#279-324) calls `get_effective_permissions()` RPC |
+| [src/App.tsx](file:///c:/Users/extra/OneDrive/Desktop/WMS-AE/WarehouseManagementSystem/src/App.tsx) | Remove [canAccessView()](file:///c:/Users/extra/OneDrive/Desktop/WMS-AE/WarehouseManagementSystem/src/App.tsx#142-158) fallback that grants full access |
+
+### Summary of Frontend Changes
+
+1. **[permissionService.ts](file:///c:/Users/extra/OneDrive/Desktop/WMS-AE/WarehouseManagementSystem/src/auth/services/permissionService.ts)**: Replace [readStore()](file:///c:/Users/extra/OneDrive/Desktop/WMS-AE/WarehouseManagementSystem/src/auth/services/permissionService.ts#21-34)/[writeStore()](file:///c:/Users/extra/OneDrive/Desktop/WMS-AE/WarehouseManagementSystem/src/auth/services/permissionService.ts#35-45) with Supabase RPC calls to `get_effective_permissions()` and direct table operations on `user_permissions`
+2. **[GrantAccessModal.tsx](file:///c:/Users/extra/OneDrive/Desktop/WMS-AE/WarehouseManagementSystem/src/auth/components/GrantAccessModal.tsx)**: Change `onSave` handler to upsert into `user_permissions` table via Supabase client
+3. **[App.tsx](file:///c:/Users/extra/OneDrive/Desktop/WMS-AE/WarehouseManagementSystem/src/App.tsx)**: Load permissions from DB on login, cache in state, remove localStorage read
+
+---
+
+> [!TIP]
+> **Start by running scripts 001-003 in Supabase SQL Editor.** These are purely additive
+> (create new tables only) and have zero impact on the running system. You can verify
+> everything works before proceeding to data migration.

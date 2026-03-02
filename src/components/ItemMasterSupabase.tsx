@@ -1028,12 +1028,16 @@ type UserRole = 'L1' | 'L2' | 'L3' | null;
 
 interface ItemMasterProps {
   userRole?: UserRole;
+  userPerms?: Record<string, boolean>;
 }
 
-export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
-  // RBAC helpers
-  const canAddItem = userRole === 'L2' || userRole === 'L3'; // Supervisor or Manager
-  const canEditDelete = userRole === 'L3'; // Manager only
+export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps) {
+  // RBAC helpers — use granular permissions if available, fall back to role checks
+  const hasPerms = Object.keys(userPerms).length > 0;
+  const canAddItem = userRole === 'L3' || (hasPerms ? userPerms['items.create'] === true : userRole === 'L2');
+  const canEditItem = userRole === 'L3' || (hasPerms ? userPerms['items.edit'] === true : false);
+  const canDeleteItem = userRole === 'L3' || (hasPerms ? userPerms['items.delete'] === true : false);
+  const canEditDelete = canEditItem || canDeleteItem;
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1488,23 +1492,27 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
                                   overflow: 'hidden',
                                 }}
                               >
-                                <button
-                                  onClick={() => { handleEdit(item); setActiveDropdown(null); }}
-                                  style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
-                                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
-                                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-                                >
-                                  <Edit2 size={16} /> Edit Item
-                                </button>
-                                <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
-                                <button
-                                  onClick={() => { handleDeleteClick(item); setActiveDropdown(null); }}
-                                  style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
-                                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#fef2f2'; }}
-                                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-                                >
-                                  <Trash2 size={16} /> Delete Item
-                                </button>
+                                {canEditItem && (
+                                  <button
+                                    onClick={() => { handleEdit(item); setActiveDropdown(null); }}
+                                    style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
+                                    onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                  >
+                                    <Edit2 size={16} /> Edit Item
+                                  </button>
+                                )}
+                                {canEditItem && canDeleteItem && <div style={{ borderTop: '1px solid #f3f4f6' }}></div>}
+                                {canDeleteItem && (
+                                  <button
+                                    onClick={() => { handleDeleteClick(item); setActiveDropdown(null); }}
+                                    style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
+                                    onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#fef2f2'; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                  >
+                                    <Trash2 size={16} /> Delete Item
+                                  </button>
+                                )}
                               </div>
                             )}
                           </div>
