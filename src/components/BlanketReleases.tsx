@@ -2,8 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { projectId } from '../utils/supabase/info';
 import { Plus, Calendar, Loader2, Search, Truck, Package, AlertCircle, CheckCircle } from 'lucide-react';
 
+type UserRole = 'L1' | 'L2' | 'L3' | null;
+
 interface BlanketReleasesProps {
   accessToken: string;
+  userRole?: UserRole;
+  userPerms?: Record<string, boolean>;
 }
 
 interface BlanketRelease {
@@ -40,14 +44,18 @@ interface OrderLine {
   itemName?: string;
 }
 
-export function BlanketReleases({ accessToken }: BlanketReleasesProps) {
+export function BlanketReleases({ accessToken, userRole, userPerms = {} }: BlanketReleasesProps) {
+  // RBAC helpers — granular permissions with role-based fallback
+  const hasPerms = Object.keys(userPerms).length > 0;
+  const canCreate = userRole === 'L3' || (hasPerms ? userPerms['releases.create'] === true : userRole === 'L2');
+  const canEdit = userRole === 'L3' || (hasPerms ? userPerms['releases.edit'] === true : userRole === 'L2');
   const [releases, setReleases] = useState<BlanketRelease[]>([]);
   const [orderLines, setOrderLines] = useState<OrderLine[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  
+
   const [formData, setFormData] = useState({
     orderLineId: '',
     releaseNumber: '',
@@ -65,10 +73,10 @@ export function BlanketReleases({ accessToken }: BlanketReleasesProps) {
 
   const fetchData = async () => {
     try {
-      const url = statusFilter === 'ALL' 
+      const url = statusFilter === 'ALL'
         ? `https://${projectId}.supabase.co/functions/v1/make-server-9c637d11/blanket-releases`
         : `https://${projectId}.supabase.co/functions/v1/make-server-9c637d11/blanket-releases?status=${statusFilter}`;
-      
+
       const [releasesResponse, linesResponse] = await Promise.all([
         fetch(url, {
           headers: { 'Authorization': `Bearer ${accessToken}` }
@@ -96,7 +104,7 @@ export function BlanketReleases({ accessToken }: BlanketReleasesProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     try {
       const response = await fetch(
         `https://${projectId}.supabase.co/functions/v1/make-server-9c637d11/blanket-releases`,
@@ -137,7 +145,7 @@ export function BlanketReleases({ accessToken }: BlanketReleasesProps) {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${accessToken}`,
           },
-          body: JSON.stringify({ 
+          body: JSON.stringify({
             status: newStatus,
             actualDeliveryDate: newStatus === 'DELIVERED' ? new Date().toISOString().split('T')[0] : undefined
           }),
@@ -150,7 +158,7 @@ export function BlanketReleases({ accessToken }: BlanketReleasesProps) {
       }
 
       const result = await response.json();
-      
+
       if (newStatus === 'DELIVERED' && result.stockDeducted) {
         alert(`✅ Release delivered successfully!\n\n📦 Stock deducted: ${result.stockDeducted.quantity} units\n📊 New available stock: ${result.stockDeducted.newStock}`);
       }
@@ -194,13 +202,13 @@ export function BlanketReleases({ accessToken }: BlanketReleasesProps) {
           <h1 className="text-3xl font-bold text-gray-900">Blanket Releases</h1>
           <p className="text-gray-600 mt-1">Manage delivery schedules with automatic inventory deduction</p>
         </div>
-        <button
+        {canCreate && <button
           onClick={() => setShowModal(true)}
           className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
         >
           <Plus size={20} />
           New Release
-        </button>
+        </button>}
       </div>
 
       {/* Summary Cards */}
@@ -264,7 +272,7 @@ export function BlanketReleases({ accessToken }: BlanketReleasesProps) {
             className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
           />
         </div>
-        
+
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
@@ -298,12 +306,12 @@ export function BlanketReleases({ accessToken }: BlanketReleasesProps) {
           <div className="text-center py-12">
             <Calendar className="mx-auto text-gray-400 mb-4" size={48} />
             <p className="text-gray-600">No releases found</p>
-            <button
+            {canCreate && <button
               onClick={() => setShowModal(true)}
               className="mt-4 text-blue-600 hover:text-blue-700 font-medium"
             >
               Create your first release
-            </button>
+            </button>}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -345,17 +353,16 @@ export function BlanketReleases({ accessToken }: BlanketReleasesProps) {
                       {new Date(release.scheduledDeliveryDate).toLocaleDateString()}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">
-                      {release.actualDeliveryDate 
+                      {release.actualDeliveryDate
                         ? new Date(release.actualDeliveryDate).toLocaleDateString()
                         : '-'
                       }
                     </td>
                     <td className="px-6 py-4 text-center">
-                      <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
-                        release.status === 'PENDING' ? 'bg-yellow-100 text-yellow-700' :
-                        release.status === 'SHIPPED' ? 'bg-blue-100 text-blue-700' :
-                        'bg-green-100 text-green-700'
-                      }`}>
+                      <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${release.status === 'PENDING' ? 'bg-yellow-100 text-yellow-700' :
+                          release.status === 'SHIPPED' ? 'bg-blue-100 text-blue-700' :
+                            'bg-green-100 text-green-700'
+                        }`}>
                         {release.status}
                         {release.status === 'DELIVERED' && (
                           <span className="ml-1" title="Stock automatically deducted">✓</span>
@@ -364,7 +371,7 @@ export function BlanketReleases({ accessToken }: BlanketReleasesProps) {
                     </td>
                     <td className="px-6 py-4 text-center">
                       <div className="flex items-center justify-center gap-2">
-                        {release.status === 'PENDING' && (
+                        {release.status === 'PENDING' && canEdit && (
                           <button
                             onClick={() => handleStatusUpdate(release.id, 'SHIPPED')}
                             className="px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition-colors"
@@ -372,7 +379,7 @@ export function BlanketReleases({ accessToken }: BlanketReleasesProps) {
                             Ship
                           </button>
                         )}
-                        {release.status === 'SHIPPED' && (
+                        {release.status === 'SHIPPED' && canEdit && (
                           <button
                             onClick={() => handleStatusUpdate(release.id, 'DELIVERED')}
                             className="px-3 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 transition-colors flex items-center gap-1"
@@ -415,8 +422,8 @@ export function BlanketReleases({ accessToken }: BlanketReleasesProps) {
                   value={formData.orderLineId}
                   onChange={(e) => {
                     const line = getOrderLineDetails(e.target.value);
-                    setFormData({ 
-                      ...formData, 
+                    setFormData({
+                      ...formData,
                       orderLineId: e.target.value,
                       quantity: line?.remainingQuantity || 0
                     });

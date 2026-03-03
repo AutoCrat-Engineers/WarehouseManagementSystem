@@ -18,6 +18,13 @@ import { SummaryCard, SummaryCardsGrid, SearchBox, ActionButton, ActionBar, Filt
 import { getSupabaseClient } from '../utils/supabase/client';
 import { useAllItemsStockDashboard } from '../hooks/useInventory';
 
+type UserRole = 'L1' | 'L2' | 'L3' | null;
+
+interface RackViewProps {
+    userRole?: UserRole;
+    userPerms?: Record<string, boolean>;
+}
+
 interface RackEntry { id: string; location: string; rack: string; msn: string; itemName: string; partNumber: string; qty: number; }
 type RackData = Record<string, RackEntry[]>;
 interface MsnItem { id: string; master_serial_no: string; item_name: string; item_code: string; part_number: string | null; }
@@ -41,7 +48,12 @@ function valLoc(loc: string): { valid: boolean; error?: string; rack?: string } 
     return { valid: true, rack: f };
 }
 
-export function RackView() {
+export function RackView({ userRole, userPerms = {} }: RackViewProps) {
+    // RBAC helpers — granular permissions with role-based fallback
+    const hasPerms = Object.keys(userPerms).length > 0;
+    const canCreate = userRole === 'L3' || (hasPerms ? userPerms['rack-view.create'] === true : userRole === 'L2');
+    const canEdit = userRole === 'L3' || (hasPerms ? userPerms['rack-view.edit'] === true : false);
+    const canDelete = userRole === 'L3' || (hasPerms ? userPerms['rack-view.delete'] === true : false);
     const [rackData, setRackData] = useState<RackData>({ A: [], B: [], C: [] });
     const [locCounts, setLocCounts] = useState<Record<string, number>>({ A: 150, B: 155, C: 159 });
     const [activeRack, setActiveRack] = useState('A');
@@ -182,8 +194,8 @@ export function RackView() {
             <FilterBar>
                 <SearchBox value={globalSearch} onChange={setGlobalSearch} placeholder="Search by MSN, part number, location, item name…" />
                 <ActionBar>
-                    <ActionButton label="Move" icon={<ArrowRightLeft size={14} />} onClick={() => { setMoveErr(''); setMoveOk(''); setMoveSrc(null); setMoveDst(''); setMoveQty(''); setShowMoveModal(true); }} variant="secondary" />
-                    <ActionButton label="Add Stock" icon={<Plus size={14} />} onClick={() => { resetAdd(); setShowAddModal(true); }} variant="primary" />
+                    {canEdit && <ActionButton label="Move" icon={<ArrowRightLeft size={14} />} onClick={() => { setMoveErr(''); setMoveOk(''); setMoveSrc(null); setMoveDst(''); setMoveQty(''); setShowMoveModal(true); }} variant="secondary" />}
+                    {canCreate && <ActionButton label="Add Stock" icon={<Plus size={14} />} onClick={() => { resetAdd(); setShowAddModal(true); }} variant="primary" />}
                 </ActionBar>
             </FilterBar>
 
@@ -232,8 +244,8 @@ export function RackView() {
                                 <span style={{ fontSize: '13px', color: 'var(--enterprise-gray-500)' }}>{locCounts[activeRack] || 0} locations · {rs?.occ || 0} occupied · {(rs?.qty || 0).toLocaleString()} pcs</span>
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <button onClick={() => { setScaleMode('add'); setScaleCount(''); setScaleError(''); setShowScaleModal(true); }} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '6px', border: `1px solid ${c.fb}`, background: c.fill, color: c.text, cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}><Plus size={13} /> Add Locs</button>
-                                <button onClick={() => { setScaleMode('reduce'); setScaleCount(''); setScaleError(''); setShowScaleModal(true); }} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '6px', border: '1px solid var(--enterprise-gray-300)', background: 'white', color: 'var(--enterprise-gray-600)', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}><Minus size={13} /> Reduce</button>
+                                {canEdit && <button onClick={() => { setScaleMode('add'); setScaleCount(''); setScaleError(''); setShowScaleModal(true); }} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '6px', border: `1px solid ${c.fb}`, background: c.fill, color: c.text, cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}><Plus size={13} /> Add Locs</button>}
+                                {canEdit && <button onClick={() => { setScaleMode('reduce'); setScaleCount(''); setScaleError(''); setShowScaleModal(true); }} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '6px', border: '1px solid var(--enterprise-gray-300)', background: 'white', color: 'var(--enterprise-gray-600)', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}><Minus size={13} /> Reduce</button>}
                                 <div style={{ width: '1px', height: '20px', background: 'var(--enterprise-gray-200)', margin: '0 4px' }} />
                                 <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: 'var(--enterprise-gray-400)' }}><span style={{ width: '12px', height: '12px', borderRadius: '6px', background: c.fill, border: `1.5px solid ${c.fb}`, display: 'inline-block' }} /> Occupied</span>
                                 <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: 'var(--enterprise-gray-400)' }}><span style={{ width: '12px', height: '12px', borderRadius: '6px', background: 'var(--enterprise-gray-50)', border: '1.5px dashed var(--enterprise-gray-300)', display: 'inline-block' }} /> Empty</span>
@@ -292,10 +304,10 @@ export function RackView() {
                                                     <p style={{ fontSize: '11px', color: 'var(--enterprise-gray-500)', margin: '0 0 4px' }}>{entry.msn}{entry.partNumber ? ` · PN: ${entry.partNumber}` : ''}</p>
                                                     <p style={{ fontSize: '12px', margin: 0 }}><span style={{ color: c.text, fontWeight: 600 }}>{entry.qty.toLocaleString()} pcs</span>{oh !== undefined && <span style={{ color: 'var(--enterprise-gray-400)', marginLeft: '8px' }}>OH: {oh.toLocaleString()}</span>}</p>
                                                 </div>
-                                                <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
-                                                    <button onClick={e => { e.stopPropagation(); setMoveSrc(entry); setMoveDst(''); setMoveQty(entry.qty); setMoveErr(''); setMoveOk(''); setShowMoveModal(true); }} title="Move" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--enterprise-gray-400)', padding: '4px' }} onMouseEnter={e => { e.currentTarget.style.color = 'var(--enterprise-primary)'; }} onMouseLeave={e => { e.currentTarget.style.color = 'var(--enterprise-gray-400)'; }}><ArrowRightLeft size={14} /></button>
-                                                    <button onClick={e => { e.stopPropagation(); setDeleteTarget(entry); }} title="Delete" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--enterprise-gray-400)', padding: '4px' }} onMouseEnter={e => { e.currentTarget.style.color = 'var(--enterprise-error)'; }} onMouseLeave={e => { e.currentTarget.style.color = 'var(--enterprise-gray-400)'; }}><Trash2 size={14} /></button>
-                                                </div>
+                                                {(canEdit || canDelete) && <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                                                    {canEdit && <button onClick={e => { e.stopPropagation(); setMoveSrc(entry); setMoveDst(''); setMoveQty(entry.qty); setMoveErr(''); setMoveOk(''); setShowMoveModal(true); }} title="Move" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--enterprise-gray-400)', padding: '4px' }} onMouseEnter={e => { e.currentTarget.style.color = 'var(--enterprise-primary)'; }} onMouseLeave={e => { e.currentTarget.style.color = 'var(--enterprise-gray-400)'; }}><ArrowRightLeft size={14} /></button>}
+                                                    {canDelete && <button onClick={e => { e.stopPropagation(); setDeleteTarget(entry); }} title="Delete" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--enterprise-gray-400)', padding: '4px' }} onMouseEnter={e => { e.currentTarget.style.color = 'var(--enterprise-error)'; }} onMouseLeave={e => { e.currentTarget.style.color = 'var(--enterprise-gray-400)'; }}><Trash2 size={14} /></button>}
+                                                </div>}
                                             </div>
                                         </div>
                                     );
