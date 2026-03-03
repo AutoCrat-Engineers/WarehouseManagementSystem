@@ -30,6 +30,7 @@ import {
   Menu,
   ChevronLeft,
   ArrowRightLeft,
+  Grid3X3,
   ChevronRight,
   ChevronDown,
   AlertCircle,
@@ -392,6 +393,10 @@ export default function App() {
         return <InventoryGrid />;
       case 'stock-movements':
         if (!canAccessView('stock-movements')) return renderAccessDenied('Stock Movements');
+        return <StockMovement accessToken={accessToken} userRole={userRole} />;
+      case 'rack-view':
+        if (!canAccessView('rack-view')) return renderAccessDenied('Rack View');
+        return <RackView />;
         return <StockMovement accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
       case 'rack-view':
         if (!canAccessView('rack-view')) return renderAccessDenied('Rack View');

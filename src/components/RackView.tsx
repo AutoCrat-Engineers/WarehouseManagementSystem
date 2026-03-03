@@ -9,7 +9,6 @@
  *   - Search filters cells + shows distribution summary
  *   - Right side panel on cell click (Inventix style)
  *   - US warehouse on-hand allocation cap
- *   - Granular RBAC: canCreate, canEdit, canDelete
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
@@ -19,26 +18,10 @@ import { SummaryCard, SummaryCardsGrid, SearchBox, ActionButton, ActionBar, Filt
 import { getSupabaseClient } from '../utils/supabase/client';
 import { useAllItemsStockDashboard } from '../hooks/useInventory';
 
-// ============================================================================
-// RBAC TYPES
-// ============================================================================
-type UserRole = 'L1' | 'L2' | 'L3' | null;
-
-interface RackViewProps {
-    userRole?: UserRole;
-    userPerms?: Record<string, boolean>;
-}
-
-// ============================================================================
-// DATA TYPES
-// ============================================================================
 interface RackEntry { id: string; location: string; rack: string; msn: string; itemName: string; partNumber: string; qty: number; }
 type RackData = Record<string, RackEntry[]>;
 interface MsnItem { id: string; master_serial_no: string; item_name: string; item_code: string; part_number: string | null; }
 
-// ============================================================================
-// RACK COLOR SCHEME
-// ============================================================================
 const RC: Record<string, { border: string; text: string; fill: string; fb: string; bg: string }> = {
     A: { border: '#22c55e', text: '#15803d', fill: 'rgba(34,197,94,0.12)', fb: 'rgba(34,197,94,0.35)', bg: 'rgba(34,197,94,0.06)' },
     B: { border: '#3b82f6', text: '#1d4ed8', fill: 'rgba(59,130,246,0.12)', fb: 'rgba(59,130,246,0.35)', bg: 'rgba(59,130,246,0.06)' },
@@ -58,17 +41,7 @@ function valLoc(loc: string): { valid: boolean; error?: string; rack?: string } 
     return { valid: true, rack: f };
 }
 
-// ============================================================================
-// COMPONENT
-// ============================================================================
-export function RackView({ userRole, userPerms = {} }: RackViewProps) {
-    // ── GRBAC permission flags ─────────────────────────────────────────
-    const hasPerms = Object.keys(userPerms).length > 0;
-    const canCreate = userRole === 'L3' || (hasPerms ? userPerms['rack-view.create'] === true : true);
-    const canEdit = userRole === 'L3' || (hasPerms ? userPerms['rack-view.edit'] === true : false);
-    const canDelete = userRole === 'L3' || (hasPerms ? userPerms['rack-view.delete'] === true : false);
-
-    // ── State ──────────────────────────────────────────────────────────
+export function RackView() {
     const [rackData, setRackData] = useState<RackData>({ A: [], B: [], C: [] });
     const [locCounts, setLocCounts] = useState<Record<string, number>>({ A: 150, B: 155, C: 159 });
     const [activeRack, setActiveRack] = useState('A');
@@ -130,7 +103,6 @@ export function RackView({ userRole, userPerms = {} }: RackViewProps) {
     const selEntries = useMemo(() => { if (!selectedLoc) return []; return (rackData[activeRack] || []).filter(e => e.location === selectedLoc); }, [selectedLoc, rackData, activeRack]);
     const allEntries = useMemo(() => Object.values(rackData).flat(), [rackData]);
 
-    // ── Handlers ────────────────────────────────────────────────────────
     const handleScale = useCallback(() => {
         setScaleError('');
         const n = typeof scaleCount === 'number' ? scaleCount : 0;
@@ -196,9 +168,6 @@ export function RackView({ userRole, userPerms = {} }: RackViewProps) {
     const resetAdd = () => { setFormLoc(''); setFormMsn(''); setFormQty(''); setFormError(''); setFormSuccess(''); setMsnSearch(''); setMsnOpen(false); };
     const c = rc(activeRack); const rs = stats.rack[activeRack];
 
-    // ============================================================================
-    // RENDER
-    // ============================================================================
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             {/* SUMMARY */}
@@ -213,14 +182,8 @@ export function RackView({ userRole, userPerms = {} }: RackViewProps) {
             <FilterBar>
                 <SearchBox value={globalSearch} onChange={setGlobalSearch} placeholder="Search by MSN, part number, location, item name…" />
                 <ActionBar>
-                    {/* Move is guarded by canEdit */}
-                    {canEdit && (
-                        <ActionButton label="Move" icon={<ArrowRightLeft size={14} />} onClick={() => { setMoveErr(''); setMoveOk(''); setMoveSrc(null); setMoveDst(''); setMoveQty(''); setShowMoveModal(true); }} variant="secondary" />
-                    )}
-                    {/* Add Stock is guarded by canCreate */}
-                    {canCreate && (
-                        <ActionButton label="Add Stock" icon={<Plus size={14} />} onClick={() => { resetAdd(); setShowAddModal(true); }} variant="primary" />
-                    )}
+                    <ActionButton label="Move" icon={<ArrowRightLeft size={14} />} onClick={() => { setMoveErr(''); setMoveOk(''); setMoveSrc(null); setMoveDst(''); setMoveQty(''); setShowMoveModal(true); }} variant="secondary" />
+                    <ActionButton label="Add Stock" icon={<Plus size={14} />} onClick={() => { resetAdd(); setShowAddModal(true); }} variant="primary" />
                 </ActionBar>
             </FilterBar>
 
@@ -269,13 +232,8 @@ export function RackView({ userRole, userPerms = {} }: RackViewProps) {
                                 <span style={{ fontSize: '13px', color: 'var(--enterprise-gray-500)' }}>{locCounts[activeRack] || 0} locations · {rs?.occ || 0} occupied · {(rs?.qty || 0).toLocaleString()} pcs</span>
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                {/* Scale buttons guarded by canEdit */}
-                                {canEdit && (
-                                    <>
-                                        <button onClick={() => { setScaleMode('add'); setScaleCount(''); setScaleError(''); setShowScaleModal(true); }} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '6px', border: `1px solid ${c.fb}`, background: c.fill, color: c.text, cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}><Plus size={13} /> Add Locs</button>
-                                        <button onClick={() => { setScaleMode('reduce'); setScaleCount(''); setScaleError(''); setShowScaleModal(true); }} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '6px', border: '1px solid var(--enterprise-gray-300)', background: 'white', color: 'var(--enterprise-gray-600)', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}><Minus size={13} /> Reduce</button>
-                                    </>
-                                )}
+                                <button onClick={() => { setScaleMode('add'); setScaleCount(''); setScaleError(''); setShowScaleModal(true); }} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '6px', border: `1px solid ${c.fb}`, background: c.fill, color: c.text, cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}><Plus size={13} /> Add Locs</button>
+                                <button onClick={() => { setScaleMode('reduce'); setScaleCount(''); setScaleError(''); setShowScaleModal(true); }} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '6px', border: '1px solid var(--enterprise-gray-300)', background: 'white', color: 'var(--enterprise-gray-600)', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}><Minus size={13} /> Reduce</button>
                                 <div style={{ width: '1px', height: '20px', background: 'var(--enterprise-gray-200)', margin: '0 4px' }} />
                                 <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: 'var(--enterprise-gray-400)' }}><span style={{ width: '12px', height: '12px', borderRadius: '6px', background: c.fill, border: `1.5px solid ${c.fb}`, display: 'inline-block' }} /> Occupied</span>
                                 <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: 'var(--enterprise-gray-400)' }}><span style={{ width: '12px', height: '12px', borderRadius: '6px', background: 'var(--enterprise-gray-50)', border: '1.5px dashed var(--enterprise-gray-300)', display: 'inline-block' }} /> Empty</span>
@@ -335,14 +293,8 @@ export function RackView({ userRole, userPerms = {} }: RackViewProps) {
                                                     <p style={{ fontSize: '12px', margin: 0 }}><span style={{ color: c.text, fontWeight: 600 }}>{entry.qty.toLocaleString()} pcs</span>{oh !== undefined && <span style={{ color: 'var(--enterprise-gray-400)', marginLeft: '8px' }}>OH: {oh.toLocaleString()}</span>}</p>
                                                 </div>
                                                 <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
-                                                    {/* Move action guarded by canEdit */}
-                                                    {canEdit && (
-                                                        <button onClick={e => { e.stopPropagation(); setMoveSrc(entry); setMoveDst(''); setMoveQty(entry.qty); setMoveErr(''); setMoveOk(''); setShowMoveModal(true); }} title="Move" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--enterprise-gray-400)', padding: '4px' }} onMouseEnter={e => { e.currentTarget.style.color = 'var(--enterprise-primary)'; }} onMouseLeave={e => { e.currentTarget.style.color = 'var(--enterprise-gray-400)'; }}><ArrowRightLeft size={14} /></button>
-                                                    )}
-                                                    {/* Delete action guarded by canDelete */}
-                                                    {canDelete && (
-                                                        <button onClick={e => { e.stopPropagation(); setDeleteTarget(entry); }} title="Delete" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--enterprise-gray-400)', padding: '4px' }} onMouseEnter={e => { e.currentTarget.style.color = 'var(--enterprise-error)'; }} onMouseLeave={e => { e.currentTarget.style.color = 'var(--enterprise-gray-400)'; }}><Trash2 size={14} /></button>
-                                                    )}
+                                                    <button onClick={e => { e.stopPropagation(); setMoveSrc(entry); setMoveDst(''); setMoveQty(entry.qty); setMoveErr(''); setMoveOk(''); setShowMoveModal(true); }} title="Move" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--enterprise-gray-400)', padding: '4px' }} onMouseEnter={e => { e.currentTarget.style.color = 'var(--enterprise-primary)'; }} onMouseLeave={e => { e.currentTarget.style.color = 'var(--enterprise-gray-400)'; }}><ArrowRightLeft size={14} /></button>
+                                                    <button onClick={e => { e.stopPropagation(); setDeleteTarget(entry); }} title="Delete" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--enterprise-gray-400)', padding: '4px' }} onMouseEnter={e => { e.currentTarget.style.color = 'var(--enterprise-error)'; }} onMouseLeave={e => { e.currentTarget.style.color = 'var(--enterprise-gray-400)'; }}><Trash2 size={14} /></button>
                                                 </div>
                                             </div>
                                         </div>
@@ -360,150 +312,142 @@ export function RackView({ userRole, userPerms = {} }: RackViewProps) {
                 <div><strong>Rules:</strong> Location = letter + number (A1, B12). Use Add/Reduce to manage rack capacity. Allocation capped by US on-hand. Click occupied cells to view items.</div>
             </div>
 
-            {/* ADD STOCK MODAL — guarded by canCreate */}
-            {canCreate && (
-                <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="Add Stock to Location" maxWidth="520px">
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                        <div>
-                            <Label required>Location Code</Label>
-                            <input type="text" value={formLoc} onChange={e => { setFormLoc(e.target.value.toUpperCase()); setFormError(''); }} placeholder="e.g. A1, B12" maxLength={10}
-                                style={{ width: '100%', padding: '10px 14px', fontSize: '15px', border: '1px solid var(--border-color)', borderRadius: '6px', fontFamily: 'monospace', fontWeight: 600, letterSpacing: '1px', outline: 'none' }}
-                                onFocus={e => { e.target.style.borderColor = 'var(--enterprise-primary)'; e.target.style.boxShadow = '0 0 0 3px rgba(30,58,138,0.1)'; }}
-                                onBlur={e => { e.target.style.borderColor = 'var(--border-color)'; e.target.style.boxShadow = 'none'; }} />
-                            {formLoc && (() => { const v = valLoc(formLoc); return v.valid ? <p style={{ fontSize: '12px', color: 'var(--enterprise-success)', marginTop: '4px' }}>✓ Rack {v.rack} (max: {v.rack}{locCounts[v.rack!] || 0})</p> : null; })()}
+            {/* ADD STOCK MODAL */}
+            <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="Add Stock to Location" maxWidth="520px">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div>
+                        <Label required>Location Code</Label>
+                        <input type="text" value={formLoc} onChange={e => { setFormLoc(e.target.value.toUpperCase()); setFormError(''); }} placeholder="e.g. A1, B12" maxLength={10}
+                            style={{ width: '100%', padding: '10px 14px', fontSize: '15px', border: '1px solid var(--border-color)', borderRadius: '6px', fontFamily: 'monospace', fontWeight: 600, letterSpacing: '1px', outline: 'none' }}
+                            onFocus={e => { e.target.style.borderColor = 'var(--enterprise-primary)'; e.target.style.boxShadow = '0 0 0 3px rgba(30,58,138,0.1)'; }}
+                            onBlur={e => { e.target.style.borderColor = 'var(--border-color)'; e.target.style.boxShadow = 'none'; }} />
+                        {formLoc && (() => { const v = valLoc(formLoc); return v.valid ? <p style={{ fontSize: '12px', color: 'var(--enterprise-success)', marginTop: '4px' }}>✓ Rack {v.rack} (max: {v.rack}{locCounts[v.rack!] || 0})</p> : null; })()}
+                    </div>
+                    <div style={{ position: 'relative' }}>
+                        <Label required>MSN (Master Serial No)</Label>
+                        <div onClick={() => setMsnOpen(!msnOpen)} style={{ width: '100%', padding: '10px 14px', fontSize: '14px', border: '1px solid var(--border-color)', borderRadius: '6px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--background)', minHeight: '40px' }}>
+                            <span style={{ color: formMsn ? 'var(--foreground)' : 'var(--enterprise-gray-400)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formMsn ? (() => { const i = msnItems.find(x => x.master_serial_no === formMsn); return i ? `${i.master_serial_no} — ${i.item_name}` : formMsn; })() : 'Select MSN...'}</span>
+                            <ChevronDown size={16} style={{ color: 'var(--enterprise-gray-400)', transform: msnOpen ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.2s' }} />
                         </div>
-                        <div style={{ position: 'relative' }}>
-                            <Label required>MSN (Master Serial No)</Label>
-                            <div onClick={() => setMsnOpen(!msnOpen)} style={{ width: '100%', padding: '10px 14px', fontSize: '14px', border: '1px solid var(--border-color)', borderRadius: '6px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--background)', minHeight: '40px' }}>
-                                <span style={{ color: formMsn ? 'var(--foreground)' : 'var(--enterprise-gray-400)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formMsn ? (() => { const i = msnItems.find(x => x.master_serial_no === formMsn); return i ? `${i.master_serial_no} — ${i.item_name}` : formMsn; })() : 'Select MSN...'}</span>
-                                <ChevronDown size={16} style={{ color: 'var(--enterprise-gray-400)', transform: msnOpen ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform 0.2s' }} />
-                            </div>
-                            {formMsn && (() => {
-                                const oh = ohMap.get(formMsn); const al = allocMap.get(formMsn) || 0; if (oh === undefined) return null; const rem = oh - al; return (
-                                    <div style={{ marginTop: '6px', padding: '8px 12px', background: rem <= 0 ? 'rgba(220,38,38,0.06)' : 'rgba(34,197,94,0.06)', border: `1px solid ${rem <= 0 ? 'rgba(220,38,38,0.2)' : 'rgba(34,197,94,0.2)'}`, borderRadius: '6px', fontSize: '12px', display: 'flex', gap: '16px' }}>
-                                        <span>US On-Hand: <strong>{oh.toLocaleString()}</strong></span>
-                                        <span>Allocated: <strong>{al.toLocaleString()}</strong></span>
-                                        <span style={{ color: rem <= 0 ? 'var(--enterprise-error)' : 'var(--enterprise-success)' }}>Remaining: <strong>{rem.toLocaleString()}</strong></span>
-                                    </div>
-                                );
-                            })()}
-                            {msnOpen && (
-                                <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'white', border: '1px solid var(--border-color)', borderRadius: '6px', marginTop: '4px', boxShadow: 'var(--shadow-lg)', maxHeight: '240px', display: 'flex', flexDirection: 'column' }}>
-                                    <div style={{ padding: '8px', borderBottom: '1px solid var(--enterprise-gray-100)' }}>
-                                        <input type="text" value={msnSearch} onChange={e => setMsnSearch(e.target.value)} placeholder="Search MSN, part number…" autoFocus style={{ width: '100%', padding: '7px 10px', fontSize: '13px', border: '1px solid var(--enterprise-gray-200)', borderRadius: '4px', outline: 'none', background: 'var(--enterprise-gray-50)' }} onClick={e => e.stopPropagation()} />
-                                    </div>
-                                    <div style={{ overflowY: 'auto', flex: 1 }}>
-                                        {msnLoading ? <div style={{ padding: '20px', textAlign: 'center' }}><LoadingSpinner size={20} /></div>
-                                            : filtMsn.length === 0 ? <div style={{ padding: '16px', textAlign: 'center', fontSize: '13px', color: 'var(--enterprise-gray-400)' }}>No MSN found</div>
-                                                : filtMsn.map(item => (
-                                                    <div key={item.id} onClick={e => { e.stopPropagation(); setFormMsn(item.master_serial_no); setMsnOpen(false); setMsnSearch(''); setFormError(''); }}
-                                                        style={{ padding: '10px 14px', cursor: 'pointer', borderBottom: '1px solid var(--enterprise-gray-50)', background: formMsn === item.master_serial_no ? 'rgba(30,58,138,0.06)' : 'transparent', transition: 'background 0.1s' }}
-                                                        onMouseEnter={e => { e.currentTarget.style.background = 'var(--enterprise-gray-50)'; }}
-                                                        onMouseLeave={e => { e.currentTarget.style.background = formMsn === item.master_serial_no ? 'rgba(30,58,138,0.06)' : 'transparent'; }}
-                                                    >
-                                                        <p style={{ fontSize: '13px', fontWeight: 600, color: 'var(--enterprise-primary)', margin: '0 0 2px' }}>{item.master_serial_no}</p>
-                                                        <p style={{ fontSize: '11px', color: 'var(--enterprise-gray-500)', margin: 0 }}>{item.item_name} <span style={{ color: 'var(--enterprise-gray-400)' }}>({item.item_code}){item.part_number ? ` • PN: ${item.part_number}` : ''}</span></p>
-                                                    </div>
-                                                ))}
-                                    </div>
+                        {formMsn && (() => {
+                            const oh = ohMap.get(formMsn); const al = allocMap.get(formMsn) || 0; if (oh === undefined) return null; const rem = oh - al; return (
+                                <div style={{ marginTop: '6px', padding: '8px 12px', background: rem <= 0 ? 'rgba(220,38,38,0.06)' : 'rgba(34,197,94,0.06)', border: `1px solid ${rem <= 0 ? 'rgba(220,38,38,0.2)' : 'rgba(34,197,94,0.2)'}`, borderRadius: '6px', fontSize: '12px', display: 'flex', gap: '16px' }}>
+                                    <span>US On-Hand: <strong>{oh.toLocaleString()}</strong></span>
+                                    <span>Allocated: <strong>{al.toLocaleString()}</strong></span>
+                                    <span style={{ color: rem <= 0 ? 'var(--enterprise-error)' : 'var(--enterprise-success)' }}>Remaining: <strong>{rem.toLocaleString()}</strong></span>
                                 </div>
-                            )}
+                            );
+                        })()}
+                        {msnOpen && (
+                            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'white', border: '1px solid var(--border-color)', borderRadius: '6px', marginTop: '4px', boxShadow: 'var(--shadow-lg)', maxHeight: '240px', display: 'flex', flexDirection: 'column' }}>
+                                <div style={{ padding: '8px', borderBottom: '1px solid var(--enterprise-gray-100)' }}>
+                                    <input type="text" value={msnSearch} onChange={e => setMsnSearch(e.target.value)} placeholder="Search MSN, part number…" autoFocus style={{ width: '100%', padding: '7px 10px', fontSize: '13px', border: '1px solid var(--enterprise-gray-200)', borderRadius: '4px', outline: 'none', background: 'var(--enterprise-gray-50)' }} onClick={e => e.stopPropagation()} />
+                                </div>
+                                <div style={{ overflowY: 'auto', flex: 1 }}>
+                                    {msnLoading ? <div style={{ padding: '20px', textAlign: 'center' }}><LoadingSpinner size={20} /></div>
+                                        : filtMsn.length === 0 ? <div style={{ padding: '16px', textAlign: 'center', fontSize: '13px', color: 'var(--enterprise-gray-400)' }}>No MSN found</div>
+                                            : filtMsn.map(item => (
+                                                <div key={item.id} onClick={e => { e.stopPropagation(); setFormMsn(item.master_serial_no); setMsnOpen(false); setMsnSearch(''); setFormError(''); }}
+                                                    style={{ padding: '10px 14px', cursor: 'pointer', borderBottom: '1px solid var(--enterprise-gray-50)', background: formMsn === item.master_serial_no ? 'rgba(30,58,138,0.06)' : 'transparent', transition: 'background 0.1s' }}
+                                                    onMouseEnter={e => { e.currentTarget.style.background = 'var(--enterprise-gray-50)'; }}
+                                                    onMouseLeave={e => { e.currentTarget.style.background = formMsn === item.master_serial_no ? 'rgba(30,58,138,0.06)' : 'transparent'; }}
+                                                >
+                                                    <p style={{ fontSize: '13px', fontWeight: 600, color: 'var(--enterprise-primary)', margin: '0 0 2px' }}>{item.master_serial_no}</p>
+                                                    <p style={{ fontSize: '11px', color: 'var(--enterprise-gray-500)', margin: 0 }}>{item.item_name} <span style={{ color: 'var(--enterprise-gray-400)' }}>({item.item_code}){item.part_number ? ` • PN: ${item.part_number}` : ''}</span></p>
+                                                </div>
+                                            ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                    <div>
+                        <Label required>Quantity</Label>
+                        <input type="number" value={formQty} onChange={e => { setFormQty(e.target.value === '' ? '' : parseInt(e.target.value) || 0); setFormError(''); }} placeholder="Enter qty" min="1" style={{ width: '100%', padding: '10px 14px', fontSize: '14px', border: '1px solid var(--border-color)', borderRadius: '6px', outline: 'none' }} onFocus={e => { e.target.style.borderColor = 'var(--enterprise-primary)'; e.target.style.boxShadow = '0 0 0 3px rgba(30,58,138,0.1)'; }} onBlur={e => { e.target.style.borderColor = 'var(--border-color)'; e.target.style.boxShadow = 'none'; }} />
+                    </div>
+                    {formError && <div style={{ background: 'rgba(220,38,38,0.06)', border: '1px solid rgba(220,38,38,0.2)', borderRadius: '6px', padding: '10px 14px', color: 'var(--enterprise-error)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><AlertTriangle size={15} />{formError}</div>}
+                    {formSuccess && <div style={{ background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: '6px', padding: '10px 14px', color: 'var(--enterprise-success)', fontSize: '13px' }}>{formSuccess}</div>}
+                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                        <ActionButton label="Cancel" icon={<X size={14} />} onClick={() => setShowAddModal(false)} variant="secondary" />
+                        <ActionButton label="Add to Rack" icon={<Plus size={14} />} onClick={handleAdd} variant="primary" disabled={!formLoc || !formMsn || !formQty} />
+                    </div>
+                </div>
+            </Modal>
+
+            {/* MOVE MODAL */}
+            <Modal isOpen={showMoveModal} onClose={() => setShowMoveModal(false)} title="Move Stock" maxWidth="520px">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div>
+                        <Label required>Source Entry</Label>
+                        {moveSrc ? (
+                            <div style={{ padding: '10px 14px', background: 'var(--enterprise-gray-50)', borderRadius: '8px', border: '1px solid var(--enterprise-gray-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div><span style={{ fontWeight: 700, fontFamily: 'monospace', color: rc(moveSrc.rack).text }}>{moveSrc.location}</span><span style={{ marginLeft: '10px', fontSize: '13px', color: 'var(--enterprise-gray-600)' }}>{moveSrc.msn} — {moveSrc.qty.toLocaleString()} pcs</span></div>
+                                <button onClick={() => setMoveSrc(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--enterprise-gray-400)' }}><X size={14} /></button>
+                            </div>
+                        ) : (
+                            <div style={{ maxHeight: '160px', overflowY: 'auto', border: '1px solid var(--enterprise-gray-200)', borderRadius: '8px' }}>
+                                {allEntries.length === 0 ? <p style={{ padding: '12px', textAlign: 'center', color: 'var(--enterprise-gray-400)', fontSize: '13px' }}>No entries</p>
+                                    : allEntries.map(e => (
+                                        <div key={e.id} onClick={() => { setMoveSrc(e); setMoveQty(e.qty); }} style={{ padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid var(--enterprise-gray-50)', transition: 'background 0.1s' }} onMouseEnter={ev => { ev.currentTarget.style.background = 'var(--enterprise-gray-50)'; }} onMouseLeave={ev => { ev.currentTarget.style.background = 'transparent'; }}>
+                                            <span style={{ fontWeight: 600, fontFamily: 'monospace', color: rc(e.rack).text, marginRight: '8px' }}>{e.location}</span>
+                                            <span style={{ fontSize: '12px', color: 'var(--enterprise-gray-600)' }}>{e.msn} — {e.qty.toLocaleString()} pcs</span>
+                                        </div>
+                                    ))}
+                            </div>
+                        )}
+                    </div>
+                    <div>
+                        <Label required>Destination Location</Label>
+                        <input type="text" value={moveDst} onChange={e => { setMoveDst(e.target.value.toUpperCase()); setMoveErr(''); }} placeholder="e.g. B5" maxLength={10} style={{ width: '100%', padding: '10px 14px', fontSize: '15px', border: '1px solid var(--border-color)', borderRadius: '6px', fontFamily: 'monospace', fontWeight: 600, outline: 'none' }} onFocus={e => { e.target.style.borderColor = 'var(--enterprise-primary)'; }} onBlur={e => { e.target.style.borderColor = 'var(--border-color)'; }} />
+                    </div>
+                    <div>
+                        <Label required>Quantity to Move</Label>
+                        <input type="number" value={moveQty} onChange={e => { setMoveQty(e.target.value === '' ? '' : parseInt(e.target.value) || 0); setMoveErr(''); }} min="1" max={moveSrc?.qty} style={{ width: '100%', padding: '10px 14px', fontSize: '14px', border: '1px solid var(--border-color)', borderRadius: '6px', outline: 'none' }} onFocus={e => { e.target.style.borderColor = 'var(--enterprise-primary)'; }} onBlur={e => { e.target.style.borderColor = 'var(--border-color)'; }} />
+                        {moveSrc && <p style={{ fontSize: '11px', color: 'var(--enterprise-gray-400)', marginTop: '4px' }}>Available: {moveSrc.qty.toLocaleString()} pcs</p>}
+                    </div>
+                    {moveErr && <div style={{ background: 'rgba(220,38,38,0.06)', border: '1px solid rgba(220,38,38,0.2)', borderRadius: '6px', padding: '10px 14px', color: 'var(--enterprise-error)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><AlertTriangle size={15} />{moveErr}</div>}
+                    {moveOk && <div style={{ background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: '6px', padding: '10px 14px', color: 'var(--enterprise-success)', fontSize: '13px' }}>{moveOk}</div>}
+                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                        <ActionButton label="Cancel" icon={<X size={14} />} onClick={() => setShowMoveModal(false)} variant="secondary" />
+                        <ActionButton label="Move" icon={<ArrowRightLeft size={14} />} onClick={handleMove} variant="primary" disabled={!moveSrc || !moveDst || !moveQty} />
+                    </div>
+                </div>
+            </Modal>
+
+            {/* DELETE MODAL */}
+            <Modal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Remove Entry" maxWidth="420px">
+                {deleteTarget && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                        <div style={{ background: 'rgba(220,38,38,0.05)', border: '1px solid rgba(220,38,38,0.15)', borderRadius: '8px', padding: '14px', display: 'flex', gap: '10px' }}>
+                            <AlertTriangle size={20} style={{ color: 'var(--enterprise-error)', flexShrink: 0 }} />
+                            <div><p style={{ fontWeight: 600, color: 'var(--enterprise-error)', margin: '0 0 4px' }}>Remove this entry?</p><p style={{ fontSize: '13px', color: 'var(--enterprise-gray-600)', margin: 0 }}><strong>{deleteTarget.msn}</strong> ({deleteTarget.qty.toLocaleString()} pcs) from <strong>{deleteTarget.location}</strong></p></div>
                         </div>
-                        <div>
-                            <Label required>Quantity</Label>
-                            <input type="number" value={formQty} onChange={e => { setFormQty(e.target.value === '' ? '' : parseInt(e.target.value) || 0); setFormError(''); }} placeholder="Enter qty" min="1" style={{ width: '100%', padding: '10px 14px', fontSize: '14px', border: '1px solid var(--border-color)', borderRadius: '6px', outline: 'none' }} onFocus={e => { e.target.style.borderColor = 'var(--enterprise-primary)'; e.target.style.boxShadow = '0 0 0 3px rgba(30,58,138,0.1)'; }} onBlur={e => { e.target.style.borderColor = 'var(--border-color)'; e.target.style.boxShadow = 'none'; }} />
-                        </div>
-                        {formError && <div style={{ background: 'rgba(220,38,38,0.06)', border: '1px solid rgba(220,38,38,0.2)', borderRadius: '6px', padding: '10px 14px', color: 'var(--enterprise-error)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><AlertTriangle size={15} />{formError}</div>}
-                        {formSuccess && <div style={{ background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: '6px', padding: '10px 14px', color: 'var(--enterprise-success)', fontSize: '13px' }}>{formSuccess}</div>}
                         <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-                            <ActionButton label="Cancel" icon={<X size={14} />} onClick={() => setShowAddModal(false)} variant="secondary" />
-                            <ActionButton label="Add to Rack" icon={<Plus size={14} />} onClick={handleAdd} variant="primary" disabled={!formLoc || !formMsn || !formQty} />
+                            <ActionButton label="Cancel" icon={<X size={14} />} onClick={() => setDeleteTarget(null)} variant="secondary" />
+                            <ActionButton label="Remove" icon={<Trash2 size={14} />} onClick={() => handleDel(deleteTarget)} variant="danger" />
                         </div>
                     </div>
-                </Modal>
-            )}
+                )}
+            </Modal>
 
-            {/* MOVE MODAL — guarded by canEdit */}
-            {canEdit && (
-                <Modal isOpen={showMoveModal} onClose={() => setShowMoveModal(false)} title="Move Stock" maxWidth="520px">
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                        <div>
-                            <Label required>Source Entry</Label>
-                            {moveSrc ? (
-                                <div style={{ padding: '10px 14px', background: 'var(--enterprise-gray-50)', borderRadius: '8px', border: '1px solid var(--enterprise-gray-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <div><span style={{ fontWeight: 700, fontFamily: 'monospace', color: rc(moveSrc.rack).text }}>{moveSrc.location}</span><span style={{ marginLeft: '10px', fontSize: '13px', color: 'var(--enterprise-gray-600)' }}>{moveSrc.msn} — {moveSrc.qty.toLocaleString()} pcs</span></div>
-                                    <button onClick={() => setMoveSrc(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--enterprise-gray-400)' }}><X size={14} /></button>
-                                </div>
-                            ) : (
-                                <div style={{ maxHeight: '160px', overflowY: 'auto', border: '1px solid var(--enterprise-gray-200)', borderRadius: '8px' }}>
-                                    {allEntries.length === 0 ? <p style={{ padding: '12px', textAlign: 'center', color: 'var(--enterprise-gray-400)', fontSize: '13px' }}>No entries</p>
-                                        : allEntries.map(e => (
-                                            <div key={e.id} onClick={() => { setMoveSrc(e); setMoveQty(e.qty); }} style={{ padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid var(--enterprise-gray-50)', transition: 'background 0.1s' }} onMouseEnter={ev => { ev.currentTarget.style.background = 'var(--enterprise-gray-50)'; }} onMouseLeave={ev => { ev.currentTarget.style.background = 'transparent'; }}>
-                                                <span style={{ fontWeight: 600, fontFamily: 'monospace', color: rc(e.rack).text, marginRight: '8px' }}>{e.location}</span>
-                                                <span style={{ fontSize: '12px', color: 'var(--enterprise-gray-600)' }}>{e.msn} — {e.qty.toLocaleString()} pcs</span>
-                                            </div>
-                                        ))}
-                                </div>
-                            )}
-                        </div>
-                        <div>
-                            <Label required>Destination Location</Label>
-                            <input type="text" value={moveDst} onChange={e => { setMoveDst(e.target.value.toUpperCase()); setMoveErr(''); }} placeholder="e.g. B5" maxLength={10} style={{ width: '100%', padding: '10px 14px', fontSize: '15px', border: '1px solid var(--border-color)', borderRadius: '6px', fontFamily: 'monospace', fontWeight: 600, outline: 'none' }} onFocus={e => { e.target.style.borderColor = 'var(--enterprise-primary)'; }} onBlur={e => { e.target.style.borderColor = 'var(--border-color)'; }} />
-                        </div>
-                        <div>
-                            <Label required>Quantity to Move</Label>
-                            <input type="number" value={moveQty} onChange={e => { setMoveQty(e.target.value === '' ? '' : parseInt(e.target.value) || 0); setMoveErr(''); }} min="1" max={moveSrc?.qty} style={{ width: '100%', padding: '10px 14px', fontSize: '14px', border: '1px solid var(--border-color)', borderRadius: '6px', outline: 'none' }} onFocus={e => { e.target.style.borderColor = 'var(--enterprise-primary)'; }} onBlur={e => { e.target.style.borderColor = 'var(--border-color)'; }} />
-                            {moveSrc && <p style={{ fontSize: '11px', color: 'var(--enterprise-gray-400)', marginTop: '4px' }}>Available: {moveSrc.qty.toLocaleString()} pcs</p>}
-                        </div>
-                        {moveErr && <div style={{ background: 'rgba(220,38,38,0.06)', border: '1px solid rgba(220,38,38,0.2)', borderRadius: '6px', padding: '10px 14px', color: 'var(--enterprise-error)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><AlertTriangle size={15} />{moveErr}</div>}
-                        {moveOk && <div style={{ background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: '6px', padding: '10px 14px', color: 'var(--enterprise-success)', fontSize: '13px' }}>{moveOk}</div>}
-                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-                            <ActionButton label="Cancel" icon={<X size={14} />} onClick={() => setShowMoveModal(false)} variant="secondary" />
-                            <ActionButton label="Move" icon={<ArrowRightLeft size={14} />} onClick={handleMove} variant="primary" disabled={!moveSrc || !moveDst || !moveQty} />
-                        </div>
+            {/* SCALE MODAL */}
+            <Modal isOpen={showScaleModal} onClose={() => setShowScaleModal(false)} title={scaleMode === 'add' ? `Add Locations — Rack ${activeRack}` : `Reduce Locations — Rack ${activeRack}`} maxWidth="420px">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div style={{ padding: '10px 14px', background: c.fill, border: `1px solid ${c.fb}`, borderRadius: '8px', fontSize: '13px', color: c.text }}>
+                        Rack {activeRack} currently has <strong>{locCounts[activeRack] || 0}</strong> locations ({activeRack}1 – {activeRack}{locCounts[activeRack] || 0})
                     </div>
-                </Modal>
-            )}
-
-            {/* DELETE MODAL — guarded by canDelete */}
-            {canDelete && (
-                <Modal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Remove Entry" maxWidth="420px">
-                    {deleteTarget && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                            <div style={{ background: 'rgba(220,38,38,0.05)', border: '1px solid rgba(220,38,38,0.15)', borderRadius: '8px', padding: '14px', display: 'flex', gap: '10px' }}>
-                                <AlertTriangle size={20} style={{ color: 'var(--enterprise-error)', flexShrink: 0 }} />
-                                <div><p style={{ fontWeight: 600, color: 'var(--enterprise-error)', margin: '0 0 4px' }}>Remove this entry?</p><p style={{ fontSize: '13px', color: 'var(--enterprise-gray-600)', margin: 0 }}><strong>{deleteTarget.msn}</strong> ({deleteTarget.qty.toLocaleString()} pcs) from <strong>{deleteTarget.location}</strong></p></div>
-                            </div>
-                            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-                                <ActionButton label="Cancel" icon={<X size={14} />} onClick={() => setDeleteTarget(null)} variant="secondary" />
-                                <ActionButton label="Remove" icon={<Trash2 size={14} />} onClick={() => handleDel(deleteTarget)} variant="danger" />
-                            </div>
-                        </div>
-                    )}
-                </Modal>
-            )}
-
-            {/* SCALE MODAL — guarded by canEdit */}
-            {canEdit && (
-                <Modal isOpen={showScaleModal} onClose={() => setShowScaleModal(false)} title={scaleMode === 'add' ? `Add Locations — Rack ${activeRack}` : `Reduce Locations — Rack ${activeRack}`} maxWidth="420px">
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                        <div style={{ padding: '10px 14px', background: c.fill, border: `1px solid ${c.fb}`, borderRadius: '8px', fontSize: '13px', color: c.text }}>
-                            Rack {activeRack} currently has <strong>{locCounts[activeRack] || 0}</strong> locations ({activeRack}1 – {activeRack}{locCounts[activeRack] || 0})
-                        </div>
-                        <div>
-                            <Label required>Number of locations to {scaleMode === 'add' ? 'add' : 'remove'}</Label>
-                            <input type="number" value={scaleCount} onChange={e => { setScaleCount(e.target.value === '' ? '' : parseInt(e.target.value) || 0); setScaleError(''); }} min="1" placeholder={scaleMode === 'add' ? 'e.g. 10' : 'e.g. 5'} style={{ width: '100%', padding: '10px 14px', fontSize: '15px', border: '1px solid var(--border-color)', borderRadius: '6px', fontFamily: 'monospace', fontWeight: 600, outline: 'none' }} onFocus={e => { e.target.style.borderColor = c.border; }} onBlur={e => { e.target.style.borderColor = 'var(--border-color)'; }} />
-                            {scaleMode === 'add' && typeof scaleCount === 'number' && scaleCount > 0 && <p style={{ fontSize: '12px', color: 'var(--enterprise-success)', marginTop: '4px' }}>New range: {activeRack}1 – {activeRack}{(locCounts[activeRack] || 0) + scaleCount}</p>}
-                            {scaleMode === 'reduce' && typeof scaleCount === 'number' && scaleCount > 0 && <p style={{ fontSize: '12px', color: '#d97706', marginTop: '4px' }}>Will remove {activeRack}{(locCounts[activeRack] || 0) - scaleCount + 1} – {activeRack}{locCounts[activeRack] || 0} (only if empty)</p>}
-                        </div>
-                        {scaleError && <div style={{ background: 'rgba(220,38,38,0.06)', border: '1px solid rgba(220,38,38,0.2)', borderRadius: '6px', padding: '10px 14px', color: 'var(--enterprise-error)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><AlertTriangle size={15} />{scaleError}</div>}
-                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-                            <ActionButton label="Cancel" icon={<X size={14} />} onClick={() => setShowScaleModal(false)} variant="secondary" />
-                            <ActionButton label={scaleMode === 'add' ? 'Add Locations' : 'Reduce Locations'} icon={scaleMode === 'add' ? <Plus size={14} /> : <Minus size={14} />} onClick={handleScale} variant={scaleMode === 'add' ? 'primary' : 'danger'} disabled={!scaleCount} />
-                        </div>
+                    <div>
+                        <Label required>Number of locations to {scaleMode === 'add' ? 'add' : 'remove'}</Label>
+                        <input type="number" value={scaleCount} onChange={e => { setScaleCount(e.target.value === '' ? '' : parseInt(e.target.value) || 0); setScaleError(''); }} min="1" placeholder={scaleMode === 'add' ? 'e.g. 10' : 'e.g. 5'} style={{ width: '100%', padding: '10px 14px', fontSize: '15px', border: '1px solid var(--border-color)', borderRadius: '6px', fontFamily: 'monospace', fontWeight: 600, outline: 'none' }} onFocus={e => { e.target.style.borderColor = c.border; }} onBlur={e => { e.target.style.borderColor = 'var(--border-color)'; }} />
+                        {scaleMode === 'add' && typeof scaleCount === 'number' && scaleCount > 0 && <p style={{ fontSize: '12px', color: 'var(--enterprise-success)', marginTop: '4px' }}>New range: {activeRack}1 – {activeRack}{(locCounts[activeRack] || 0) + scaleCount}</p>}
+                        {scaleMode === 'reduce' && typeof scaleCount === 'number' && scaleCount > 0 && <p style={{ fontSize: '12px', color: '#d97706', marginTop: '4px' }}>Will remove {activeRack}{(locCounts[activeRack] || 0) - scaleCount + 1} – {activeRack}{locCounts[activeRack] || 0} (only if empty)</p>}
                     </div>
-                </Modal>
-            )}
+                    {scaleError && <div style={{ background: 'rgba(220,38,38,0.06)', border: '1px solid rgba(220,38,38,0.2)', borderRadius: '6px', padding: '10px 14px', color: 'var(--enterprise-error)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><AlertTriangle size={15} />{scaleError}</div>}
+                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                        <ActionButton label="Cancel" icon={<X size={14} />} onClick={() => setShowScaleModal(false)} variant="secondary" />
+                        <ActionButton label={scaleMode === 'add' ? 'Add Locations' : 'Reduce Locations'} icon={scaleMode === 'add' ? <Plus size={14} /> : <Minus size={14} />} onClick={handleScale} variant={scaleMode === 'add' ? 'primary' : 'danger'} disabled={!scaleCount} />
+                    </div>
+                </div>
+            </Modal>
         </div>
     );
 }
