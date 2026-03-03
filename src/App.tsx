@@ -43,7 +43,8 @@ import {
   FileCheck,
   FileMinus,
   Lock,
-  Unlock
+  Unlock,
+  Grid3X3
 } from 'lucide-react';
 
 declare const __APP_VERSION__: string;
@@ -397,6 +398,9 @@ export default function App() {
         if (!canAccessView('rack-view')) return renderAccessDenied('Rack View');
         return <RackView />;
         return <StockMovement accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
+      case 'rack-view':
+        if (!canAccessView('rack-view')) return renderAccessDenied('Rack View');
+        return <RackView userRole={userRole} userPerms={userPerms} />;
       case 'packing':
       case 'packing-sticker':
         if (!canAccessView('packing-sticker')) return renderAccessDenied('Packing — Sticker Generation');
