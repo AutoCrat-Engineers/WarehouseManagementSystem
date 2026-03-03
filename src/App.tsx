@@ -30,7 +30,6 @@ import {
   Menu,
   ChevronLeft,
   ArrowRightLeft,
-  Grid3X3,
   ChevronRight,
   ChevronDown,
   AlertCircle,
@@ -393,10 +392,6 @@ export default function App() {
         return <InventoryGrid />;
       case 'stock-movements':
         if (!canAccessView('stock-movements')) return renderAccessDenied('Stock Movements');
-        return <StockMovement accessToken={accessToken} userRole={userRole} />;
-      case 'rack-view':
-        if (!canAccessView('rack-view')) return renderAccessDenied('Rack View');
-        return <RackView />;
         return <StockMovement accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
       case 'rack-view':
         if (!canAccessView('rack-view')) return renderAccessDenied('Rack View');
@@ -416,10 +411,10 @@ export default function App() {
         return <PackingListSubInvoice accessToken={accessToken} userRole={userRole} onNavigate={(v) => setCurrentView(v as View)} />;
       case 'orders':
         if (!canAccessView('orders')) return renderAccessDenied('Blanket Orders');
-        return <BlanketOrders accessToken={accessToken} />;
+        return <BlanketOrders accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
       case 'releases':
         if (!canAccessView('releases')) return renderAccessDenied('Blanket Releases');
-        return <BlanketReleases accessToken={accessToken} />;
+        return <BlanketReleases accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
       case 'forecast':
         if (!canAccessView('forecast')) return renderAccessDenied('Forecasting');
         return <ForecastingModule accessToken={accessToken} />;
