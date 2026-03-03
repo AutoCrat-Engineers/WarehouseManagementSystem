@@ -133,6 +133,14 @@ const MODULE_CONFIG: ModuleConfig[] = [
         actions: ['view', 'create', 'edit', 'delete'],
     },
     {
+        id: 'rack-view',
+        label: 'Rack View',
+        icon: Boxes,
+        color: '#22c55e',
+        description: 'US Warehouse Rack Setup',
+        actions: ['view', 'create', 'edit', 'delete'],
+    },
+    {
         id: 'packing',
         label: 'Packing',
         icon: Package,
