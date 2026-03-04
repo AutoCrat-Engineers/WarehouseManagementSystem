@@ -37,22 +37,23 @@ export function useDashboard(accessToken: string | null) {
       setLoading(true);
       setError(null);
 
-      // Fetch stock data from the SAME view the Inventory module uses
-      // This ensures Dashboard and Inventory show consistent numbers
-      const { data: stockItems, error: stockError } = await supabase
-        .from('vw_item_stock_dashboard')
-        .select('item_code, item_name, stock_status, net_available_for_customer, total_on_hand');
+      // PERF: Fetch stock data and blanket orders IN PARALLEL
+      const [stockResult, ordersResult] = await Promise.all([
+        supabase
+          .from('vw_item_stock_dashboard')
+          .select('item_code, item_name, stock_status, net_available_for_customer, total_on_hand'),
+        supabase
+          .from('blanket_orders')
+          .select('id, order_number, customer_name, status, total_value, created_at')
+          .order('created_at', { ascending: false })
+          .limit(5),
+      ]);
 
-      if (stockError) throw stockError;
+      if (stockResult.error) throw stockResult.error;
+      if (ordersResult.error) throw ordersResult.error;
 
-      // Fetch blanket orders (for recent activity)
-      const { data: blanketOrders, error: ordersError } = await supabase
-        .from('blanket_orders')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(5);
-
-      if (ordersError) throw ordersError;
+      const stockItems = stockResult.data;
+      const blanketOrders = ordersResult.data;
 
       // Calculate summary from the DB view's stock_status
       const totalItems = stockItems?.length || 0;

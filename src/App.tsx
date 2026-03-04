@@ -12,6 +12,7 @@ import { ForecastingModule } from './components/ForecastingModule';
 import { PlanningModule } from './components/PlanningModule';
 import { PlanningDashboard } from './components/PlanningDashboard';
 import { StockMovement } from './components/StockMovement';
+import { RackView } from './components/RackView';
 import { PackingModule, PackingDetails, PackingListInvoice, PackingListSubInvoice } from './components/packing';
 import { LoadingPage } from './components/LoadingPage';
 import { UserManagement } from './auth/users/UserManagement';
@@ -42,7 +43,8 @@ import {
   FileCheck,
   FileMinus,
   Lock,
-  Unlock
+  Unlock,
+  Grid3X3
 } from 'lucide-react';
 
 declare const __APP_VERSION__: string;
@@ -55,6 +57,7 @@ const compactLogoImage = '/a-logo.png';
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
 type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'alert-engine' | 'stock-movements' | 'packing' | 'packing-sticker' | 'packing-details' | 'packing-list-invoice' | 'packing-list-sub-invoice' | 'users';
+type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'rack-view' | 'packing' | 'packing-sticker' | 'packing-details' | 'packing-list-invoice' | 'packing-list-sub-invoice' | 'users';
 
 interface MenuItem {
   id: View;
@@ -81,6 +84,7 @@ const menuItems: MenuItem[] = [
   { id: 'items', label: 'Item Master', icon: Package, description: 'FG Catalog' },
   { id: 'inventory', label: 'Inventory', icon: Boxes, description: 'Multi-Warehouse Stock' },
   { id: 'stock-movements', label: 'Stock Movements', icon: ArrowRightLeft, description: 'Audit Trail' },
+  { id: 'rack-view', label: 'Rack View', icon: Grid3X3, description: 'US Warehouse Racks' },
   { id: 'packing', label: 'Packing', icon: PackageOpen, description: 'FG Packing Workflow', hasSubmenu: true },
   { id: 'orders', label: 'Blanket Orders', icon: FileText, description: 'Customer Orders' },
   { id: 'releases', label: 'Blanket Releases', icon: Calendar, description: 'Delivery Schedule' },
@@ -129,6 +133,7 @@ export default function App() {
     'items': 'items.view',
     'inventory': 'inventory.view',
     'stock-movements': 'stock-movements.view',
+    'rack-view': 'rack-view.view',
     'packing': 'packing.sticker-generation.view',
     'packing-sticker': 'packing.sticker-generation.view',
     'packing-details': 'packing.packing-details.view',
@@ -148,13 +153,9 @@ export default function App() {
    * L1/L2 users must have the specific view permission.
    */
   const canAccessView = (view: string): boolean => {
-    // L3 always has full access
     if (userRole === 'L3') return true;
-    // If no permissions have been assigned yet, allow everything
-    // (prevents lockout for existing users before permissions are set)
-    const hasAnyPermission = Object.values(userPerms).some(v => v === true);
-    if (!hasAnyPermission) return true;
-    // Check specific permission
+    const permKeys = Object.keys(userPerms);
+    if (permKeys.length === 0) return true;
     const permKey = VIEW_PERMISSION_MAP[view];
     return permKey ? userPerms[permKey] === true : true;
   };
@@ -188,14 +189,11 @@ export default function App() {
     // Listen for auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        console.log('Auth state changed:', event);
-
         if (session?.access_token && session.user) {
           setAccessToken(session.access_token);
           setUser(session.user);
           setIsAuthenticated(true);
           setError(null);
-          // Fetch user role on auth state change
           fetchUserRole(session.user.id);
         } else {
           setAccessToken(null);
@@ -223,15 +221,12 @@ export default function App() {
       }
 
       if (session?.access_token && session.user) {
-        console.log('✓ Session found, setting access token');
         setAccessToken(session.access_token);
         setUser(session.user);
         setIsAuthenticated(true);
         setError(null);
-        // Fetch user role on init
         await fetchUserRole(session.user.id);
       } else {
-        console.log('No active session');
         setIsAuthenticated(false);
       }
     } catch (err) {
@@ -281,47 +276,47 @@ export default function App() {
 
   // Fetch user role from profiles table
   const fetchUserRole = async (userId: string) => {
-    console.log('🔍 Fetching role for user:', userId);
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('role, is_active, email, full_name')
-        .eq('id', userId)
-        .single();
+      // PERF: Fetch profile and permissions IN PARALLEL instead of sequentially
+      const [profileResult, permsResult] = await Promise.allSettled([
+        supabase
+          .from('profiles')
+          .select('role, is_active, email, full_name')
+          .eq('id', userId)
+          .single(),
+        getUserPermissions(userId),
+      ]);
 
-      console.log('📋 Profile query result:', { data, error });
+      // Handle profile result
+      const profileData = profileResult.status === 'fulfilled' ? profileResult.value : null;
+      const data = profileData?.data;
+      const error = profileData?.error;
 
-      if (error) {
+      if (error || !data) {
         console.error('❌ Could not fetch user role:', error);
-        console.error('Error code:', error.code, 'Message:', error.message);
-        // Default to L1 if role fetch fails
         setUserRole('L1');
         return;
       }
 
       if (data && data.is_active) {
-        console.log('✅ User role set to:', data.role);
         setUserRole(data.role as UserRole);
-        // Load granular permissions from localStorage
-        if (data.role !== 'L3') {
-          const perms = getUserPermissions(userId);
-          setUserPerms(perms);
-          console.log('🔐 Loaded permissions:', Object.keys(perms).filter(k => perms[k]).length, 'granted');
+        // Apply permissions (already fetched in parallel)
+        if (data.role !== 'L3' && permsResult.status === 'fulfilled') {
+          setUserPerms(permsResult.value);
+        } else if (data.role !== 'L3') {
+          setUserPerms({});
         }
       } else if (data && !data.is_active) {
-        // User is inactive
-        console.warn('⚠️ User account is inactive');
         setUserRole(null);
         setError('Account is inactive. Please contact your administrator.');
         await signOut();
         setIsAuthenticated(false);
       } else {
-        console.warn('⚠️ No profile data found, defaulting to L1');
         setUserRole('L1');
       }
     } catch (err) {
       console.error('💥 Error fetching user role:', err);
-      setUserRole('L1'); // Default fallback
+      setUserRole('L1');
     }
   };
 
@@ -395,20 +390,23 @@ export default function App() {
         return <DashboardNew accessToken={accessToken} onNavigate={(view) => setCurrentView(view as View)} />;
       case 'items':
         if (!canAccessView('items')) return renderAccessDenied('Item Master');
-        return <ItemMasterSupabase userRole={userRole} />;
+        return <ItemMasterSupabase userRole={userRole} userPerms={userPerms} />;
       case 'inventory':
         if (!canAccessView('inventory')) return renderAccessDenied('Inventory');
         return <InventoryGrid />;
       case 'stock-movements':
         if (!canAccessView('stock-movements')) return renderAccessDenied('Stock Movements');
-        return <StockMovement accessToken={accessToken} userRole={userRole} />;
+        return <StockMovement accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
+      case 'rack-view':
+        if (!canAccessView('rack-view')) return renderAccessDenied('Rack View');
+        return <RackView userRole={userRole} userPerms={userPerms} />;
       case 'packing':
       case 'packing-sticker':
         if (!canAccessView('packing-sticker')) return renderAccessDenied('Packing — Sticker Generation');
         return <PackingModule accessToken={accessToken} userRole={userRole} />;
       case 'packing-details':
         if (!canAccessView('packing-details')) return renderAccessDenied('Packing — Details');
-        return <PackingDetails accessToken={accessToken} userRole={userRole} onNavigate={(v) => setCurrentView(v as View)} />;
+        return <PackingDetails accessToken={accessToken} userRole={userRole} userPerms={userPerms} onNavigate={(v) => setCurrentView(v as View)} />;
       case 'packing-list-invoice':
         if (!canAccessView('packing-list-invoice')) return renderAccessDenied('Packing List — Invoice');
         return <PackingListInvoice accessToken={accessToken} userRole={userRole} onNavigate={(v) => setCurrentView(v as View)} />;
@@ -417,10 +415,10 @@ export default function App() {
         return <PackingListSubInvoice accessToken={accessToken} userRole={userRole} onNavigate={(v) => setCurrentView(v as View)} />;
       case 'orders':
         if (!canAccessView('orders')) return renderAccessDenied('Blanket Orders');
-        return <BlanketOrders accessToken={accessToken} />;
+        return <BlanketOrders accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
       case 'releases':
         if (!canAccessView('releases')) return renderAccessDenied('Blanket Releases');
-        return <BlanketReleases accessToken={accessToken} />;
+        return <BlanketReleases accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
       case 'forecast':
         if (!canAccessView('forecast')) return renderAccessDenied('Forecasting');
         return <ForecastingModule accessToken={accessToken} />;
@@ -481,10 +479,11 @@ export default function App() {
       items.push({ id: 'users' as View, label: 'User Management', icon: Users, description: 'Manage Users & Roles' });
     }
 
-    // For L1/L2 users with assigned permissions, filter menu items
+    // For L1/L2 users with loaded permissions, filter menu items
+    // Only skip filtering if NO permissions have been loaded at all (empty object)
     if (userRole !== 'L3') {
-      const hasAnyPermission = Object.values(userPerms).some(v => v === true);
-      if (hasAnyPermission) {
+      const permKeys = Object.keys(userPerms);
+      if (permKeys.length > 0) {
         items = items.filter(item => {
           // Packing parent: show if ANY packing submodule has view permission
           if (item.id === 'packing') {
@@ -503,8 +502,7 @@ export default function App() {
     return items;
   };
 
-  // Log current role for debugging
-  console.log('🔄 Current userRole state:', userRole);
+
 
   // Resolve the current menu item — for packing sub-views, show packing meta
   const packingMeta = PACKING_VIEW_META[currentView];
@@ -624,7 +622,7 @@ export default function App() {
                 whiteSpace: 'nowrap',
                 transition: 'all 280ms cubic-bezier(0.4, 0, 0.2, 1)',
               }}>
-                v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.3.2'}
+                v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.4.0'}
               </span>
               {/* Lock / Unlock toggle — desktop only */}
               {!isMobile && sidebarExpanded && (

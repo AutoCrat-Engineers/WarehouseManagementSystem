@@ -5,6 +5,11 @@
  *
  * Checklist-driven UI for granting module & submodule permissions.
  * Admins can grant View / Create / Edit / Delete access per (sub)module.
+ *
+ * Override Modes (per module):
+ *   - Grant (default): additive — overrides ADD on top of role defaults.
+ *   - Full Control: override REPLACES role defaults. L3 defines exactly
+ *     which permissions the user has for that module.
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
@@ -42,9 +47,13 @@ import {
     Users,
     Bell,
     Lock,
+    Unlock,
+    ToggleLeft,
+    ToggleRight,
 } from 'lucide-react';
 import { RoleBadge } from './RoleBadge';
 import type { UserListItem } from '../services/userService';
+import type { OverrideMode } from '../services/permissionService';
 
 // ═══════════════════════════════════════════════════════════════════════
 // TYPES
@@ -79,9 +88,11 @@ interface GrantAccessModalProps {
     user: UserListItem;
     isOpen: boolean;
     onClose: () => void;
-    onSave: (userId: string, permissions: PermissionMap) => void;
-    /** Previously saved permissions (if any) */
+    onSave: (userId: string, permissions: PermissionMap, overrideModes: Record<string, OverrideMode>) => void | Promise<void>;
+    /** Previously saved override permissions (if any) */
     initialPermissions?: PermissionMap;
+    /** Previously saved override modes per module */
+    initialOverrideModes?: Record<string, OverrideMode>;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -119,6 +130,14 @@ const MODULE_CONFIG: ModuleConfig[] = [
         icon: ArrowRightLeft,
         color: '#f59e0b',
         description: 'Transfers & Audit Trail',
+        actions: ['view', 'create', 'edit', 'delete'],
+    },
+    {
+        id: 'rack-view',
+        label: 'Rack View',
+        icon: Boxes,
+        color: '#22c55e',
+        description: 'US Warehouse Rack Setup',
         actions: ['view', 'create', 'edit', 'delete'],
     },
     {
@@ -251,6 +270,18 @@ function getSubmodulePermissionKeys(modId: string, sub: SubmoduleConfig): string
     return sub.actions.map(action => `${modId}.${sub.id}.${action}`);
 }
 
+/**
+ * Get the DB module name(s) for a given module config.
+ * For modules with submodules, returns all submodule DB keys.
+ * For flat modules, returns just the module id.
+ */
+function getModuleDbKeys(mod: ModuleConfig): string[] {
+    if (mod.submodules && mod.submodules.length > 0) {
+        return mod.submodules.map(sub => `${mod.id}.${sub.id}`);
+    }
+    return [mod.id];
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // ACTION META
 // ═══════════════════════════════════════════════════════════════════════
@@ -272,9 +303,11 @@ export function GrantAccessModal({
     onClose,
     onSave,
     initialPermissions = {},
+    initialOverrideModes = {},
 }: GrantAccessModalProps) {
     // ─── Permission state ────────────────────────────────────────────
     const [permissions, setPermissions] = useState<PermissionMap>({});
+    const [overrideModes, setOverrideModes] = useState<Record<string, OverrideMode>>({});
     const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set());
     const [hasChanges, setHasChanges] = useState(false);
 
@@ -282,6 +315,7 @@ export function GrantAccessModal({
     useEffect(() => {
         if (isOpen) {
             setPermissions({ ...initialPermissions });
+            setOverrideModes({ ...initialOverrideModes });
             setHasChanges(false);
             // Auto-expand modules that have submodules
             const expanded = new Set<string>();
@@ -292,7 +326,35 @@ export function GrantAccessModal({
             });
             setExpandedModules(expanded);
         }
-    }, [isOpen, initialPermissions]);
+    }, [isOpen, initialPermissions, initialOverrideModes]);
+
+    // ─── Override mode helpers ────────────────────────────────────────
+    /**
+     * Get the effective override mode for a module.
+     * For submodule parents, checks if ALL submodules share the same mode.
+     */
+    const getModuleOverrideMode = useCallback((mod: ModuleConfig): OverrideMode => {
+        const dbKeys = getModuleDbKeys(mod);
+        const modes = dbKeys.map(k => overrideModes[k] || 'grant');
+        // If all submodule modes are the same, return that; otherwise 'grant'
+        return modes.every(m => m === 'full_control') ? 'full_control' : 'grant';
+    }, [overrideModes]);
+
+    /**
+     * Toggle override mode for a module (and all its submodules).
+     */
+    const toggleModuleOverrideMode = useCallback((mod: ModuleConfig) => {
+        const currentMode = getModuleOverrideMode(mod);
+        const newMode: OverrideMode = currentMode === 'grant' ? 'full_control' : 'grant';
+        const dbKeys = getModuleDbKeys(mod);
+
+        setOverrideModes(prev => {
+            const next = { ...prev };
+            dbKeys.forEach(k => { next[k] = newMode; });
+            return next;
+        });
+        setHasChanges(true);
+    }, [getModuleOverrideMode]);
 
     // ─── Derived state ───────────────────────────────────────────────
     const allKeys = useMemo(() => getAllPermissionKeys(), []);
@@ -301,6 +363,14 @@ export function GrantAccessModal({
 
     const isAllSelected = grantedCount === totalPermissions && totalPermissions > 0;
     const isSomeSelected = grantedCount > 0 && grantedCount < totalPermissions;
+
+    // Count how many modules are in full_control mode
+    const fullControlCount = useMemo(() => {
+        return MODULE_CONFIG.filter(mod => {
+            const dbKeys = getModuleDbKeys(mod);
+            return dbKeys.some(k => overrideModes[k] === 'full_control');
+        }).length;
+    }, [overrideModes]);
 
     // ─── Toggle helpers ──────────────────────────────────────────────
     const togglePermission = useCallback((key: string) => {
@@ -345,6 +415,7 @@ export function GrantAccessModal({
 
     const clearAll = useCallback(() => {
         setPermissions({});
+        setOverrideModes({});
         setHasChanges(true);
     }, []);
 
@@ -396,7 +467,26 @@ export function GrantAccessModal({
 
     // ─── Save handler ────────────────────────────────────────────────
     const handleSave = useCallback(() => {
-        onSave(user.id, permissions);
+        // Build COMPLETE permission set covering ALL modules
+        // Every module is saved with full_control mode so role defaults
+        // are ignored — what L3 checks is exactly what the user gets.
+        const completePerms: PermissionMap = {};
+        const fullControlModes: Record<string, OverrideMode> = {};
+
+        for (const mod of MODULE_CONFIG) {
+            // Set full_control for every DB key (module or submodule)
+            const dbKeys = getModuleDbKeys(mod);
+            dbKeys.forEach(k => { fullControlModes[k] = 'full_control'; });
+
+            // Set explicit true/false for every permission key
+            const permKeys = getModulePermissionKeys(mod);
+            permKeys.forEach(k => {
+                completePerms[k] = !!permissions[k]; // unchecked = false
+            });
+        }
+
+
+        onSave(user.id, completePerms, fullControlModes);
     }, [user.id, permissions, onSave]);
 
     if (!isOpen) return null;
@@ -423,7 +513,7 @@ export function GrantAccessModal({
                     backgroundColor: 'white',
                     borderRadius: '20px',
                     width: '100%',
-                    maxWidth: '820px',
+                    maxWidth: '880px',
                     maxHeight: '92vh',
                     display: 'flex',
                     flexDirection: 'column',
@@ -532,7 +622,9 @@ export function GrantAccessModal({
                         {isAllSelected ? (
                             <CheckSquare size={16} style={{ color: '#1e3a8a' }} />
                         ) : isSomeSelected ? (
-                            <Minus size={16} style={{ color: '#6b7280', border: '2px solid #6b7280', borderRadius: '3px', padding: '0px' }} />
+                            <div style={{ width: '16px', height: '16px', borderRadius: '3px', border: '2px solid #6b7280', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <Minus size={10} style={{ color: '#6b7280' }} />
+                            </div>
                         ) : (
                             <Square size={16} style={{ color: '#9ca3af' }} />
                         )}
@@ -540,6 +632,7 @@ export function GrantAccessModal({
                     </button>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+
                         {/* Action Legends */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                             {(['view', 'create', 'edit', 'delete'] as PermissionAction[]).map(action => {
@@ -590,6 +683,8 @@ export function GrantAccessModal({
                         const isExpanded = expandedModules.has(mod.id);
                         const modGranted = getModuleGrantedCount(mod);
                         const modTotal = getModulePermissionKeys(mod).length;
+                        const moduleMode = getModuleOverrideMode(mod);
+                        const isFullControl = moduleMode === 'full_control';
 
                         return (
                             <div
@@ -698,6 +793,8 @@ export function GrantAccessModal({
                                         </div>
                                     </div>
 
+
+
                                     {/* Action Checkboxes (for modules WITHOUT submodules) */}
                                     {!hasSubmodules && (
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -706,7 +803,6 @@ export function GrantAccessModal({
                                                 const key = `${mod.id}.${action}`;
                                                 const isChecked = !!permissions[key];
                                                 const meta = ACTION_META[action];
-                                                const ActionIcon = meta.icon;
 
                                                 if (!applicable) {
                                                     return (
@@ -723,13 +819,15 @@ export function GrantAccessModal({
                                                     <button
                                                         key={action}
                                                         onClick={() => togglePermission(key)}
+                                                        title={`Toggle ${meta.label}`}
                                                         style={{
                                                             display: 'flex', alignItems: 'center', gap: '5px',
                                                             padding: '6px 10px',
                                                             border: `1.5px solid ${isChecked ? meta.color : '#e5e7eb'}`,
                                                             borderRadius: '8px',
                                                             backgroundColor: isChecked ? meta.bgColor : 'white',
-                                                            cursor: 'pointer', fontSize: '11px', fontWeight: '600',
+                                                            cursor: 'pointer',
+                                                            fontSize: '11px', fontWeight: '600',
                                                             color: isChecked ? meta.color : '#9ca3af',
                                                             transition: 'all 0.15s',
                                                             minWidth: '72px', justifyContent: 'center',
@@ -755,6 +853,8 @@ export function GrantAccessModal({
                                         </div>
                                     )}
                                 </div>
+
+
 
                                 {/* ───── SUBMODULES ───── */}
                                 {hasSubmodules && (
@@ -837,7 +937,6 @@ export function GrantAccessModal({
                                                             const key = `${mod.id}.${sub.id}.${action}`;
                                                             const isChecked = !!permissions[key];
                                                             const meta = ACTION_META[action];
-                                                            const ActionIcon = meta.icon;
 
                                                             if (!applicable) {
                                                                 return (
@@ -854,13 +953,15 @@ export function GrantAccessModal({
                                                                 <button
                                                                     key={action}
                                                                     onClick={() => togglePermission(key)}
+                                                                    title={`Toggle ${meta.label}`}
                                                                     style={{
                                                                         display: 'flex', alignItems: 'center', gap: '4px',
                                                                         padding: '5px 9px',
                                                                         border: `1.5px solid ${isChecked ? meta.color : '#e5e7eb'}`,
                                                                         borderRadius: '7px',
                                                                         backgroundColor: isChecked ? meta.bgColor : 'white',
-                                                                        cursor: 'pointer', fontSize: '11px', fontWeight: '600',
+                                                                        cursor: 'pointer',
+                                                                        fontSize: '11px', fontWeight: '600',
                                                                         color: isChecked ? meta.color : '#9ca3af',
                                                                         transition: 'all 0.15s',
                                                                         minWidth: '72px', justifyContent: 'center',
@@ -960,6 +1061,8 @@ export function GrantAccessModal({
                         </div>
                     </div>
 
+
+
                     {/* Warning if full access */}
                     {isAllSelected && (
                         <div style={{
@@ -1028,7 +1131,8 @@ export function GrantAccessModal({
                         from { opacity: 0; transform: translateY(20px) scale(0.97); }
                         to { opacity: 1; transform: translateY(0) scale(1); }
                     }
-                `}</style>
+                `}
+                </style>
             </div>
         </div>
     );

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/Version-0.3.2-blue?style=for-the-badge" alt="Version" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Version-0.4.0-blue?style=for-the-badge" alt="Version" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Status-Active_Development-brightgreen?style=for-the-badge" alt="Status" /></a>
   <a href="#"><img src="https://img.shields.io/badge/License-Proprietary-red?style=for-the-badge" alt="License" /></a>
   <a href="#"><img src="https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=white" alt="React" /></a>
@@ -65,8 +65,8 @@ The **Warehouse Management System (WMS)** is a type-safe, real-time application 
 | **📋 Blanket Orders** | Comprehensive handling of long-term customer contracts with order line items. |
 | **📅 Blanket Releases** | Delivery scheduling against blanket orders with automatic inventory deduction upon delivery. |
 | **📈 Demand Forecasting** | Advanced demand prediction using Holt-Winters algorithm with trend and seasonality analysis. |
-| **🔧 MRP ** | Automated replenishment recommendations based on lead times, safety stock levels, and forecast data. |
-| **👥 User Management** | Role-based access control (L1 Operator, L2 Supervisor, L3 Manager) with account activation/deactivation. |
+| **🔧 MRP Planning** | Automated replenishment recommendations based on lead times, safety stock levels, and forecast data. |
+| **👥 User Management** | Role-based access control (L1 Operator, L2 Supervisor, L3 Manager) with **granular per-user permissions** and account activation/deactivation. |
 | **🔔 Notifications** | Real-time notification bell with alerts for stock movements, approvals, and system events. |
 
 ---
@@ -182,14 +182,16 @@ WarehouseManagementSystem/
     │   ├── index.ts             # Auth barrel exports
     │   ├── components/          # Auth-specific UI components
     │   │   ├── ProtectedRoute.tsx
-    │   │   └── RoleBadge.tsx
+    │   │   ├── RoleBadge.tsx
+    │   │   └── GrantAccessModal.tsx  # Granular RBAC permission editor
     │   ├── context/             # Auth context provider
     │   │   └── AuthContext.tsx
     │   ├── login/               # Login page component
     │   │   └── LoginPage.tsx
     │   ├── services/            # Auth service layer
     │   │   ├── authService.ts
-    │   │   └── userService.ts
+    │   │   ├── userService.ts
+    │   │   └── permissionService.ts  # DB-backed granular RBAC engine
     │   └── users/               # User management module
     │       └── UserManagement.tsx
     │
@@ -431,11 +433,38 @@ chore(deps): upgrade React to v18.3.1
 
 ### Role-Based Access Control (RBAC)
 
-| Role | Level | Permissions |
+| Role | Level | Default Permissions |
 | :--- | :--- | :--- |
-| **Operator** | L1 | View data, create stock movements |
-| **Supervisor** | L2 | L1 + approve/reject movements, edit items, manage packing |
-| **Manager** | L3 | L2 + user management, full system administration |
+| **Operator** | L1 | View data only (no create/edit/delete by default) |
+| **Supervisor** | L2 | L1 + create stock movements, manage packing |
+| **Manager** | L3 | **Full access to everything — always** |
+
+### Granular Permission System (v0.4.0)
+
+The system now supports **granular per-user permissions** that override role defaults:
+
+- **L3 (Manager)** can grant or restrict specific permissions for **L1** and **L2** users via the **Grant Access Modal**
+- Permissions are stored in the `user_permissions` table with `override_mode = 'full_control'`
+- The `get_effective_permissions()` PostgreSQL function merges role defaults with user-specific overrides
+- Frontend reads permissions via the `permissionService.ts` engine, controlled by the `permission_source` feature flag in `system_settings`
+
+**Permission Keys** follow the pattern `module.action` (e.g., `items.create`, `stock-movements.edit`):
+
+| Module | Permission Keys |
+| :--- | :--- |
+| Item Master | `items.view`, `items.create`, `items.edit`, `items.delete` |
+| Stock Movements | `stock-movements.view`, `stock-movements.create`, `stock-movements.edit`, `stock-movements.delete` |
+| Packing Details | `packing.packing-details.view`, `.create`, `.edit`, `.delete` |
+| Packing Sticker | `packing.sticker-generation.view`, `.create`, `.edit` |
+| Inventory | `inventory.view`, `inventory.create`, `inventory.edit` |
+| Dashboard | `dashboard.view` |
+| Orders | `orders.view`, `orders.create`, `orders.edit`, `orders.delete` |
+| Releases | `releases.view`, `releases.create`, `releases.edit`, `releases.delete` |
+| Forecasting | `forecast.view`, `forecast.create`, `forecast.edit` |
+| MRP Planning | `planning.view`, `planning.create`, `planning.edit` |
+| User Management | `users.view`, `users.create`, `users.edit`, `users.delete` |
+
+For the complete database RBAC reference, see [`docs/readme/DB_RBAC_REFERENCE.md`](docs/readme/DB_RBAC_REFERENCE.md).
 
 ### Security Best Practices
 
@@ -443,6 +472,7 @@ chore(deps): upgrade React to v18.3.1
 - ✅ Database-level constraints and triggers
 - ✅ Row Level Security (RLS) on Supabase tables
 - ✅ JWT validation on all edge function endpoints
+- ✅ Granular per-user permission overrides (DB-backed)
 - ✅ Input sanitisation and validation
 - ✅ No hardcoded secrets in source code
 - ✅ Mutable search path fixes applied to all database functions
@@ -465,9 +495,13 @@ The system uses a relational PostgreSQL schema with the following core tables:
 | `packing_boxes` | Individual box records with PKG IDs |
 | `packing_audit_log` | Packing operation audit trail |
 | `packing_details` | Packing dimension/specification templates |
+| `user_permissions` | Granular per-user permission overrides |
+| `module_registry` | Registry of all WMS modules for RBAC |
+| `system_settings` | Feature flags (e.g., `permission_source`) |
 
-Database migrations are stored in `config/` and `.db_reference/`.  
-Full schema documentation is available at [`docs/readme/DATABASE_SCHEMA.md`](docs/readme/DATABASE_SCHEMA.md).
+Database migrations are stored in `.db_reference/migrations/`.  
+Full schema documentation is available at [`docs/readme/DATABASE_SCHEMA.md`](docs/readme/DATABASE_SCHEMA.md).  
+RBAC database reference is at [`docs/readme/DB_RBAC_REFERENCE.md`](docs/readme/DB_RBAC_REFERENCE.md).
 
 ---
 
@@ -548,7 +582,7 @@ MAJOR.MINOR.PATCH
 | **MINOR** | New features, backwards-compatible |
 | **PATCH** | Bug fixes and minor improvements |
 
-**Current Version:** `v0.3.2`
+**Current Version:** `v0.4.0`
 
 ---
 
