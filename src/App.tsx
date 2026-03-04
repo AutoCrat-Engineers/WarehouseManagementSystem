@@ -13,6 +13,7 @@ import { PlanningModule } from './components/PlanningModule';
 import { StockMovement } from './components/StockMovement';
 import { RackView } from './components/RackView';
 import { PackingModule, PackingDetails, PackingListInvoice, PackingListSubInvoice } from './components/packing';
+import { PalletDashboard, ContractConfigManager, DispatchSelection, PackingListManager, PackingListPrint, TraceabilityViewer } from './components/packing-engine';
 import { LoadingPage } from './components/LoadingPage';
 import { UserManagement } from './auth/users/UserManagement';
 import { NotificationBell } from './components/notifications/NotificationBell';
@@ -43,7 +44,12 @@ import {
   FileMinus,
   Lock,
   Unlock,
-  Grid3X3
+  Grid3X3,
+  Layers,
+  Settings,
+  Truck,
+  Receipt,
+  Eye,
 } from 'lucide-react';
 
 declare const __APP_VERSION__: string;
@@ -55,7 +61,7 @@ const compactLogoImage = '/a-logo.png';
 // User role type for RBAC
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
-type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'rack-view' | 'packing' | 'packing-sticker' | 'packing-details' | 'packing-list-invoice' | 'packing-list-sub-invoice' | 'users';
+type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'rack-view' | 'packing' | 'packing-sticker' | 'packing-details' | 'packing-list-invoice' | 'packing-list-sub-invoice' | 'pe-pallet-dashboard' | 'pe-contract-configs' | 'pe-dispatch' | 'pe-pl-print' | 'pe-traceability' | 'users';
 
 interface MenuItem {
   id: View;
@@ -66,7 +72,7 @@ interface MenuItem {
 }
 
 // All packing sub-views (used to determine if packing accordion is active)
-const PACKING_SUB_VIEWS: View[] = ['packing', 'packing-sticker', 'packing-details', 'packing-list-invoice', 'packing-list-sub-invoice'];
+const PACKING_SUB_VIEWS: View[] = ['packing', 'packing-sticker', 'packing-details', 'packing-list-invoice', 'packing-list-sub-invoice', 'pe-pallet-dashboard', 'pe-contract-configs', 'pe-dispatch', 'pe-pl-print', 'pe-traceability'];
 
 // Meta for packing sub-views (displayed in the header bar)
 const PACKING_VIEW_META: Record<string, { label: string; description: string }> = {
@@ -75,6 +81,11 @@ const PACKING_VIEW_META: Record<string, { label: string; description: string }> 
   'packing-details': { label: 'Packing — Details', description: 'Packing Specifications' },
   'packing-list-invoice': { label: 'Packing List — Against Invoice', description: 'Packing by Invoice' },
   'packing-list-sub-invoice': { label: 'Packing List — Against Sub Invoice', description: 'Packing by Sub Invoice' },
+  'pe-pallet-dashboard': { label: 'Pallet Dashboard', description: 'Real-time Pallet Readiness' },
+  'pe-contract-configs': { label: 'Contract Configs', description: 'Contract Packing Rules' },
+  'pe-dispatch': { label: 'Dispatch Selection', description: 'Select Pallets for Dispatch' },
+  'pe-pl-print': { label: 'Master Packing List', description: 'Packing List Data Entry, Print & Reference' },
+  'pe-traceability': { label: 'Traceability', description: 'Full Backward Trace' },
 };
 
 const menuItems: MenuItem[] = [
@@ -136,6 +147,11 @@ export default function App() {
     'packing-details': 'packing.packing-details.view',
     'packing-list-invoice': 'packing.packing-list-invoice.view',
     'packing-list-sub-invoice': 'packing.packing-list-sub-invoice.view',
+    'pe-pallet-dashboard': 'packing.pallet-dashboard.view',
+    'pe-contract-configs': 'packing.contract-configs.view',
+    'pe-dispatch': 'packing.dispatch.view',
+    'pe-pl-print': 'packing.pl-print.view',
+    'pe-traceability': 'packing.traceability.view',
     'orders': 'orders.view',
     'releases': 'releases.view',
     'forecast': 'forecast.view',
@@ -409,6 +425,21 @@ export default function App() {
       case 'packing-list-sub-invoice':
         if (!canAccessView('packing-list-sub-invoice')) return renderAccessDenied('Packing List — Sub Invoice');
         return <PackingListSubInvoice accessToken={accessToken} userRole={userRole} onNavigate={(v) => setCurrentView(v as View)} />;
+      case 'pe-pallet-dashboard':
+        if (!canAccessView('pe-pallet-dashboard')) return renderAccessDenied('Pallet Dashboard');
+        return <PalletDashboard accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
+      case 'pe-contract-configs':
+        if (!canAccessView('pe-contract-configs')) return renderAccessDenied('Contract Configs');
+        return <ContractConfigManager accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
+      case 'pe-dispatch':
+        if (!canAccessView('pe-dispatch')) return renderAccessDenied('Dispatch Selection');
+        return <DispatchSelection accessToken={accessToken} userRole={userRole} userPerms={userPerms} onNavigate={(v) => handleNavigation(v as View)} />;
+      case 'pe-traceability':
+        if (!canAccessView('pe-traceability')) return renderAccessDenied('Traceability');
+        return <TraceabilityViewer accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
+      case 'pe-pl-print':
+        if (!canAccessView('pe-pl-print')) return renderAccessDenied('PL Print & Data');
+        return <PackingListPrint accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
       case 'orders':
         if (!canAccessView('orders')) return renderAccessDenied('Blanket Orders');
         return <BlanketOrders accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
@@ -484,7 +515,13 @@ export default function App() {
               userPerms['packing.sticker-generation.view'] ||
               userPerms['packing.packing-details.view'] ||
               userPerms['packing.packing-list-invoice.view'] ||
-              userPerms['packing.packing-list-sub-invoice.view']
+              userPerms['packing.packing-list-sub-invoice.view'] ||
+              userPerms['packing.pallet-dashboard.view'] ||
+              userPerms['packing.contract-configs.view'] ||
+              userPerms['packing.dispatch.view'] ||
+              userPerms['packing.packing-lists.view'] ||
+              userPerms['packing.pl-print.view'] ||
+              userPerms['packing.traceability.view']
             );
           }
           return canAccessView(item.id);
@@ -720,7 +757,7 @@ export default function App() {
 
                     {/* ─── Level-1 Sub-items (only when expanded) ─── */}
                     <div style={{
-                      maxHeight: (packingMenuOpen && sidebarExpanded) ? '400px' : '0',
+                      maxHeight: (packingMenuOpen && sidebarExpanded) ? '800px' : '0',
                       overflow: 'hidden',
                       transition: 'max-height 300ms ease',
                       backgroundColor: 'rgba(30, 58, 138, 0.02)',
@@ -847,6 +884,118 @@ export default function App() {
                           </div>
                         </>
                       )}
+
+                      {/* ─── PACKING ENGINE: New Views ─── */}
+                      <div style={{ borderTop: '1px solid rgba(30, 58, 138, 0.08)', marginTop: 4, paddingTop: 4 }}>
+                        <div style={{ padding: '4px 24px 2px 44px', fontSize: 10, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
+                          {sidebarExpanded ? 'Execution Engine' : ''}
+                        </div>
+
+                        {/* Pallet Dashboard */}
+                        {canAccessView('pe-pallet-dashboard') && (
+                          <button
+                            onClick={() => handleNavigation('pe-pallet-dashboard')}
+                            style={{
+                              width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                              padding: '9px 24px 9px 44px', border: 'none',
+                              backgroundColor: currentView === 'pe-pallet-dashboard' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                              borderLeft: currentView === 'pe-pallet-dashboard' ? '3px solid #1e3a8a' : '3px solid transparent',
+                              color: currentView === 'pe-pallet-dashboard' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
+                              textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
+                              fontWeight: currentView === 'pe-pallet-dashboard' ? '600' : '400', fontSize: '13px',
+                            }}
+                            onMouseEnter={(e) => { if (currentView !== 'pe-pallet-dashboard') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                            onMouseLeave={(e) => { if (currentView !== 'pe-pallet-dashboard') e.currentTarget.style.backgroundColor = 'transparent'; }}
+                          >
+                            <Layers size={15} strokeWidth={currentView === 'pe-pallet-dashboard' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-pallet-dashboard' ? 1 : 0.6 }} />
+                            <span>Pallet Dashboard</span>
+                          </button>
+                        )}
+
+                        {/* Contract Configs */}
+                        {canAccessView('pe-contract-configs') && (
+                          <button
+                            onClick={() => handleNavigation('pe-contract-configs')}
+                            style={{
+                              width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                              padding: '9px 24px 9px 44px', border: 'none',
+                              backgroundColor: currentView === 'pe-contract-configs' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                              borderLeft: currentView === 'pe-contract-configs' ? '3px solid #1e3a8a' : '3px solid transparent',
+                              color: currentView === 'pe-contract-configs' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
+                              textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
+                              fontWeight: currentView === 'pe-contract-configs' ? '600' : '400', fontSize: '13px',
+                            }}
+                            onMouseEnter={(e) => { if (currentView !== 'pe-contract-configs') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                            onMouseLeave={(e) => { if (currentView !== 'pe-contract-configs') e.currentTarget.style.backgroundColor = 'transparent'; }}
+                          >
+                            <Settings size={15} strokeWidth={currentView === 'pe-contract-configs' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-contract-configs' ? 1 : 0.6 }} />
+                            <span>Contract Configs</span>
+                          </button>
+                        )}
+
+                        {/* Dispatch Selection */}
+                        {canAccessView('pe-dispatch') && (
+                          <button
+                            onClick={() => handleNavigation('pe-dispatch')}
+                            style={{
+                              width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                              padding: '9px 24px 9px 44px', border: 'none',
+                              backgroundColor: currentView === 'pe-dispatch' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                              borderLeft: currentView === 'pe-dispatch' ? '3px solid #1e3a8a' : '3px solid transparent',
+                              color: currentView === 'pe-dispatch' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
+                              textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
+                              fontWeight: currentView === 'pe-dispatch' ? '600' : '400', fontSize: '13px',
+                            }}
+                            onMouseEnter={(e) => { if (currentView !== 'pe-dispatch') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                            onMouseLeave={(e) => { if (currentView !== 'pe-dispatch') e.currentTarget.style.backgroundColor = 'transparent'; }}
+                          >
+                            <Truck size={15} strokeWidth={currentView === 'pe-dispatch' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-dispatch' ? 1 : 0.6 }} />
+                            <span>Dispatch Selection</span>
+                          </button>
+                        )}
+
+                        {/* Master Packing List */}
+                        {canAccessView('pe-pl-print') && (
+                          <button
+                            onClick={() => handleNavigation('pe-pl-print')}
+                            style={{
+                              width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                              padding: '9px 24px 9px 44px', border: 'none',
+                              backgroundColor: currentView === 'pe-pl-print' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                              borderLeft: currentView === 'pe-pl-print' ? '3px solid #1e3a8a' : '3px solid transparent',
+                              color: currentView === 'pe-pl-print' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
+                              textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
+                              fontWeight: currentView === 'pe-pl-print' ? '600' : '400', fontSize: '13px',
+                            }}
+                            onMouseEnter={(e) => { if (currentView !== 'pe-pl-print') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                            onMouseLeave={(e) => { if (currentView !== 'pe-pl-print') e.currentTarget.style.backgroundColor = 'transparent'; }}
+                          >
+                            <Printer size={15} strokeWidth={currentView === 'pe-pl-print' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-pl-print' ? 1 : 0.6 }} />
+                            <span>Master Packing List</span>
+                          </button>
+                        )}
+
+                        {/* Traceability */}
+                        {canAccessView('pe-traceability') && (
+                          <button
+                            onClick={() => handleNavigation('pe-traceability')}
+                            style={{
+                              width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                              padding: '9px 24px 9px 44px', border: 'none',
+                              backgroundColor: currentView === 'pe-traceability' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                              borderLeft: currentView === 'pe-traceability' ? '3px solid #1e3a8a' : '3px solid transparent',
+                              color: currentView === 'pe-traceability' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
+                              textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
+                              fontWeight: currentView === 'pe-traceability' ? '600' : '400', fontSize: '13px',
+                            }}
+                            onMouseEnter={(e) => { if (currentView !== 'pe-traceability') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                            onMouseLeave={(e) => { if (currentView !== 'pe-traceability') e.currentTarget.style.backgroundColor = 'transparent'; }}
+                          >
+                            <Eye size={15} strokeWidth={currentView === 'pe-traceability' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-traceability' ? 1 : 0.6 }} />
+                            <span>Traceability</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );

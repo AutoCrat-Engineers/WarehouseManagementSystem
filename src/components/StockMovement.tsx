@@ -42,6 +42,8 @@ import {
 import { getSupabaseClient } from '../utils/supabase/client';
 import { createPackingFromMovementApproval, createPackingFromMovementRejection } from './packing/packingService';
 import { notifyOnRequestCreated, notifyOnRequestDecision } from '../utils/notifications/notificationService';
+import { calculatePalletImpact } from './packing-engine/packingEngineService';
+import type { PalletImpact } from './packing-engine/packingEngineService';
 
 // ============================================================================
 // TYPES
@@ -298,7 +300,12 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   const [innerBoxQty, setInnerBoxQty] = useState<number>(0);
   const [loadingPackingSpec, setLoadingPackingSpec] = useState(false);
   const [packingSpecError, setPackingSpecError] = useState<string | null>(null);
+  // Pallet intelligence state
+  const [palletImpact, setPalletImpact] = useState<PalletImpact | null>(null);
+  const [loadingPalletImpact, setLoadingPalletImpact] = useState(false);
+  const [adjustmentAcknowledged, setAdjustmentAcknowledged] = useState(false);
   const noteRef = useRef<HTMLTextAreaElement>(null);
+  const palletImpactTimer = useRef<any>(null);
   const [submitting, setSubmitting] = useState(false);
   const [formMessage, setFormMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -317,8 +324,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   const [approvedQty, setApprovedQty] = useState<number>(0);
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [reviewReasonCode, setReviewReasonCode] = useState<ReasonCode | null>(null);
-  // Box breakdown info for review modal (Production Receipt only)
-  const [reviewBoxInfo, setReviewBoxInfo] = useState<{ boxes: number; perBox: number; total: number } | null>(null);
+  const [reviewBoxInfo, setReviewBoxInfo] = useState<{ boxes: number; perBox: number; total: number; adjQty?: number; adjIncluded?: boolean } | null>(null);
 
   // Toast notification state
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; title: string; text: string } | null>(null);
@@ -643,6 +649,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
     setNote(''); setNotePrefix(''); setFormMessage(null);
     setSelectedCategory(''); setReferenceType(''); setReferenceId('');
     setBoxCount(0); setInnerBoxQty(0); setPackingSpecError(null);
+    setPalletImpact(null); setAdjustmentAcknowledged(false);
   };
 
   const openModal = () => { resetForm(); setShowModal(true); };
@@ -654,8 +661,18 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
 
   const handleSubmitRequest = async () => {
     // For PRODUCTION_RECEIPT, calculate quantity from boxes × inner qty
+    // When pallet engine auto-includes adjustment box, use the adjusted total
     const isProductionReceipt = selectedRoute?.movementType === 'PRODUCTION_RECEIPT';
-    const finalQty = isProductionReceipt ? (boxCount * innerBoxQty) : quantity;
+    const finalQty = isProductionReceipt
+      ? (palletImpact?.adjustmentBoxIncluded ? palletImpact.adjustedTotalQty : (boxCount * innerBoxQty))
+      : quantity;
+
+    // ENFORCEMENT: Block if adjustment box is required but not acknowledged
+    if (isProductionReceipt && palletImpact?.mustCreateAdjustmentFirst && !adjustmentAcknowledged) {
+      setFormMessage({ type: 'error', text: `Cannot submit: You must acknowledge the adjustment box requirement (${palletImpact.adjustmentBoxQty} PCS) to complete the current pallet before starting a new one.` });
+      showToast('error', 'Pallet Completion Required', `Create the adjustment box of ${palletImpact.adjustmentBoxQty} PCS first.`);
+      return;
+    }
 
     if (!selectedItem || !stockType || !selectedWarehouse || !selectedRoute || finalQty <= 0) {
       setFormMessage({ type: 'error', text: isProductionReceipt ? 'Please fill all required fields. Ensure box count and inner qty are valid.' : 'Please fill all required fields.' });
@@ -800,15 +817,31 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
       try {
         const { data: spec } = await supabase
           .from('packing_specifications')
-          .select('inner_box_quantity')
+          .select('inner_box_quantity, outer_box_quantity')
           .eq('item_code', m.item_code)
           .eq('is_active', true)
           .single();
         if (spec && spec.inner_box_quantity > 0) {
           const reqQty = m.requested_quantity || 0;
           const perBox = spec.inner_box_quantity;
-          const boxes = Math.round(reqQty / perBox);
-          setReviewBoxInfo({ boxes, perBox, total: reqQty });
+          const outerQty = spec.outer_box_quantity || 0;
+          const adjQty = outerQty > 0 ? outerQty % perBox : 0;
+          // Check if this movement includes an adjustment box
+          const totalBoxes = Math.round(reqQty / perBox);
+          // If total doesn't divide evenly and the remainder equals adjQty, adj is included
+          const remainder = reqQty - (totalBoxes * perBox);
+          const adjIncluded = adjQty > 0 && remainder !== 0 && Math.abs(remainder - adjQty + (totalBoxes * perBox) - reqQty) < 1;
+          // Simple heuristic: if reqQty != boxes*perBox, adjustment is likely included
+          const exactBoxes = Math.floor(reqQty / perBox);
+          const leftoverQty = reqQty - (exactBoxes * perBox);
+          const hasAdj = adjQty > 0 && leftoverQty === adjQty;
+          setReviewBoxInfo({
+            boxes: hasAdj ? exactBoxes : totalBoxes,
+            perBox,
+            total: reqQty,
+            adjQty: hasAdj ? adjQty : undefined,
+            adjIncluded: hasAdj,
+          });
         }
       } catch {
         // Non-critical — box breakdown just won't show
@@ -1983,11 +2016,18 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                       <div>
                         <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 4 }}>Total Quantity</div>
                         <div style={{ fontSize: 18, fontWeight: 700, color: boxCount > 0 ? '#16a34a' : '#9ca3af' }}>
-                          {boxCount > 0 ? `${boxCount * innerBoxQty} PCS` : '—'}
+                          {boxCount > 0
+                            ? palletImpact?.adjustmentBoxIncluded
+                              ? `${palletImpact.adjustedTotalQty.toLocaleString()} PCS`
+                              : `${(boxCount * innerBoxQty).toLocaleString()} PCS`
+                            : '—'}
                         </div>
                         {boxCount > 0 && (
-                          <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
-                            {boxCount} box(es) × {innerBoxQty} PCS = {boxCount * innerBoxQty} PCS
+                          <div style={{ fontSize: 11, color: palletImpact?.adjustmentBoxIncluded ? '#b45309' : '#6b7280', marginTop: 2, fontWeight: palletImpact?.adjustmentBoxIncluded ? 600 : 400 }}>
+                            {palletImpact?.adjustmentBoxIncluded
+                              ? palletImpact.breakdownText
+                              : `${boxCount} × ${innerBoxQty} = ${(boxCount * innerBoxQty).toLocaleString()} PCS`
+                            }
                           </div>
                         )}
                       </div>
@@ -2014,6 +2054,26 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                         const val = parseInt(e.target.value) || 0;
                         setBoxCount(val);
                         setQuantity(val * innerBoxQty);
+                        setAdjustmentAcknowledged(false);
+                        // Debounced pallet impact calculation
+                        if (palletImpactTimer.current) clearTimeout(palletImpactTimer.current);
+                        if (val > 0 && selectedItem) {
+                          setLoadingPalletImpact(true);
+                          palletImpactTimer.current = setTimeout(async () => {
+                            try {
+                              const impact = await calculatePalletImpact(selectedItem.item_code, val);
+                              setPalletImpact(impact);
+                            } catch (err: any) {
+                              console.warn('[PalletImpact] Calculation failed:', err.message);
+                              setPalletImpact(null);
+                            } finally {
+                              setLoadingPalletImpact(false);
+                            }
+                          }, 400);
+                        } else {
+                          setPalletImpact(null);
+                          setLoadingPalletImpact(false);
+                        }
                       }}
                       placeholder="Enter number of boxes"
                       style={mInputStyle}
@@ -2028,6 +2088,148 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                   </div>
                 )}
               </div>
+
+              {/* ═══════════════ PALLET INTELLIGENCE PANEL ═══════════════ */}
+              {selectedRoute?.movementType === 'PRODUCTION_RECEIPT' && boxCount > 0 && (
+                <div style={{
+                  padding: '14px 16px', borderRadius: '10px',
+                  background: palletImpact?.mustCreateAdjustmentFirst
+                    ? 'linear-gradient(135deg, #fef2f2, #fee2e2)'
+                    : palletImpact?.adjustmentBoxRequired
+                      ? 'linear-gradient(135deg, #fffbeb, #fef3c7)'
+                      : 'linear-gradient(135deg, #f0fdf4, #dcfce7)',
+                  border: `1.5px solid ${palletImpact?.mustCreateAdjustmentFirst ? '#fca5a5'
+                    : palletImpact?.adjustmentBoxRequired ? '#fcd34d'
+                      : '#86efac'
+                    }`,
+                }}>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10,
+                    fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px',
+                    color: palletImpact?.mustCreateAdjustmentFirst ? '#991b1b'
+                      : palletImpact?.adjustmentBoxRequired ? '#92400e' : '#166534',
+                  }}>
+                    <Package size={15} />
+                    Pallet Intelligence
+                    {loadingPalletImpact && (
+                      <span style={{ display: 'inline-block', width: 12, height: 12, border: '2px solid #93c5fd', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite', marginLeft: 4 }} />
+                    )}
+                  </div>
+
+                  {palletImpact && !loadingPalletImpact && (
+                    <>
+                      {/* Current Pallet Status */}
+                      {palletImpact.currentPallet && (
+                        <div style={{
+                          display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12,
+                          padding: '10px 12px', borderRadius: 8, background: 'rgba(255,255,255,0.7)',
+                          marginBottom: 10,
+                        }}>
+                          <div>
+                            <div style={{ fontSize: 10, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase' }}>Pallet</div>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: '#1e3a8a', fontFamily: 'monospace' }}>{palletImpact.currentPallet.pallet_number}</div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 10, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase' }}>Fill</div>
+                            <div style={{ fontSize: 13, fontWeight: 700 }}>
+                              {palletImpact.currentPallet.containers_filled}/{palletImpact.total_containers_per_pallet}
+                              <span style={{ fontSize: 10, fontWeight: 500, color: '#6b7280' }}> containers</span>
+                            </div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 10, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase' }}>Qty</div>
+                            <div style={{ fontSize: 13, fontWeight: 700 }}>
+                              {palletImpact.currentPallet.current_qty.toLocaleString()}/{palletImpact.currentPallet.target_qty.toLocaleString()}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 10, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase' }}>Need</div>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: '#dc2626' }}>
+                              {palletImpact.currentPallet.containers_needed} box + {palletImpact.adjustment_qty_per_pallet > 0 ? `1×${palletImpact.adjustment_qty_per_pallet}` : '0'} adj
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Movement Breakdown */}
+                      <div style={{
+                        padding: '10px 12px', borderRadius: 8, background: 'rgba(255,255,255,0.6)',
+                        marginBottom: 8,
+                      }}>
+                        <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>Movement Breakdown</div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: '#1e3a8a', fontFamily: 'monospace' }}>
+                          {palletImpact.breakdownText}
+                        </div>
+                        {palletImpact.adjustmentBoxIncluded && (
+                          <div style={{ fontSize: 11, color: '#b45309', fontWeight: 600, marginTop: 4 }}>
+                            ⚡ 1 box auto-converted to adjustment ({palletImpact.adjustmentBoxQty} PCS)
+                          </div>
+                        )}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8, fontSize: 12 }}>
+                          <div>
+                            <span style={{ color: '#6b7280' }}>→ Current Pallet: </span>
+                            <strong>{palletImpact.boxesToCurrentPallet} inner</strong>
+                            {palletImpact.adjustmentBoxIncluded && <strong style={{ color: '#b45309' }}> + 1 adj</strong>}
+                            <span style={{ color: '#6b7280' }}>
+                              {' '}({(palletImpact.boxesToCurrentPallet * palletImpact.inner_box_qty) + (palletImpact.adjustmentBoxIncluded ? palletImpact.adjustmentBoxQty : 0)} PCS)
+                            </span>
+                          </div>
+                          {palletImpact.boxesToNewPallet > 0 && (
+                            <div>
+                              <span style={{ color: '#6b7280' }}>→ New Pallet: </span>
+                              <strong style={{ color: '#1e40af' }}>{palletImpact.boxesToNewPallet} inner</strong>
+                              <span style={{ color: '#6b7280' }}> ({palletImpact.boxesToNewPallet * palletImpact.inner_box_qty} PCS)</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Warnings */}
+                      {palletImpact.warnings.map((w, i) => (
+                        <div key={i} style={{
+                          padding: '8px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                          marginBottom: 6,
+                          background: palletImpact.mustCreateAdjustmentFirst ? '#fee2e2' : '#fef3c7',
+                          color: palletImpact.mustCreateAdjustmentFirst ? '#991b1b' : '#78350f',
+                          border: `1px solid ${palletImpact.mustCreateAdjustmentFirst ? '#fca5a5' : '#fde68a'}`,
+                          lineHeight: 1.4,
+                        }}>
+                          {w}
+                        </div>
+                      ))}
+
+                      {/* ENFORCEMENT: Acknowledgment checkbox */}
+                      {palletImpact.mustCreateAdjustmentFirst && (
+                        <label style={{
+                          display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer',
+                          marginTop: 8, padding: '10px 12px', borderRadius: 8,
+                          background: adjustmentAcknowledged ? '#dcfce7' : '#fee2e2',
+                          border: `1.5px solid ${adjustmentAcknowledged ? '#86efac' : '#fca5a5'}`,
+                          transition: 'all 0.2s ease',
+                        }}>
+                          <input
+                            type="checkbox"
+                            checked={adjustmentAcknowledged}
+                            onChange={e => setAdjustmentAcknowledged(e.target.checked)}
+                            style={{ width: 18, height: 18, accentColor: '#16a34a', marginTop: 2, flexShrink: 0 }}
+                          />
+                          <span style={{ fontSize: 12, fontWeight: 600, color: adjustmentAcknowledged ? '#166534' : '#991b1b', lineHeight: 1.4 }}>
+                            I confirm that an adjustment box of <strong>{palletImpact.adjustmentBoxQty} PCS</strong> will be
+                            created during packing to complete{' '}
+                            <strong>{palletImpact.currentPallet?.pallet_number || 'the current pallet'}</strong> before
+                            starting a new pallet. The system will auto-generate this box.
+                          </span>
+                        </label>
+                      )}
+
+                      {/* Summary */}
+                      <div style={{ marginTop: 6, fontSize: 11, color: '#6b7280', fontStyle: 'italic' }}>
+                        {palletImpact.palletSummary}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
 
               {/* Row 2: Reference Type + Reference ID (mandatory) */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
@@ -2400,55 +2602,73 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
               </div>
 
               {/* ══════════ SECTION 3.5: BOX BREAKDOWN (Production Receipt only) ══════════ */}
-              {reviewMovement.movement_type === 'PRODUCTION_RECEIPT' && reviewBoxInfo && (
+              {reviewMovement.movement_type === 'PRODUCTION_RECEIPT' && reviewBoxInfo && reviewBoxInfo.boxes > 0 && (
                 <div style={{ padding: '16px 0', borderBottom: '1px solid #f0f2f5' }}>
                   <div style={{ ...labelStyle, marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <Package size={13} style={{ color: '#1e3a8a' }} />
                     Box Breakdown
                   </div>
                   <div style={{
-                    display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr',
-                    alignItems: 'center',
                     background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)',
                     borderRadius: '10px', border: '1px solid #bfdbfe',
                     padding: '16px 20px',
                   }}>
-                    {/* Boxes */}
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{
-                        fontSize: '11px', fontWeight: 700, color: '#6b7a8d',
-                        textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px',
-                      }}>No. of Boxes</div>
-                      <div style={{ fontSize: '28px', fontWeight: 800, color: '#1e3a8a', lineHeight: '1', letterSpacing: '-0.5px' }}>
-                        {reviewBoxInfo.boxes}
+                    {/* Inner boxes row */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr', alignItems: 'center' }}>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Inner Boxes</div>
+                        <div style={{ fontSize: '28px', fontWeight: 800, color: '#1e3a8a', lineHeight: '1', letterSpacing: '-0.5px' }}>
+                          {reviewBoxInfo.boxes}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>×</div>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Qty per Box</div>
+                        <div style={{ fontSize: '28px', fontWeight: 800, color: '#1e3a8a', lineHeight: '1', letterSpacing: '-0.5px' }}>
+                          {reviewBoxInfo.perBox}
+                          <span style={{ fontSize: '13px', fontWeight: 500, color: '#6b7a8d', marginLeft: '4px' }}>PCS</span>
+                        </div>
+                      </div>
+                      <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>=</div>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>
+                          {reviewBoxInfo.adjIncluded ? 'Subtotal' : 'Total Pieces'}
+                        </div>
+                        <div style={{ fontSize: '28px', fontWeight: 800, color: reviewBoxInfo.adjIncluded ? '#1e3a8a' : '#16a34a', lineHeight: '1', letterSpacing: '-0.5px' }}>
+                          {(reviewBoxInfo.boxes * reviewBoxInfo.perBox).toLocaleString()}
+                          <span style={{ fontSize: '13px', fontWeight: 500, color: '#6b7a8d', marginLeft: '4px' }}>PCS</span>
+                        </div>
                       </div>
                     </div>
-                    {/* × */}
-                    <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>×</div>
-                    {/* Per box */}
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{
-                        fontSize: '11px', fontWeight: 700, color: '#6b7a8d',
-                        textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px',
-                      }}>Qty per Box</div>
-                      <div style={{ fontSize: '28px', fontWeight: 800, color: '#1e3a8a', lineHeight: '1', letterSpacing: '-0.5px' }}>
-                        {reviewBoxInfo.perBox}
-                        <span style={{ fontSize: '13px', fontWeight: 500, color: '#6b7a8d', marginLeft: '4px' }}>PCS</span>
-                      </div>
-                    </div>
-                    {/* = */}
-                    <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>=</div>
-                    {/* Total */}
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{
-                        fontSize: '11px', fontWeight: 700, color: '#6b7a8d',
-                        textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px',
-                      }}>Total Pieces</div>
-                      <div style={{ fontSize: '28px', fontWeight: 800, color: '#16a34a', lineHeight: '1', letterSpacing: '-0.5px' }}>
-                        {reviewBoxInfo.total.toLocaleString()}
-                        <span style={{ fontSize: '13px', fontWeight: 500, color: '#6b7a8d', marginLeft: '4px' }}>PCS</span>
-                      </div>
-                    </div>
+
+                    {/* Adjustment box row (if applicable) */}
+                    {reviewBoxInfo.adjIncluded && reviewBoxInfo.adjQty && (
+                      <>
+                        <div style={{ margin: '12px 0 8px', borderTop: '1px dashed #93a8d2' }} />
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr', alignItems: 'center' }}>
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Adj. Box</div>
+                            <div style={{ fontSize: '22px', fontWeight: 800, color: '#b45309', lineHeight: '1' }}>1</div>
+                          </div>
+                          <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>×</div>
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Adj. Qty</div>
+                            <div style={{ fontSize: '22px', fontWeight: 800, color: '#b45309', lineHeight: '1' }}>
+                              {reviewBoxInfo.adjQty}
+                              <span style={{ fontSize: '13px', fontWeight: 500, color: '#6b7a8d', marginLeft: '4px' }}>PCS</span>
+                            </div>
+                          </div>
+                          <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>=</div>
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Grand Total</div>
+                            <div style={{ fontSize: '28px', fontWeight: 800, color: '#16a34a', lineHeight: '1', letterSpacing: '-0.5px' }}>
+                              {reviewBoxInfo.total.toLocaleString()}
+                              <span style={{ fontSize: '13px', fontWeight: 500, color: '#6b7a8d', marginLeft: '4px' }}>PCS</span>
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               )}
