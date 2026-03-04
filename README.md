@@ -65,7 +65,7 @@ The **Warehouse Management System (WMS)** is a type-safe, real-time application 
 | **📋 Blanket Orders** | Comprehensive handling of long-term customer contracts with order line items. |
 | **📅 Blanket Releases** | Delivery scheduling against blanket orders with automatic inventory deduction upon delivery. |
 | **📈 Demand Forecasting** | Advanced demand prediction using Holt-Winters algorithm with trend and seasonality analysis. |
-| **🔧 MRP Planning** | Automated replenishment recommendations based on lead times, safety stock levels, and forecast data. |
+| **🔧 MRP ** | Automated replenishment recommendations based on lead times, safety stock levels, and forecast data. |
 | **👥 User Management** | Role-based access control (L1 Operator, L2 Supervisor, L3 Manager) with account activation/deactivation. |
 | **🔔 Notifications** | Real-time notification bell with alerts for stock movements, approvals, and system events. |
 
@@ -201,7 +201,7 @@ WarehouseManagementSystem/
     │   ├── BlanketOrders.tsx    # Blanket order management
     │   ├── BlanketReleases.tsx  # Blanket release management
     │   ├── ForecastingModule.tsx # Demand forecasting engine
-    │   ├── PlanningModule.tsx   # MRP planning module
+    │   ├── Module.tsx   # MRP  module
     │   ├── StockDistributionCard.tsx # Stock breakdown card
     │   ├── SampleDataInfo.tsx   # Sample data banner
     │   ├── ErrorBoundary.tsx    # Error boundary wrapper
@@ -247,7 +247,7 @@ WarehouseManagementSystem/
     │       │   ├── BlanketOrderService.ts
     │       │   ├── BlanketReleaseService.ts
     │       │   ├── ForecastingService.ts
-    │       │   └── PlanningService.ts
+    │       │   └── Service.ts
     │       └── repositories/    # Data access layer (3 files)
     │           ├── ItemRepository.ts
     │           ├── InventoryRepository.ts
@@ -492,7 +492,7 @@ Request → Route Handler → Service → Repository → Database
 | `GET` | `/inventory` | Fetch inventory data |
 | `GET` | `/blanket-orders` | Fetch blanket orders |
 | `GET` | `/forecasting` | Run demand forecasting |
-| `GET` | `/planning` | Generate MRP plans |
+| `GET` | `/` | Generate MRP plans |
 
 Edge function source is located at `src/supabase/functions/server/`.
 
