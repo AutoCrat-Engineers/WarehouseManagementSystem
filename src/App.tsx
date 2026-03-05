@@ -10,6 +10,7 @@ import { BlanketOrders } from './components/BlanketOrders';
 import { BlanketReleases } from './components/BlanketReleases';
 import { ForecastingModule } from './components/ForecastingModule';
 import { PlanningModule } from './components/PlanningModule';
+import { PlanningDashboard } from './components/PlanningDashboard';
 import { StockMovement } from './components/StockMovement';
 import { RackView } from './components/RackView';
 import { PackingModule, PackingDetails, PackingListInvoice, PackingListSubInvoice } from './components/packing';
@@ -61,7 +62,8 @@ const compactLogoImage = '/a-logo.png';
 // User role type for RBAC
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
-type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'rack-view' | 'packing' | 'packing-sticker' | 'packing-details' | 'packing-list-invoice' | 'packing-list-sub-invoice' | 'pe-pallet-dashboard' | 'pe-contract-configs' | 'pe-dispatch' | 'pe-mpl-home' | 'pe-performa-invoice' | 'pe-traceability' | 'users';
+type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'alert-engine' | 'stock-movements' | 'packing' | 'packing-sticker' | 'packing-details' | 'packing-list-invoice' | 'packing-list-sub-invoice' | 'users';
+type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'rack-view' | 'packing' | 'packing-sticker' | 'packing-details' | 'packing-list-invoice' | 'packing-list-sub-invoice' | 'users';
 
 interface MenuItem {
   id: View;
@@ -100,6 +102,7 @@ const menuItems: MenuItem[] = [
   { id: 'releases', label: 'Blanket Releases', icon: Calendar, description: 'Delivery Schedule' },
   { id: 'forecast', label: 'Forecasting', icon: TrendingUp, description: 'Demand Prediction' },
   { id: 'planning', label: 'MRP Planning', icon: BarChart3, description: 'Replenishment' },
+  { id: 'alert-engine', label: 'Alert Engine', icon: AlertCircle, description: 'Supply Chain Alerts' },
 ];
 
 export default function App() {
@@ -158,6 +161,7 @@ export default function App() {
     'releases': 'releases.view',
     'forecast': 'forecast.view',
     'planning': 'planning.view',
+    'alert-engine': 'planning.view',
     'users': 'users.view',
   };
 
@@ -458,6 +462,9 @@ export default function App() {
       case 'planning':
         if (!canAccessView('planning')) return renderAccessDenied('MRP Planning');
         return <PlanningModule accessToken={accessToken} />;
+      case 'alert-engine':
+        if (!canAccessView('alert-engine')) return renderAccessDenied('Alert Engine');
+        return <PlanningDashboard />;
       case 'users':
         // Only L3 can access user management
         if (userRole !== 'L3') {

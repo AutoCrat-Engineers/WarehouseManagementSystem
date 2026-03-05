@@ -203,7 +203,7 @@ WarehouseManagementSystem/
     │   ├── BlanketOrders.tsx    # Blanket order management
     │   ├── BlanketReleases.tsx  # Blanket release management
     │   ├── ForecastingModule.tsx # Demand forecasting engine
-    │   ├── PlanningModule.tsx   # MRP planning module
+    │   ├── Module.tsx   # MRP  module
     │   ├── StockDistributionCard.tsx # Stock breakdown card
     │   ├── SampleDataInfo.tsx   # Sample data banner
     │   ├── ErrorBoundary.tsx    # Error boundary wrapper
@@ -249,7 +249,7 @@ WarehouseManagementSystem/
     │       │   ├── BlanketOrderService.ts
     │       │   ├── BlanketReleaseService.ts
     │       │   ├── ForecastingService.ts
-    │       │   └── PlanningService.ts
+    │       │   └── Service.ts
     │       └── repositories/    # Data access layer (3 files)
     │           ├── ItemRepository.ts
     │           ├── InventoryRepository.ts
@@ -526,7 +526,7 @@ Request → Route Handler → Service → Repository → Database
 | `GET` | `/inventory` | Fetch inventory data |
 | `GET` | `/blanket-orders` | Fetch blanket orders |
 | `GET` | `/forecasting` | Run demand forecasting |
-| `GET` | `/planning` | Generate MRP plans |
+| `GET` | `/` | Generate MRP plans |
 
 Edge function source is located at `src/supabase/functions/server/`.
 
