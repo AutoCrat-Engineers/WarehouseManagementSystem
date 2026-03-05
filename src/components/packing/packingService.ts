@@ -16,6 +16,7 @@ import type {
     PackingRequest, PackingBox, PackingAuditLog,
     PackingRequestStatus, PackingAuditAction,
 } from '../../types/packing';
+import { processPackingBoxAsContainer } from '../packing-engine/packingEngineService';
 
 const supabase = getSupabaseClient();
 
@@ -274,7 +275,7 @@ export async function addBox(requestId: string, boxQty: number): Promise<Packing
     const role = await getUserRole(userId);
 
     const { data: req } = await supabase.from('packing_requests')
-        .select('status, total_packed_qty').eq('id', requestId).single();
+        .select('status, total_packed_qty, item_code, movement_header_id, movement_number').eq('id', requestId).single();
     if (!req || !['PACKING_IN_PROGRESS', 'PARTIALLY_TRANSFERRED'].includes(req.status)) {
         throw new Error('Can only add boxes when packing is in progress');
     }
@@ -304,6 +305,27 @@ export async function addBox(requestId: string, boxQty: number): Promise<Packing
     // Generate the packing ID from the box UUID and update it
     const packingId = generatePackingId(data.id);
     await supabase.from('packing_boxes').update({ packing_id: packingId }).eq('id', data.id);
+
+    // ── PACKING ENGINE: Create container + assign to pallet ──
+    try {
+        // Get item_id from items table
+        const { data: itemData } = await supabase.from('items')
+            .select('id').eq('item_code', req.item_code).single();
+        if (itemData) {
+            const result = await processPackingBoxAsContainer({
+                movement_header_id: req.movement_header_id,
+                movement_number: req.movement_number,
+                packing_request_id: requestId,
+                packing_box_id: data.id,
+                item_id: itemData.id,
+                item_code: req.item_code,
+                box_qty: boxQty,
+            });
+            console.log(`[PackingEngine] Container ${result.container.container_number} → Pallet ${result.pallet.pallet_number} (${result.pallet.state})`);
+        }
+    } catch (engineErr: any) {
+        console.warn('[PackingEngine] Container/pallet creation failed (non-blocking):', engineErr.message);
+    }
 
     // Audit — with packing ID, no internal UUID
     await logAudit(requestId, 'BOX_CREATED', userId, role, {
@@ -345,7 +367,7 @@ export async function autoGenerateBoxes(requestId: string): Promise<PackingBox[]
     // Parallel: fetch request + check existing boxes
     const [reqResult, existingBoxes] = await Promise.all([
         supabase.from('packing_requests')
-            .select('status, total_packed_qty, item_code, movement_number')
+            .select('status, total_packed_qty, item_code, movement_number, movement_header_id')
             .eq('id', requestId).single(),
         fetchBoxesForRequest(requestId),
     ]);
@@ -418,6 +440,32 @@ export async function autoGenerateBoxes(requestId: string): Promise<PackingBox[]
         return supabase.from('packing_boxes').update({ packing_id: packingId }).eq('id', box.id);
     });
     await Promise.all(updatePromises);
+
+    // ── PACKING ENGINE: Create containers + assign to pallets for all boxes ──
+    try {
+        const { data: itemData } = await supabase.from('items')
+            .select('id').eq('item_code', req.item_code).single();
+        if (itemData) {
+            for (const box of createdBoxes) {
+                try {
+                    const result = await processPackingBoxAsContainer({
+                        movement_header_id: req.movement_header_id || '',
+                        movement_number: req.movement_number,
+                        packing_request_id: requestId,
+                        packing_box_id: box.id,
+                        item_id: itemData.id,
+                        item_code: req.item_code,
+                        box_qty: Number(box.box_qty),
+                    });
+                    console.log(`[PackingEngine] Box #${box.box_number} → Container ${result.container.container_number} → Pallet ${result.pallet.pallet_number} (${result.pallet.state})`);
+                } catch (boxErr: any) {
+                    console.warn(`[PackingEngine] Box #${box.box_number} engine failed:`, boxErr.message);
+                }
+            }
+        }
+    } catch (engineErr: any) {
+        console.warn('[PackingEngine] Batch container/pallet creation failed (non-blocking):', engineErr.message);
+    }
 
     // Audit — log auto-generation
     await logAudit(requestId, 'BOX_CREATED', userId, role, {
