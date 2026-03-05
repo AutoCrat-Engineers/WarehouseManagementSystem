@@ -13,7 +13,7 @@ import { PlanningModule } from './components/PlanningModule';
 import { StockMovement } from './components/StockMovement';
 import { RackView } from './components/RackView';
 import { PackingModule, PackingDetails, PackingListInvoice, PackingListSubInvoice } from './components/packing';
-import { PalletDashboard, ContractConfigManager, DispatchSelection, PackingListManager, PackingListPrint, TraceabilityViewer } from './components/packing-engine';
+import { PalletDashboard, ContractConfigManager, DispatchSelection, PackingListManager, TraceabilityViewer, MasterPackingListHome, PerformaInvoice } from './components/packing-engine';
 import { LoadingPage } from './components/LoadingPage';
 import { UserManagement } from './auth/users/UserManagement';
 import { NotificationBell } from './components/notifications/NotificationBell';
@@ -61,7 +61,7 @@ const compactLogoImage = '/a-logo.png';
 // User role type for RBAC
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
-type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'rack-view' | 'packing' | 'packing-sticker' | 'packing-details' | 'packing-list-invoice' | 'packing-list-sub-invoice' | 'pe-pallet-dashboard' | 'pe-contract-configs' | 'pe-dispatch' | 'pe-pl-print' | 'pe-traceability' | 'users';
+type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'rack-view' | 'packing' | 'packing-sticker' | 'packing-details' | 'packing-list-invoice' | 'packing-list-sub-invoice' | 'pe-pallet-dashboard' | 'pe-contract-configs' | 'pe-dispatch' | 'pe-mpl-home' | 'pe-performa-invoice' | 'pe-traceability' | 'users';
 
 interface MenuItem {
   id: View;
@@ -72,7 +72,7 @@ interface MenuItem {
 }
 
 // All packing sub-views (used to determine if packing accordion is active)
-const PACKING_SUB_VIEWS: View[] = ['packing', 'packing-sticker', 'packing-details', 'packing-list-invoice', 'packing-list-sub-invoice', 'pe-pallet-dashboard', 'pe-contract-configs', 'pe-dispatch', 'pe-pl-print', 'pe-traceability'];
+const PACKING_SUB_VIEWS: View[] = ['packing', 'packing-sticker', 'packing-details', 'packing-list-invoice', 'packing-list-sub-invoice', 'pe-pallet-dashboard', 'pe-contract-configs', 'pe-dispatch', 'pe-mpl-home', 'pe-performa-invoice', 'pe-traceability'];
 
 // Meta for packing sub-views (displayed in the header bar)
 const PACKING_VIEW_META: Record<string, { label: string; description: string }> = {
@@ -84,7 +84,8 @@ const PACKING_VIEW_META: Record<string, { label: string; description: string }> 
   'pe-pallet-dashboard': { label: 'Pallet Dashboard', description: 'Real-time Pallet Readiness' },
   'pe-contract-configs': { label: 'Contract Configs', description: 'Contract Packing Rules' },
   'pe-dispatch': { label: 'Dispatch Selection', description: 'Select Pallets for Dispatch' },
-  'pe-pl-print': { label: 'Master Packing List', description: 'Packing List Data Entry, Print & Reference' },
+  'pe-mpl-home': { label: 'MPL Home', description: 'Master Packing List Dashboard' },
+  'pe-performa-invoice': { label: 'Performa Invoice', description: 'Shipment Batching & Stock Dispatch' },
   'pe-traceability': { label: 'Traceability', description: 'Full Backward Trace' },
 };
 
@@ -150,7 +151,8 @@ export default function App() {
     'pe-pallet-dashboard': 'packing.pallet-dashboard.view',
     'pe-contract-configs': 'packing.contract-configs.view',
     'pe-dispatch': 'packing.dispatch.view',
-    'pe-pl-print': 'packing.pl-print.view',
+    'pe-mpl-home': 'packing.mpl-home.view',
+    'pe-performa-invoice': 'packing.performa-invoice.view',
     'pe-traceability': 'packing.traceability.view',
     'orders': 'orders.view',
     'releases': 'releases.view',
@@ -437,9 +439,13 @@ export default function App() {
       case 'pe-traceability':
         if (!canAccessView('pe-traceability')) return renderAccessDenied('Traceability');
         return <TraceabilityViewer accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
-      case 'pe-pl-print':
-        if (!canAccessView('pe-pl-print')) return renderAccessDenied('PL Print & Data');
-        return <PackingListPrint accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
+      // pe-pl-print removed — integrated into pe-mpl-home
+      case 'pe-mpl-home':
+        if (!canAccessView('pe-mpl-home')) return renderAccessDenied('MPL Home');
+        return <MasterPackingListHome accessToken={accessToken} userRole={userRole} userPerms={userPerms} onNavigate={(v) => handleNavigation(v as View)} />;
+      case 'pe-performa-invoice':
+        if (!canAccessView('pe-performa-invoice')) return renderAccessDenied('Performa Invoice');
+        return <PerformaInvoice accessToken={accessToken} userRole={userRole} userPerms={userPerms} onNavigate={(v) => handleNavigation(v as View)} />;
       case 'orders':
         if (!canAccessView('orders')) return renderAccessDenied('Blanket Orders');
         return <BlanketOrders accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
@@ -520,7 +526,8 @@ export default function App() {
               userPerms['packing.contract-configs.view'] ||
               userPerms['packing.dispatch.view'] ||
               userPerms['packing.packing-lists.view'] ||
-              userPerms['packing.pl-print.view'] ||
+              userPerms['packing.mpl-home.view'] ||
+              userPerms['packing.performa-invoice.view'] ||
               userPerms['packing.traceability.view']
             );
           }
@@ -954,24 +961,47 @@ export default function App() {
                           </button>
                         )}
 
-                        {/* Master Packing List */}
-                        {canAccessView('pe-pl-print') && (
+                        {/* Master Packing List — removed, integrated into MPL Home */}
+
+                        {/* MPL Home — Dashboard */}
+                        {canAccessView('pe-mpl-home') && (
                           <button
-                            onClick={() => handleNavigation('pe-pl-print')}
+                            onClick={() => handleNavigation('pe-mpl-home')}
                             style={{
                               width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
                               padding: '9px 24px 9px 44px', border: 'none',
-                              backgroundColor: currentView === 'pe-pl-print' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                              borderLeft: currentView === 'pe-pl-print' ? '3px solid #1e3a8a' : '3px solid transparent',
-                              color: currentView === 'pe-pl-print' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
+                              backgroundColor: currentView === 'pe-mpl-home' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                              borderLeft: currentView === 'pe-mpl-home' ? '3px solid #1e3a8a' : '3px solid transparent',
+                              color: currentView === 'pe-mpl-home' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
                               textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                              fontWeight: currentView === 'pe-pl-print' ? '600' : '400', fontSize: '13px',
+                              fontWeight: currentView === 'pe-mpl-home' ? '600' : '400', fontSize: '13px',
                             }}
-                            onMouseEnter={(e) => { if (currentView !== 'pe-pl-print') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                            onMouseLeave={(e) => { if (currentView !== 'pe-pl-print') e.currentTarget.style.backgroundColor = 'transparent'; }}
+                            onMouseEnter={(e) => { if (currentView !== 'pe-mpl-home') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                            onMouseLeave={(e) => { if (currentView !== 'pe-mpl-home') e.currentTarget.style.backgroundColor = 'transparent'; }}
                           >
-                            <Printer size={15} strokeWidth={currentView === 'pe-pl-print' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-pl-print' ? 1 : 0.6 }} />
-                            <span>Master Packing List</span>
+                            <Receipt size={15} strokeWidth={currentView === 'pe-mpl-home' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-mpl-home' ? 1 : 0.6 }} />
+                            <span>MPL Home</span>
+                          </button>
+                        )}
+
+                        {/* Performa Invoice */}
+                        {canAccessView('pe-performa-invoice') && (
+                          <button
+                            onClick={() => handleNavigation('pe-performa-invoice')}
+                            style={{
+                              width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                              padding: '9px 24px 9px 44px', border: 'none',
+                              backgroundColor: currentView === 'pe-performa-invoice' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                              borderLeft: currentView === 'pe-performa-invoice' ? '3px solid #1e3a8a' : '3px solid transparent',
+                              color: currentView === 'pe-performa-invoice' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
+                              textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
+                              fontWeight: currentView === 'pe-performa-invoice' ? '600' : '400', fontSize: '13px',
+                            }}
+                            onMouseEnter={(e) => { if (currentView !== 'pe-performa-invoice') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                            onMouseLeave={(e) => { if (currentView !== 'pe-performa-invoice') e.currentTarget.style.backgroundColor = 'transparent'; }}
+                          >
+                            <Truck size={15} strokeWidth={currentView === 'pe-performa-invoice' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-performa-invoice' ? 1 : 0.6 }} />
+                            <span>Performa Invoice</span>
                           </button>
                         )}
 

@@ -10,6 +10,8 @@ export { DispatchSelection } from './DispatchSelection';
 export { PackingListManager } from './PackingListManager';
 export { PackingListPrint } from './PackingListPrint';
 export { TraceabilityViewer } from './TraceabilityViewer';
+export { MasterPackingListHome } from './MasterPackingListHome';
+export { PerformaInvoice } from './PerformaInvoice';
 
 // Re-export types and service functions
 export type {
@@ -28,6 +30,16 @@ export type {
     PackingListPalletDetail,
 } from './packingEngineService';
 
+// Re-export MPL types and service functions
+export type {
+    MasterPackingList,
+    MplPallet,
+    MplStatus,
+    MplDashboardRow,
+    InnerBoxDetail,
+    DispatchAuditEntry,
+} from './mplService';
+
 // Re-export the core engine function for use by packing module
 export {
     processPackingBoxAsContainer,
@@ -35,3 +47,19 @@ export {
     fetchPackingSpecs,
     calculatePalletImpact,
 } from './packingEngineService';
+
+// Re-export MPL service functions
+export {
+    fetchMasterPackingLists,
+    fetchMplById,
+    fetchMplPallets,
+    createMasterPackingList,
+    confirmMpl,
+    markMplPrinted,
+    cancelMpl,
+    createPerformaInvoice,
+    approvePerformaInvoice,
+    searchMasterPackingLists,
+    fetchDispatchAuditLog,
+    fetchCorrelatedAuditLog,
+} from './mplService';

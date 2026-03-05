@@ -21,6 +21,7 @@ import {
 } from '../ui/SharedComponents';
 import * as svc from './packingEngineService';
 import type { Pallet, DispatchReadiness, PackingList } from './packingEngineService';
+import { createMasterPackingList } from './mplService';
 import { getSupabaseClient } from '../../utils/supabase/client';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
@@ -114,16 +115,15 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
                 Array.from(selectedPalletIds),
                 { customer_name: item?.customer_name || undefined }
             );
-            // Store created PL ID for Master Packing List to auto-select
-            localStorage.setItem('wms_last_created_pl_id', pl.id);
-            localStorage.setItem('wms_last_created_pl_number', pl.packing_list_number);
+            // Create MPL directly in the database (no localStorage)
+            const mpl = await createMasterPackingList({ packing_list_id: pl.id });
             setSelectedPalletIds(new Set());
             fetchData();
-            // Redirect to Master Packing List
+            // Redirect to MPL Home — MPL already exists in DB
             if (onNavigate) {
-                onNavigate('pe-pl-print');
+                onNavigate('pe-mpl-home');
             } else {
-                alert(`Packing List ${pl.packing_list_number} created! Go to Master Packing List to continue.`);
+                alert(`Packing List ${pl.packing_list_number} created! MPL ${mpl.mpl_number} is ready in MPL Home.`);
             }
         } catch (err: any) {
             alert('Error generating packing list: ' + (err.message || err));

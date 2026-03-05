@@ -53,7 +53,7 @@ interface EnrichedPallet {
     part_number: string; master_serial_no: string; state: string;
     current_qty: number; target_qty: number; container_count: number;
     spec: PackingSpec | null;
-    containers: Array<{ container_number: string; quantity: number; container_type: string; is_adjustment: boolean; created_at: string; operator: string }>;
+    containers: Array<{ packing_id: string; quantity: number; container_type: string; is_adjustment: boolean; created_at: string; operator: string }>;
     gross_weight_kg: number; // user input
 }
 
@@ -149,7 +149,7 @@ export function PackingListPrint({ accessToken, userRole, userPerms = {} }: Prop
                 // Fetch containers per pallet
                 const { data: pcJoin } = await supabase
                     .from('pack_pallet_containers')
-                    .select(`pallet_id, position_sequence, pack_containers!inner (container_number, quantity, container_type, is_adjustment, created_at, profiles!pack_containers_created_by_fkey (full_name))`)
+                    .select(`pallet_id, position_sequence, pack_containers!inner (container_number, quantity, container_type, is_adjustment, created_at, packing_box_id, profiles!pack_containers_created_by_fkey (full_name), packing_boxes:packing_box_id (packing_id))`)
                     .in('pallet_id', palletIds)
                     .order('position_sequence');
 
@@ -174,7 +174,7 @@ export function PackingListPrint({ accessToken, userRole, userPerms = {} }: Prop
                         container_count: p.container_count,
                         spec: specMap[p.item_code] || null,
                         containers: pContainers.map((pc: any) => ({
-                            container_number: pc.pack_containers?.container_number || '',
+                            packing_id: pc.pack_containers?.packing_boxes?.packing_id || '—',
                             quantity: pc.pack_containers?.quantity || 0,
                             container_type: pc.pack_containers?.container_type || '',
                             is_adjustment: pc.pack_containers?.is_adjustment || false,
@@ -312,12 +312,12 @@ ${itemRows}
             const outerQty = spec?.outer_box_quantity || 0;
             const innerDim = spec ? `${spec.inner_box_length_mm}×${spec.inner_box_width_mm}×${spec.inner_box_height_mm}mm` : '—';
             const outerDim = spec ? `${spec.outer_box_length_mm}×${spec.outer_box_width_mm}×${spec.outer_box_height_mm}mm` : '—';
-            const ctnRows = p.containers.map((c, i) => `<tr><td class="b br p f9 tc">${i + 1}</td><td class="b br p f9 mono">${c.container_number}</td><td class="b br p f9 tc">${c.container_type}</td><td class="b br p f9 tr mono fw6">${c.quantity.toLocaleString()}</td><td class="b br p f9 tc">${c.is_adjustment ? '✓ ADJ' : ''}</td><td class="b p f9">${c.operator}</td></tr>`).join('');
+            const ctnRows = p.containers.map((c, i) => `<tr><td class="b br p f9 tc">${i + 1}</td><td class="b br p f9 mono" style="color:#7c3aed;font-weight:700">${c.packing_id}</td><td class="b br p f9 tc">${c.container_type}</td><td class="b br p f9 tr mono fw6">${c.quantity.toLocaleString()}</td><td class="b br p f9 tc">${c.is_adjustment ? '✓ ADJ' : ''}</td><td class="b p f9">${c.operator}</td></tr>`).join('');
             return `<div style="page-break-inside:avoid;margin-bottom:12px">
 <table class="bdr" style="margin-bottom:2px"><tr><td class="p" style="background:#1e3a8a;color:#fff"><div class="f11 fw8">${p.pallet_number}</div><div class="f8" style="opacity:.8">${p.item_name} (${p.item_code}) · ${p.master_serial_no}</div></td><td class="p tr" style="background:#1e3a8a;color:#fff;width:30%"><div class="f10 fw7">${p.current_qty.toLocaleString()} / ${p.target_qty.toLocaleString()} PCS</div><div class="f8" style="opacity:.8">${p.container_count} containers</div></td></tr></table>
 <table class="bdr" style="border-top:none"><tr><td class="b br p f8 fw7" style="width:20%">Inner Box Qty</td><td class="b br p f9 mono fw6" style="width:13%">${innerQty.toLocaleString()} PCS</td><td class="b br p f8 fw7" style="width:20%">Inner Box Dims</td><td class="b br p f9" style="width:14%">${innerDim}</td><td class="b br p f8 fw7" style="width:16%">Outer/Pallet Qty</td><td class="b p f9 mono fw6" style="width:17%">${outerQty.toLocaleString()} PCS</td></tr>
 <tr><td class="br p f8 fw7">Outer Box Dims</td><td class="br p f9">${outerDim}</td><td class="br p f8 fw7">Net Wt/Box</td><td class="br p f9">${spec?.inner_box_net_weight_kg || '—'} kg</td><td class="br p f8 fw7">Gross Wt/Box</td><td class="p f9">${spec?.outer_box_gross_weight_kg || '—'} kg</td></tr></table>
-<table class="bdr" style="border-top:none"><tr style="background:#f9fafb"><th class="b br p f8 fw7 tc" style="width:6%">#</th><th class="b br p f8 fw7 tl" style="width:22%">Container #</th><th class="b br p f8 fw7 tc" style="width:12%">Type</th><th class="b br p f8 fw7 tr" style="width:15%">Quantity</th><th class="b br p f8 fw7 tc" style="width:10%">Adjust?</th><th class="b p f8 fw7 tl" style="width:35%">Packed By</th></tr>${ctnRows}</table></div>`;
+<table class="bdr" style="border-top:none"><tr style="background:#f9fafb"><th class="b br p f8 fw7 tc" style="width:6%">#</th><th class="b br p f8 fw7 tl" style="width:22%">Packing Box ID</th><th class="b br p f8 fw7 tc" style="width:12%">Type</th><th class="b br p f8 fw7 tr" style="width:15%">Quantity</th><th class="b br p f8 fw7 tc" style="width:10%">Adjust?</th><th class="b p f8 fw7 tl" style="width:35%">Packed By</th></tr>${ctnRows}</table></div>`;
         }).join('');
 
         const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Packing Reference - ${pl.packing_list_number}</title>
@@ -427,11 +427,11 @@ ${itemRows}
                                     </div>
                                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                                         <thead><tr>
-                                            <th style={{ ...thS, width: 40 }}>#</th><th style={thS}>Container</th><th style={thS}>Type</th>
+                                            <th style={{ ...thS, width: 40 }}>#</th><th style={thS}>Packing Box ID</th><th style={thS}>Type</th>
                                             <th style={{ ...thS, textAlign: 'right' }}>Qty</th><th style={thS}>Adj?</th><th style={thS}>Packed By</th>
                                         </tr></thead>
                                         <tbody>{p.containers.map((c, i) => (
-                                            <tr key={i}><td style={{ ...tdS, textAlign: 'center' }}>{i + 1}</td><td style={{ ...tdS, fontFamily: 'monospace', fontWeight: 600 }}>{c.container_number}</td><td style={tdS}>{c.container_type}</td>
+                                            <tr key={i}><td style={{ ...tdS, textAlign: 'center' }}>{i + 1}</td><td style={{ ...tdS, fontFamily: 'monospace', fontWeight: 700, color: '#7c3aed' }}>{c.packing_id}</td><td style={tdS}>{c.container_type}</td>
                                                 <td style={{ ...tdS, textAlign: 'right', fontFamily: 'monospace', fontWeight: 600 }}>{c.quantity.toLocaleString()}</td>
                                                 <td style={tdS}>{c.is_adjustment ? <span style={{ color: '#d97706', fontWeight: 600 }}>ADJ</span> : ''}</td><td style={tdS}>{c.operator}</td></tr>
                                         ))}</tbody>
