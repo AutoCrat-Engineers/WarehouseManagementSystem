@@ -1,5 +1,0 @@
-# WMS Planning Engine — Python Dependencies
-# Install: pip install -r requirements.txt
-
-supabase>=2.0.0
-python-dotenv>=1.0.0
