@@ -99,7 +99,7 @@ const menuItems: MenuItem[] = [
   { id: 'orders', label: 'Blanket Orders', icon: FileText, description: 'Customer Orders' },
   { id: 'releases', label: 'Blanket Releases', icon: Calendar, description: 'Delivery Schedule' },
   { id: 'forecast', label: 'Forecasting', icon: TrendingUp, description: 'Demand Prediction' },
-  { id: 'planning', label: 'MRP Planning', icon: BarChart3, description: 'Replenishment' },
+
 ];
 
 export default function App() {
@@ -520,8 +520,6 @@ export default function App() {
             return (
               userPerms['packing.sticker-generation.view'] ||
               userPerms['packing.packing-details.view'] ||
-              userPerms['packing.packing-list-invoice.view'] ||
-              userPerms['packing.packing-list-sub-invoice.view'] ||
               userPerms['packing.pallet-dashboard.view'] ||
               userPerms['packing.contract-configs.view'] ||
               userPerms['packing.dispatch.view'] ||
@@ -714,9 +712,6 @@ export default function App() {
               if (isPackingItem) {
                 const isStickerActive = currentView === 'packing' || currentView === 'packing-sticker';
                 const isDetailsActive = currentView === 'packing-details';
-                const isListInvActive = currentView === 'packing-list-invoice';
-                const isListSubInvActive = currentView === 'packing-list-sub-invoice';
-                const isPackingListActive = isListInvActive || isListSubInvActive;
 
                 return (
                   <div key={item.id}>
@@ -811,221 +806,135 @@ export default function App() {
                         </button>
                       )}
 
-                      {/* 3. Packing List (expandable — Level 2) — only if at least one child is accessible */}
-                      {(canAccessView('packing-list-invoice') || canAccessView('packing-list-sub-invoice')) && (
-                        <>
-                          <button
-                            onClick={() => setPackingListOpen(!packingListOpen)}
-                            style={{
-                              width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
-                              padding: '9px 24px 9px 44px', border: 'none',
-                              backgroundColor: isPackingListActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                              borderLeft: isPackingListActive ? '3px solid #1e3a8a' : '3px solid transparent',
-                              color: isPackingListActive ? '#1e3a8a' : 'var(--enterprise-gray-600)',
-                              textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                              fontWeight: isPackingListActive ? '600' : '400', fontSize: '13px',
-                            }}
-                            onMouseEnter={(e) => { if (!isPackingListActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                            onMouseLeave={(e) => { if (!isPackingListActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
-                          >
-                            <List size={15} strokeWidth={isPackingListActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isPackingListActive ? 1 : 0.6 }} />
-                            <span style={{ flex: 1 }}>Packing List</span>
-                            <ChevronDown
-                              size={14}
-                              style={{
-                                transition: 'transform 250ms ease',
-                                transform: packingListOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-                                color: isPackingListActive ? '#1e3a8a' : '#9ca3af',
-                              }}
-                            />
-                          </button>
+                      {/* ─── Packing Engine Views ─── */}
 
-                          {/* ─── Level-2: Packing List sub-items ─── */}
-                          <div style={{
-                            maxHeight: packingListOpen ? '200px' : '0',
-                            overflow: 'hidden',
-                            transition: 'max-height 250ms ease',
-                            backgroundColor: 'rgba(30, 58, 138, 0.02)',
-                          }}>
-                            {/* Against Invoice */}
-                            {canAccessView('packing-list-invoice') && (
-                              <button
-                                onClick={() => handleNavigation('packing-list-invoice')}
-                                style={{
-                                  width: '100%', display: 'flex', alignItems: 'center', gap: '9px',
-                                  padding: '8px 24px 8px 62px', border: 'none',
-                                  backgroundColor: isListInvActive ? 'rgba(30, 58, 138, 0.1)' : 'transparent',
-                                  borderLeft: isListInvActive ? '3px solid #1e3a8a' : '3px solid transparent',
-                                  color: isListInvActive ? '#1e3a8a' : 'var(--enterprise-gray-500)',
-                                  textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                                  fontWeight: isListInvActive ? '600' : '400', fontSize: '12px',
-                                }}
-                                onMouseEnter={(e) => { if (!isListInvActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                                onMouseLeave={(e) => { if (!isListInvActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
-                              >
-                                <FileCheck size={14} strokeWidth={isListInvActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isListInvActive ? 1 : 0.55 }} />
-                                <span>Against Invoice</span>
-                              </button>
-                            )}
-
-                            {/* Against Sub Invoice */}
-                            {canAccessView('packing-list-sub-invoice') && (
-                              <button
-                                onClick={() => handleNavigation('packing-list-sub-invoice')}
-                                style={{
-                                  width: '100%', display: 'flex', alignItems: 'center', gap: '9px',
-                                  padding: '8px 24px 8px 62px', border: 'none',
-                                  backgroundColor: isListSubInvActive ? 'rgba(30, 58, 138, 0.1)' : 'transparent',
-                                  borderLeft: isListSubInvActive ? '3px solid #1e3a8a' : '3px solid transparent',
-                                  color: isListSubInvActive ? '#1e3a8a' : 'var(--enterprise-gray-500)',
-                                  textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                                  fontWeight: isListSubInvActive ? '600' : '400', fontSize: '12px',
-                                }}
-                                onMouseEnter={(e) => { if (!isListSubInvActive) e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                                onMouseLeave={(e) => { if (!isListSubInvActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
-                              >
-                                <FileMinus size={14} strokeWidth={isListSubInvActive ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: isListSubInvActive ? 1 : 0.55 }} />
-                                <span>Against Sub Invoice</span>
-                              </button>
-                            )}
-                          </div>
-                        </>
+                      {/* Pallet Dashboard */}
+                      {canAccessView('pe-pallet-dashboard') && (
+                        <button
+                          onClick={() => handleNavigation('pe-pallet-dashboard')}
+                          style={{
+                            width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                            padding: '9px 24px 9px 44px', border: 'none',
+                            backgroundColor: currentView === 'pe-pallet-dashboard' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                            borderLeft: currentView === 'pe-pallet-dashboard' ? '3px solid #1e3a8a' : '3px solid transparent',
+                            color: currentView === 'pe-pallet-dashboard' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
+                            textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
+                            fontWeight: currentView === 'pe-pallet-dashboard' ? '600' : '400', fontSize: '13px',
+                          }}
+                          onMouseEnter={(e) => { if (currentView !== 'pe-pallet-dashboard') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                          onMouseLeave={(e) => { if (currentView !== 'pe-pallet-dashboard') e.currentTarget.style.backgroundColor = 'transparent'; }}
+                        >
+                          <Layers size={15} strokeWidth={currentView === 'pe-pallet-dashboard' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-pallet-dashboard' ? 1 : 0.6 }} />
+                          <span>Pallet Dashboard</span>
+                        </button>
                       )}
 
-                      {/* ─── PACKING ENGINE: New Views ─── */}
-                      <div style={{ borderTop: '1px solid rgba(30, 58, 138, 0.08)', marginTop: 4, paddingTop: 4 }}>
-                        <div style={{ padding: '4px 24px 2px 44px', fontSize: 10, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
-                          {sidebarExpanded ? 'Execution Engine' : ''}
-                        </div>
+                      {/* Contract Configs */}
+                      {canAccessView('pe-contract-configs') && (
+                        <button
+                          onClick={() => handleNavigation('pe-contract-configs')}
+                          style={{
+                            width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                            padding: '9px 24px 9px 44px', border: 'none',
+                            backgroundColor: currentView === 'pe-contract-configs' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                            borderLeft: currentView === 'pe-contract-configs' ? '3px solid #1e3a8a' : '3px solid transparent',
+                            color: currentView === 'pe-contract-configs' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
+                            textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
+                            fontWeight: currentView === 'pe-contract-configs' ? '600' : '400', fontSize: '13px',
+                          }}
+                          onMouseEnter={(e) => { if (currentView !== 'pe-contract-configs') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                          onMouseLeave={(e) => { if (currentView !== 'pe-contract-configs') e.currentTarget.style.backgroundColor = 'transparent'; }}
+                        >
+                          <Settings size={15} strokeWidth={currentView === 'pe-contract-configs' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-contract-configs' ? 1 : 0.6 }} />
+                          <span>Contract Configs</span>
+                        </button>
+                      )}
 
-                        {/* Pallet Dashboard */}
-                        {canAccessView('pe-pallet-dashboard') && (
-                          <button
-                            onClick={() => handleNavigation('pe-pallet-dashboard')}
-                            style={{
-                              width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
-                              padding: '9px 24px 9px 44px', border: 'none',
-                              backgroundColor: currentView === 'pe-pallet-dashboard' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                              borderLeft: currentView === 'pe-pallet-dashboard' ? '3px solid #1e3a8a' : '3px solid transparent',
-                              color: currentView === 'pe-pallet-dashboard' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
-                              textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                              fontWeight: currentView === 'pe-pallet-dashboard' ? '600' : '400', fontSize: '13px',
-                            }}
-                            onMouseEnter={(e) => { if (currentView !== 'pe-pallet-dashboard') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                            onMouseLeave={(e) => { if (currentView !== 'pe-pallet-dashboard') e.currentTarget.style.backgroundColor = 'transparent'; }}
-                          >
-                            <Layers size={15} strokeWidth={currentView === 'pe-pallet-dashboard' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-pallet-dashboard' ? 1 : 0.6 }} />
-                            <span>Pallet Dashboard</span>
-                          </button>
-                        )}
+                      {/* Dispatch Selection */}
+                      {canAccessView('pe-dispatch') && (
+                        <button
+                          onClick={() => handleNavigation('pe-dispatch')}
+                          style={{
+                            width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                            padding: '9px 24px 9px 44px', border: 'none',
+                            backgroundColor: currentView === 'pe-dispatch' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                            borderLeft: currentView === 'pe-dispatch' ? '3px solid #1e3a8a' : '3px solid transparent',
+                            color: currentView === 'pe-dispatch' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
+                            textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
+                            fontWeight: currentView === 'pe-dispatch' ? '600' : '400', fontSize: '13px',
+                          }}
+                          onMouseEnter={(e) => { if (currentView !== 'pe-dispatch') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                          onMouseLeave={(e) => { if (currentView !== 'pe-dispatch') e.currentTarget.style.backgroundColor = 'transparent'; }}
+                        >
+                          <Truck size={15} strokeWidth={currentView === 'pe-dispatch' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-dispatch' ? 1 : 0.6 }} />
+                          <span>Dispatch Selection</span>
+                        </button>
+                      )}
 
-                        {/* Contract Configs */}
-                        {canAccessView('pe-contract-configs') && (
-                          <button
-                            onClick={() => handleNavigation('pe-contract-configs')}
-                            style={{
-                              width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
-                              padding: '9px 24px 9px 44px', border: 'none',
-                              backgroundColor: currentView === 'pe-contract-configs' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                              borderLeft: currentView === 'pe-contract-configs' ? '3px solid #1e3a8a' : '3px solid transparent',
-                              color: currentView === 'pe-contract-configs' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
-                              textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                              fontWeight: currentView === 'pe-contract-configs' ? '600' : '400', fontSize: '13px',
-                            }}
-                            onMouseEnter={(e) => { if (currentView !== 'pe-contract-configs') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                            onMouseLeave={(e) => { if (currentView !== 'pe-contract-configs') e.currentTarget.style.backgroundColor = 'transparent'; }}
-                          >
-                            <Settings size={15} strokeWidth={currentView === 'pe-contract-configs' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-contract-configs' ? 1 : 0.6 }} />
-                            <span>Contract Configs</span>
-                          </button>
-                        )}
+                      {/* Master Packing List — removed, integrated into MPL Home */}
 
-                        {/* Dispatch Selection */}
-                        {canAccessView('pe-dispatch') && (
-                          <button
-                            onClick={() => handleNavigation('pe-dispatch')}
-                            style={{
-                              width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
-                              padding: '9px 24px 9px 44px', border: 'none',
-                              backgroundColor: currentView === 'pe-dispatch' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                              borderLeft: currentView === 'pe-dispatch' ? '3px solid #1e3a8a' : '3px solid transparent',
-                              color: currentView === 'pe-dispatch' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
-                              textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                              fontWeight: currentView === 'pe-dispatch' ? '600' : '400', fontSize: '13px',
-                            }}
-                            onMouseEnter={(e) => { if (currentView !== 'pe-dispatch') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                            onMouseLeave={(e) => { if (currentView !== 'pe-dispatch') e.currentTarget.style.backgroundColor = 'transparent'; }}
-                          >
-                            <Truck size={15} strokeWidth={currentView === 'pe-dispatch' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-dispatch' ? 1 : 0.6 }} />
-                            <span>Dispatch Selection</span>
-                          </button>
-                        )}
+                      {/* MPL Home — Dashboard */}
+                      {canAccessView('pe-mpl-home') && (
+                        <button
+                          onClick={() => handleNavigation('pe-mpl-home')}
+                          style={{
+                            width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                            padding: '9px 24px 9px 44px', border: 'none',
+                            backgroundColor: currentView === 'pe-mpl-home' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                            borderLeft: currentView === 'pe-mpl-home' ? '3px solid #1e3a8a' : '3px solid transparent',
+                            color: currentView === 'pe-mpl-home' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
+                            textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
+                            fontWeight: currentView === 'pe-mpl-home' ? '600' : '400', fontSize: '13px',
+                          }}
+                          onMouseEnter={(e) => { if (currentView !== 'pe-mpl-home') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                          onMouseLeave={(e) => { if (currentView !== 'pe-mpl-home') e.currentTarget.style.backgroundColor = 'transparent'; }}
+                        >
+                          <Receipt size={15} strokeWidth={currentView === 'pe-mpl-home' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-mpl-home' ? 1 : 0.6 }} />
+                          <span>MPL Home</span>
+                        </button>
+                      )}
 
-                        {/* Master Packing List — removed, integrated into MPL Home */}
+                      {/* Performa Invoice */}
+                      {canAccessView('pe-performa-invoice') && (
+                        <button
+                          onClick={() => handleNavigation('pe-performa-invoice')}
+                          style={{
+                            width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                            padding: '9px 24px 9px 44px', border: 'none',
+                            backgroundColor: currentView === 'pe-performa-invoice' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                            borderLeft: currentView === 'pe-performa-invoice' ? '3px solid #1e3a8a' : '3px solid transparent',
+                            color: currentView === 'pe-performa-invoice' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
+                            textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
+                            fontWeight: currentView === 'pe-performa-invoice' ? '600' : '400', fontSize: '13px',
+                          }}
+                          onMouseEnter={(e) => { if (currentView !== 'pe-performa-invoice') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                          onMouseLeave={(e) => { if (currentView !== 'pe-performa-invoice') e.currentTarget.style.backgroundColor = 'transparent'; }}
+                        >
+                          <Truck size={15} strokeWidth={currentView === 'pe-performa-invoice' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-performa-invoice' ? 1 : 0.6 }} />
+                          <span>Performa Invoice</span>
+                        </button>
+                      )}
 
-                        {/* MPL Home — Dashboard */}
-                        {canAccessView('pe-mpl-home') && (
-                          <button
-                            onClick={() => handleNavigation('pe-mpl-home')}
-                            style={{
-                              width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
-                              padding: '9px 24px 9px 44px', border: 'none',
-                              backgroundColor: currentView === 'pe-mpl-home' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                              borderLeft: currentView === 'pe-mpl-home' ? '3px solid #1e3a8a' : '3px solid transparent',
-                              color: currentView === 'pe-mpl-home' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
-                              textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                              fontWeight: currentView === 'pe-mpl-home' ? '600' : '400', fontSize: '13px',
-                            }}
-                            onMouseEnter={(e) => { if (currentView !== 'pe-mpl-home') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                            onMouseLeave={(e) => { if (currentView !== 'pe-mpl-home') e.currentTarget.style.backgroundColor = 'transparent'; }}
-                          >
-                            <Receipt size={15} strokeWidth={currentView === 'pe-mpl-home' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-mpl-home' ? 1 : 0.6 }} />
-                            <span>MPL Home</span>
-                          </button>
-                        )}
-
-                        {/* Performa Invoice */}
-                        {canAccessView('pe-performa-invoice') && (
-                          <button
-                            onClick={() => handleNavigation('pe-performa-invoice')}
-                            style={{
-                              width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
-                              padding: '9px 24px 9px 44px', border: 'none',
-                              backgroundColor: currentView === 'pe-performa-invoice' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                              borderLeft: currentView === 'pe-performa-invoice' ? '3px solid #1e3a8a' : '3px solid transparent',
-                              color: currentView === 'pe-performa-invoice' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
-                              textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                              fontWeight: currentView === 'pe-performa-invoice' ? '600' : '400', fontSize: '13px',
-                            }}
-                            onMouseEnter={(e) => { if (currentView !== 'pe-performa-invoice') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                            onMouseLeave={(e) => { if (currentView !== 'pe-performa-invoice') e.currentTarget.style.backgroundColor = 'transparent'; }}
-                          >
-                            <Truck size={15} strokeWidth={currentView === 'pe-performa-invoice' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-performa-invoice' ? 1 : 0.6 }} />
-                            <span>Performa Invoice</span>
-                          </button>
-                        )}
-
-                        {/* Traceability */}
-                        {canAccessView('pe-traceability') && (
-                          <button
-                            onClick={() => handleNavigation('pe-traceability')}
-                            style={{
-                              width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
-                              padding: '9px 24px 9px 44px', border: 'none',
-                              backgroundColor: currentView === 'pe-traceability' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                              borderLeft: currentView === 'pe-traceability' ? '3px solid #1e3a8a' : '3px solid transparent',
-                              color: currentView === 'pe-traceability' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
-                              textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                              fontWeight: currentView === 'pe-traceability' ? '600' : '400', fontSize: '13px',
-                            }}
-                            onMouseEnter={(e) => { if (currentView !== 'pe-traceability') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                            onMouseLeave={(e) => { if (currentView !== 'pe-traceability') e.currentTarget.style.backgroundColor = 'transparent'; }}
-                          >
-                            <Eye size={15} strokeWidth={currentView === 'pe-traceability' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-traceability' ? 1 : 0.6 }} />
-                            <span>Traceability</span>
-                          </button>
-                        )}
-                      </div>
+                      {/* Traceability */}
+                      {canAccessView('pe-traceability') && (
+                        <button
+                          onClick={() => handleNavigation('pe-traceability')}
+                          style={{
+                            width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                            padding: '9px 24px 9px 44px', border: 'none',
+                            backgroundColor: currentView === 'pe-traceability' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                            borderLeft: currentView === 'pe-traceability' ? '3px solid #1e3a8a' : '3px solid transparent',
+                            color: currentView === 'pe-traceability' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
+                            textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
+                            fontWeight: currentView === 'pe-traceability' ? '600' : '400', fontSize: '13px',
+                          }}
+                          onMouseEnter={(e) => { if (currentView !== 'pe-traceability') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                          onMouseLeave={(e) => { if (currentView !== 'pe-traceability') e.currentTarget.style.backgroundColor = 'transparent'; }}
+                        >
+                          <Eye size={15} strokeWidth={currentView === 'pe-traceability' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-traceability' ? 1 : 0.6 }} />
+                          <span>Traceability</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -1321,6 +1230,6 @@ export default function App() {
           </main>
         </div>
       </div>
-    </ErrorBoundary>
+    </ErrorBoundary >
   );
 }

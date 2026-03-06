@@ -149,7 +149,7 @@ export function ContractConfigManager({ accessToken, userRole, userPerms = {} }:
                                     <th style={{ ...th, textAlign: 'right' }}>Outer Box Qty</th>
                                     <th style={{ ...th, textAlign: 'right' }}>Inner Box Qty</th>
                                     <th style={{ ...th, textAlign: 'center' }}>Full Containers</th>
-                                    <th style={{ ...th, textAlign: 'center' }}>Adjustment</th>
+                                    <th style={{ ...th, textAlign: 'center' }}>Top-off</th>
                                     <th style={{ ...th, textAlign: 'center' }}>Status</th>
                                 </tr>
                             </thead>
@@ -235,7 +235,7 @@ export function ContractConfigManager({ accessToken, userRole, userPerms = {} }:
                                                                 <div style={{ fontSize: 13, lineHeight: 2 }}>
                                                                     <div>{b.full} full containers × {s.inner_box_quantity} pcs = <strong>{b.full * s.inner_box_quantity}</strong> pcs</div>
                                                                     {b.adjustment > 0 && (
-                                                                        <div>+ 1 adjustment box = <strong>{b.adjustment}</strong> pcs</div>
+                                                                        <div>+ 1 Top-off Box = <strong>{b.adjustment}</strong> pcs</div>
                                                                     )}
                                                                     <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 4, marginTop: 4 }}>
                                                                         Total: <strong style={{ color: '#1e3a8a' }}>{s.outer_box_quantity.toLocaleString()}</strong> pcs per pallet
