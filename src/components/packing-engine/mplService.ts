@@ -11,9 +11,13 @@
  * References existing tables from presentschema.sql:
  *   - pack_pallets, pack_containers, pack_pallet_containers
  *   - pack_packing_lists, pack_packing_list_data, pack_packing_list_pallet_details
- *   - pack_proforma_invoices, pack_dispatch_movements
- *   - inv_movement_headers, inv_warehouse_stock, inv_stock_ledger
+ *   - pack_proforma_invoices
+ *   - inv_warehouse_stock, inv_stock_ledger (dispatch stock transfer)
  *   - profiles, items, packing_specifications
+ *
+ * Architecture: Dispatch (PI approval) writes directly to inv_stock_ledger
+ * with the Proforma Invoice as the reference document. No inv_movement_headers
+ * are created — those are reserved for the Stock Movement approval workflow.
  */
 
 import { getSupabaseClient } from '../../utils/supabase/client';
@@ -682,7 +686,7 @@ export async function createPerformaInvoice(mplIds: string[], meta?: {
  */
 export async function approvePerformaInvoice(piId: string): Promise<void> {
     const userId = await getCurrentUserId();
-    const correlationId = crypto.randomUUID();
+    const correlationId = self.crypto?.randomUUID?.() || (Math.random().toString(36).substring(2) + Date.now().toString(36));
 
     // 1. Fetch PI
     const { data: pi, error: piErr } = await supabase
@@ -703,64 +707,149 @@ export async function approvePerformaInvoice(piId: string): Promise<void> {
     if (!piMpls || piMpls.length === 0) throw new Error('No MPLs linked to this PI');
 
     // 3. Find FG and In Transit warehouses
+    // Warehouse codes match DB_CODE_MAP in StockMovement.tsx
     const { data: warehouses } = await supabase
         .from('inv_warehouses')
         .select('id, warehouse_code, warehouse_name')
-        .in('warehouse_code', ['FG', 'IN_TRANSIT', 'FG-WH', 'TRANSIT']);
+        .in('warehouse_code', ['WH-PROD-FLOOR', 'WH-INTRANSIT']);
 
     const fgWarehouse = warehouses?.find((w: any) =>
-        w.warehouse_code === 'FG' || w.warehouse_code === 'FG-WH'
+        w.warehouse_code === 'WH-PROD-FLOOR'
     );
     const transitWarehouse = warehouses?.find((w: any) =>
-        w.warehouse_code === 'IN_TRANSIT' || w.warehouse_code === 'TRANSIT'
+        w.warehouse_code === 'WH-INTRANSIT'
     );
 
     if (!fgWarehouse || !transitWarehouse) {
         throw new Error('FG or In Transit warehouse not found. Please configure warehouses.');
     }
 
-    // 4. Create stock movement header
-    const movementNumber = `MOV-PI-${pi.proforma_number}-${Date.now().toString(36).toUpperCase()}`;
-    const { data: movHeader, error: movErr } = await supabase
-        .from('inv_movement_headers')
-        .insert({
-            movement_number: movementNumber,
-            movement_date: new Date().toISOString().split('T')[0],
-            movement_type: 'DISPATCH',
-            source_warehouse_id: fgWarehouse.id,
-            destination_warehouse_id: transitWarehouse.id,
-            status: 'COMPLETED',
-            approval_status: 'APPROVED',
-            reference_document_type: 'PROFORMA_INVOICE',
-            reference_document_number: pi.proforma_number,
-            reason_code: 'DISPATCH',
-            reason_description: `Dispatch for Performa Invoice ${pi.proforma_number}`,
-            requested_by: userId,
-            approved_by: userId,
-            approved_at: new Date().toISOString(),
-            completed_by: userId,
-            completed_at: new Date().toISOString(),
-        })
-        .select()
-        .single();
+    // ══════════════════════════════════════════════════════════════════════
+    // ARCHITECTURE: No inv_movement_headers or inv_movement_lines created.
+    //
+    // Movement records (inv_movement_headers) are ONLY for the Stock
+    // Movement approval workflow (Production → FG). Downstream dispatch
+    // flows use the Proforma Invoice itself as the transaction document.
+    //
+    // Stock traceability is maintained through:
+    //   1. inv_stock_ledger   → Immutable ledger (debit/credit per warehouse)
+    //   2. dispatch_audit_log → Cross-entity dispatch audit trail
+    //   3. pack_pallet_state_log → Pallet lifecycle tracking
+    //
+    // Reference chain: PI → MPL → Packing List → Pallets → Containers
+    // ══════════════════════════════════════════════════════════════════════
 
-    if (movErr) throw movErr;
+    // 4. AGGREGATE stock quantities by item_code across all MPLs
+    //    A single PI may contain multiple MPLs for the same item_code.
+    //    We aggregate FIRST, then do ONE deduction + ONE increment per item.
+    //    This ensures:
+    //      - No multiple read-modify-write on the same warehouse_stock row
+    //      - Exactly 1 ledger entry per item per warehouse (clean journal)
+    //      - Correct before/after quantities in the ledger
 
-    // 5. For each MPL's item, create dispatch movement record
+    const itemAgg: Record<string, { totalQty: number; mplNumbers: string[] }> = {};
     for (const piMpl of piMpls) {
         const mpl = piMpl.master_packing_lists;
+        const itemCode = mpl.item_code;
+        if (!itemAgg[itemCode]) {
+            itemAgg[itemCode] = { totalQty: 0, mplNumbers: [] };
+        }
+        itemAgg[itemCode].totalQty += mpl.total_quantity;
+        itemAgg[itemCode].mplNumbers.push(mpl.mpl_number);
+    }
 
-        // Create dispatch movement
-        await supabase.from('pack_dispatch_movements').insert({
-            proforma_id: piId,
-            movement_header_id: movHeader.id,
-            source_warehouse_id: fgWarehouse.id,
-            dest_warehouse_id: transitWarehouse.id,
-            item_code: mpl.item_code,
-            quantity: mpl.total_quantity,
-            pallet_count: mpl.total_pallets,
-            executed_by: userId,
-        });
+    // 4b. Execute ONE stock transfer per unique item_code
+    for (const [itemCode, { totalQty, mplNumbers }] of Object.entries(itemAgg)) {
+        const mplRef = mplNumbers.join(', ');
+
+        // ── DEDUCT from FG Warehouse (single read-modify-write per item) ──
+        const { data: srcStock } = await supabase
+            .from('inv_warehouse_stock')
+            .select('id, quantity_on_hand')
+            .eq('warehouse_id', fgWarehouse.id)
+            .eq('item_code', itemCode)
+            .eq('is_active', true)
+            .single();
+
+        if (srcStock) {
+            const newSrcQty = Math.max(0, srcStock.quantity_on_hand - totalQty);
+            await supabase.from('inv_warehouse_stock').update({
+                quantity_on_hand: newSrcQty,
+                last_issue_date: new Date().toISOString(),
+                updated_by: userId,
+            }).eq('id', srcStock.id);
+
+            await supabase.from('inv_stock_ledger').insert({
+                warehouse_id: fgWarehouse.id,
+                item_code: itemCode,
+                transaction_type: 'DISPATCH_OUT',
+                quantity_change: -totalQty,
+                quantity_before: srcStock.quantity_on_hand,
+                quantity_after: newSrcQty,
+                reference_type: 'PROFORMA_INVOICE',
+                reference_id: piId,
+                notes: `OUT: ${totalQty} units | PI ${pi.proforma_number} | MPL: ${mplRef} | FG → In Transit`,
+                created_by: userId,
+            });
+        }
+
+        // ── INCREMENT In Transit Warehouse (single read-modify-write per item) ──
+        const { data: dstStock } = await supabase
+            .from('inv_warehouse_stock')
+            .select('id, quantity_on_hand')
+            .eq('warehouse_id', transitWarehouse.id)
+            .eq('item_code', itemCode)
+            .eq('is_active', true)
+            .single();
+
+        if (dstStock) {
+            const newDstQty = dstStock.quantity_on_hand + totalQty;
+            await supabase.from('inv_warehouse_stock').update({
+                quantity_on_hand: newDstQty,
+                last_receipt_date: new Date().toISOString(),
+                updated_by: userId,
+            }).eq('id', dstStock.id);
+
+            await supabase.from('inv_stock_ledger').insert({
+                warehouse_id: transitWarehouse.id,
+                item_code: itemCode,
+                transaction_type: 'DISPATCH_IN',
+                quantity_change: totalQty,
+                quantity_before: dstStock.quantity_on_hand,
+                quantity_after: newDstQty,
+                reference_type: 'PROFORMA_INVOICE',
+                reference_id: piId,
+                notes: `IN: ${totalQty} units | PI ${pi.proforma_number} | MPL: ${mplRef} | FG → In Transit`,
+                created_by: userId,
+            });
+        } else {
+            // No stock record exists in transit — create one
+            await supabase.from('inv_warehouse_stock').insert({
+                warehouse_id: transitWarehouse.id,
+                item_code: itemCode,
+                quantity_on_hand: totalQty,
+                last_receipt_date: new Date().toISOString(),
+                created_by: userId,
+            });
+
+            await supabase.from('inv_stock_ledger').insert({
+                warehouse_id: transitWarehouse.id,
+                item_code: itemCode,
+                transaction_type: 'DISPATCH_IN',
+                quantity_change: totalQty,
+                quantity_before: 0,
+                quantity_after: totalQty,
+                reference_type: 'PROFORMA_INVOICE',
+                reference_id: piId,
+                notes: `IN: ${totalQty} units | PI ${pi.proforma_number} | MPL: ${mplRef} | FG → In Transit`,
+                created_by: userId,
+            });
+        }
+    }
+
+    // 5. Update MPL and pallet statuses
+    for (const piMpl of piMpls) {
+        const mpl = piMpl.master_packing_lists;
 
         // Update MPL status to DISPATCHED
         await supabase
@@ -799,7 +888,6 @@ export async function approvePerformaInvoice(piId: string): Promise<void> {
                 trigger_type: 'DISPATCH_EXECUTED',
                 metadata: {
                     proforma_number: pi.proforma_number,
-                    movement_number: movementNumber,
                 },
                 performed_by: userId,
             });
@@ -819,35 +907,19 @@ export async function approvePerformaInvoice(piId: string): Promise<void> {
         });
     }
 
-    // 6. Update PI status
+    // 6. Update PI status (no stock_movement_id — PI is the reference doc itself)
     await supabase
         .from('pack_proforma_invoices')
         .update({
             status: 'STOCK_MOVED',
-            stock_movement_id: movHeader.id,
             stock_moved_at: new Date().toISOString(),
             stock_moved_by: userId,
             updated_at: new Date().toISOString(),
         })
         .eq('id', piId);
 
-    // 7. Queue email notifications
-    await supabase.from('pack_email_queue').insert({
-        event_type: 'STOCK_MOVED_TRANSIT',
-        reference_type: 'PROFORMA_INVOICE',
-        reference_id: piId,
-        reference_number: pi.proforma_number,
-        subject: `[DISPATCH] Proforma Invoice ${pi.proforma_number} — Stock Moved to Transit`,
-        body_text: `Proforma Invoice ${pi.proforma_number} has been approved and stock has been moved from FG Warehouse to In Transit Warehouse.`,
-        trace_data: {
-            mpl_count: piMpls.length,
-            total_pallets: pi.total_pallets,
-            total_quantity: pi.total_quantity,
-            movement_number: movementNumber,
-        },
-    });
-
-    // 8. Audit: PI approved
+    // 7. Audit: PI approved & dispatched
+    // (Email is sent by the frontend via the send-dispatch-email Edge Function)
     await logDispatchAudit({
         entity_type: 'PROFORMA_INVOICE',
         entity_id: piId,
@@ -857,9 +929,10 @@ export async function approvePerformaInvoice(piId: string): Promise<void> {
         to_status: 'STOCK_MOVED',
         performed_by: userId,
         metadata: {
-            movement_number: movementNumber,
             source_warehouse: fgWarehouse.warehouse_name,
             dest_warehouse: transitWarehouse.warehouse_name,
+            total_quantity: pi.total_quantity,
+            total_pallets: pi.total_pallets,
         },
         correlation_id: correlationId,
     });

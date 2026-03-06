@@ -25,6 +25,7 @@ dist/
 .db/
 .db_reference/
 config/
+supabase/
 
 # ============================================================================
 # Internal / AI Prompts (local reference only)

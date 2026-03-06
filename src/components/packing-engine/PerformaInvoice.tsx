@@ -142,11 +142,62 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
         if (!approvalEmails.trim()) { setError('Please enter at least one email address'); return; }
         setApproving(true); setError(null);
         try {
+            // 1. Approve PI & move stock (this is the critical path)
             await approvePerformaInvoice(approveTarget.id);
-            // Queue approval email notification
+
+            // 2. Fetch MPL details for the email template
             const emails = approvalEmails.split(',').map(e => e.trim()).filter(Boolean);
-            await supabase.from('pack_email_queue').insert({ event_type: 'PI_APPROVED_DISPATCH', reference_type: 'PROFORMA_INVOICE', reference_id: approveTarget.id, reference_number: approveTarget.proforma_number, subject: `[APPROVED] Performa Invoice ${approveTarget.proforma_number} — Shipment ${approveTarget.shipment_number || ''}`, body_text: `Performa Invoice ${approveTarget.proforma_number} has been approved. Stock has been moved from FG Warehouse to In Transit.\n\nShipment: ${approveTarget.shipment_number || '—'}\nTotal Pallets: ${approveTarget.total_pallets}\nTotal Quantity: ${approveTarget.total_quantity}\n\nApproval notification sent to: ${emails.join(', ')}`, trace_data: { emails, shipment_number: approveTarget.shipment_number, total_pallets: approveTarget.total_pallets } });
-            setSuccessMsg(`${approveTarget.proforma_number} approved — Stock moved to In Transit — Email sent to ${emails.length} recipient(s)`);
+            let mplDetails: any[] = [];
+            try {
+                const { data: piMplData } = await supabase
+                    .from('proforma_invoice_mpls')
+                    .select('mpl_number, item_code, invoice_number, po_number, total_pallets, total_quantity')
+                    .eq('proforma_id', approveTarget.id)
+                    .order('line_number');
+                mplDetails = piMplData || [];
+            } catch { /* non-blocking */ }
+
+            // 3. Send dispatch email via Edge Function (non-blocking)
+            let emailSent = false;
+            try {
+                const { data: { session } } = await supabase.auth.getSession();
+                const res = await fetch(
+                    `https://sugvmurszfcneaeyoagv.supabase.co/functions/v1/send-dispatch-email`,
+                    {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${session?.access_token || ''}`,
+                        },
+                        body: JSON.stringify({
+                            to: emails,
+                            proforma_number: approveTarget.proforma_number,
+                            shipment_number: approveTarget.shipment_number || '',
+                            total_pallets: approveTarget.total_pallets,
+                            total_quantity: approveTarget.total_quantity,
+                            total_invoices: approveTarget.total_invoices,
+                            mpls: mplDetails.map(m => ({
+                                mpl_number: m.mpl_number,
+                                item_code: m.item_code,
+                                invoice_number: m.invoice_number || '',
+                                po_number: m.po_number || '',
+                                total_pallets: m.total_pallets || 0,
+                                total_quantity: m.total_quantity || 0,
+                            })),
+                        }),
+                    }
+                );
+                const result = await res.json();
+                emailSent = result.success === true;
+                if (!emailSent) console.warn('Email send failed:', result.error);
+            } catch (emailErr: any) {
+                console.warn('Email dispatch failed (non-blocking):', emailErr.message);
+            }
+
+            const emailMsg = emailSent
+                ? ` — Email sent to ${emails.length} recipient(s)`
+                : ` — Email notification pending (check Resend setup)`;
+            setSuccessMsg(`${approveTarget.proforma_number} approved — Stock moved to In Transit${emailMsg}`);
             setApproveTarget(null); setStep('LIST'); loadPIs();
             setTimeout(() => setSuccessMsg(null), 6000);
         } catch (err: any) { setError(err.message); } finally { setApproving(false); }
