@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { projectId } from '../utils/supabase/info';
 import { Plus, Edit2, FileText, Loader2, Search, Trash2, Eye, Package } from 'lucide-react';
+import { ModuleLoader } from './ui/EnterpriseUI';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
@@ -200,6 +201,11 @@ export function BlanketOrders({ accessToken, userRole, userPerms = {} }: Blanket
     order.customerName.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  // ── FIRST-LOAD: full-page skeleton ──
+  if (loading && orders.length === 0) {
+    return <ModuleLoader moduleName="Blanket Orders" icon={<FileText size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -268,7 +274,7 @@ export function BlanketOrders({ accessToken, userRole, userPerms = {} }: Blanket
 
       {/* Orders Table */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        {loading ? (
+        {loading && orders.length === 0 ? (
           <div className="flex items-center justify-center h-64">
             <Loader2 className="animate-spin text-blue-600" size={32} />
           </div>
@@ -284,7 +290,7 @@ export function BlanketOrders({ accessToken, userRole, userPerms = {} }: Blanket
             </button>}
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto" style={{ opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto' }}>
             <table className="w-full">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
@@ -313,8 +319,8 @@ export function BlanketOrders({ accessToken, userRole, userPerms = {} }: Blanket
                     </td>
                     <td className="px-6 py-4 text-center">
                       <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${order.status === 'ACTIVE' ? 'bg-green-100 text-green-700' :
-                          order.status === 'COMPLETED' ? 'bg-blue-100 text-blue-700' :
-                            'bg-gray-100 text-gray-700'
+                        order.status === 'COMPLETED' ? 'bg-blue-100 text-blue-700' :
+                          'bg-gray-100 text-gray-700'
                         }`}>
                         {order.status}
                       </span>

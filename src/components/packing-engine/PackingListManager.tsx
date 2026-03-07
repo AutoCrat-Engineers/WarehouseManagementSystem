@@ -183,6 +183,11 @@ export function PackingListManager({ accessToken, userRole, userPerms = {} }: Pa
         </button>
     );
 
+    // ── FIRST-LOAD: full-page skeleton ──
+    if (loading && packingLists.length === 0 && invoices.length === 0 && proformas.length === 0) {
+        return <ModuleLoader moduleName="Dispatch Documents" icon={<FileText size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
+    }
+
     return (
         <div style={{ paddingBottom: 40 }}>
             {/* TAB BAR */}
@@ -205,10 +210,10 @@ export function PackingListManager({ accessToken, userRole, userPerms = {} }: Pa
             </FilterBar>
 
             <Card style={{ padding: 0 }}>
-                {loading ? (
+                {loading && packingLists.length === 0 && invoices.length === 0 && proformas.length === 0 ? (
                     <ModuleLoader moduleName="Loading..." icon={<Loader2 size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
                 ) : (
-                    <div style={{ overflowX: 'auto' }}>
+                    <div style={{ overflowX: 'auto', opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto' }}>
                         {/* ── PACKING LISTS TAB ── */}
                         {tab === 'packing-lists' && (
                             packingLists.length === 0 ? (

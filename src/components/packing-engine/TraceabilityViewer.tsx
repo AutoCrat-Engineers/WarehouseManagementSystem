@@ -148,6 +148,11 @@ export function TraceabilityViewer({ accessToken, userRole, userPerms = {} }: Tr
         borderBottom: '1px solid #f3f4f6', whiteSpace: 'nowrap',
     };
 
+    // ── FIRST-LOAD: full-page skeleton ──
+    if (loading && records.length === 0) {
+        return <ModuleLoader moduleName="Traceability" icon={<Eye size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
+    }
+
     return (
         <div style={{ paddingBottom: 40 }}>
             <SummaryCardsGrid>
@@ -184,13 +189,13 @@ export function TraceabilityViewer({ accessToken, userRole, userPerms = {} }: Tr
             </FilterBar>
 
             <Card style={{ padding: 0 }}>
-                {loading ? (
+                {loading && records.length === 0 ? (
                     <ModuleLoader moduleName="Traceability" icon={<Eye size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
                 ) : filtered.length === 0 ? (
                     <EmptyState icon={<Eye size={48} style={{ color: 'var(--enterprise-gray-400)' }} />}
                         title="No Trace Records" description="Trace records appear once containers are created." />
                 ) : (
-                    <div style={{ overflowX: 'auto' }}>
+                    <div style={{ overflowX: 'auto', opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto' }}>
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead>
                                 <tr>

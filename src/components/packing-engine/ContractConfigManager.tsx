@@ -97,6 +97,11 @@ export function ContractConfigManager({ accessToken, userRole, userPerms = {} }:
         borderBottom: '1px solid #f3f4f6', whiteSpace: 'nowrap',
     };
 
+    // ── FIRST-LOAD: full-page skeleton ──
+    if (loading && specs.length === 0) {
+        return <ModuleLoader moduleName="Packing Specifications" icon={<Settings size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
+    }
+
     return (
         <div style={{ paddingBottom: 40 }}>
             <SummaryCardsGrid>
@@ -134,14 +139,14 @@ export function ContractConfigManager({ accessToken, userRole, userPerms = {} }:
             </FilterBar>
 
             <Card style={{ padding: 0 }}>
-                {loading ? (
+                {loading && specs.length === 0 ? (
                     <ModuleLoader moduleName="Packing Specifications" icon={<Settings size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
                 ) : filtered.length === 0 ? (
                     <EmptyState icon={<Settings size={48} style={{ color: 'var(--enterprise-gray-400)' }} />}
                         title="No Packing Specifications"
                         description="Add packing specifications in Packing Details first." />
                 ) : (
-                    <div style={{ overflowX: 'auto' }}>
+                    <div style={{ overflowX: 'auto', opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto' }}>
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead>
                                 <tr>

@@ -1652,6 +1652,11 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   // RENDER: MAIN PAGE
   // ============================================================================
 
+  // ── FIRST-LOAD: full-page skeleton ──
+  if (loading && movements.length === 0) {
+    return <ModuleLoader moduleName="Stock Movements" icon={<ArrowRightLeft size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
+  }
+
   return (
     <div>
       {/* ─── SUMMARY CARDS ─── */}
@@ -1733,7 +1738,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
       </FilterBar>
 
       {/* ─── MOVEMENT RECORDS TABLE ─── */}
-      {loading ? (
+      {loading && movements.length === 0 ? (
         <ModuleLoader moduleName="Stock Movements" icon={<ArrowRightLeft size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
       ) : movements.length === 0 ? (
         <EmptyState
@@ -1747,6 +1752,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
           <div style={{
             background: 'white', borderRadius: '8px', border: '1px solid var(--enterprise-gray-200)',
             overflow: 'hidden', boxShadow: 'var(--shadow-sm)',
+            opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto',
           }}>
             <div className="table-responsive" style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 380px)', overflowY: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
