@@ -829,27 +829,6 @@ export default function App() {
                         </button>
                       )}
 
-                      {/* Contract Configs */}
-                      {canAccessView('pe-contract-configs') && (
-                        <button
-                          onClick={() => handleNavigation('pe-contract-configs')}
-                          style={{
-                            width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
-                            padding: '9px 24px 9px 44px', border: 'none',
-                            backgroundColor: currentView === 'pe-contract-configs' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                            borderLeft: currentView === 'pe-contract-configs' ? '3px solid #1e3a8a' : '3px solid transparent',
-                            color: currentView === 'pe-contract-configs' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
-                            textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                            fontWeight: currentView === 'pe-contract-configs' ? '600' : '400', fontSize: '13px',
-                          }}
-                          onMouseEnter={(e) => { if (currentView !== 'pe-contract-configs') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                          onMouseLeave={(e) => { if (currentView !== 'pe-contract-configs') e.currentTarget.style.backgroundColor = 'transparent'; }}
-                        >
-                          <Settings size={15} strokeWidth={currentView === 'pe-contract-configs' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-contract-configs' ? 1 : 0.6 }} />
-                          <span>Contract Configs</span>
-                        </button>
-                      )}
-
                       {/* Dispatch Selection */}
                       {canAccessView('pe-dispatch') && (
                         <button
