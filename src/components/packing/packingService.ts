@@ -148,8 +148,8 @@ export async function fetchPackingRequests(onlyMine: boolean = false): Promise<P
     const itemCodes = [...new Set(rows.map((r: any) => r.item_code).filter(Boolean))];
     const requestIds = rows.map((r: any) => r.id);
 
-    // ── PARALLEL ENRICHMENT — all 3 queries run simultaneously ──
-    const [profilesResult, itemsResult, boxesResult] = await Promise.all([
+    // ── PARALLEL ENRICHMENT — all 4 queries run simultaneously ──
+    const [profilesResult, itemsResult, boxesResult, specsResult] = await Promise.all([
         userIds.length
             ? supabase.from('profiles').select('id, full_name').in('id', userIds)
             : Promise.resolve({ data: [] as any[] }),
@@ -158,6 +158,9 @@ export async function fetchPackingRequests(onlyMine: boolean = false): Promise<P
             : Promise.resolve({ data: [] as any[] }),
         requestIds.length
             ? supabase.from('packing_boxes').select('packing_request_id, box_qty, sticker_printed, is_transferred').in('packing_request_id', requestIds)
+            : Promise.resolve({ data: [] as any[] }),
+        itemCodes.length
+            ? supabase.from('packing_specifications').select('item_code, inner_box_quantity').eq('is_active', true).in('item_code', itemCodes)
             : Promise.resolve({ data: [] as any[] }),
     ]);
 
@@ -174,6 +177,14 @@ export async function fetchPackingRequests(onlyMine: boolean = false): Promise<P
         };
     });
 
+    // Packing spec map — inner_box_quantity per item_code
+    const specMap: Record<string, number> = {};
+    (specsResult.data || []).forEach((s: any) => {
+        if (s.inner_box_quantity && s.inner_box_quantity > 0) {
+            specMap[s.item_code] = s.inner_box_quantity;
+        }
+    });
+
     const boxAgg: Record<string, { sum: number; count: number; allPrinted: boolean; transferredSum: number }> = {};
     (boxesResult.data || []).forEach((b: any) => {
         if (!boxAgg[b.packing_request_id]) boxAgg[b.packing_request_id] = { sum: 0, count: 0, allPrinted: true, transferredSum: 0 };
@@ -183,20 +194,31 @@ export async function fetchPackingRequests(onlyMine: boolean = false): Promise<P
         if (b.is_transferred) boxAgg[b.packing_request_id].transferredSum += Number(b.box_qty);
     });
 
-    return rows.map((r: any) => ({
-        ...r,
-        created_by_name: nameMap[r.created_by] || undefined,
-        approved_by_name: r.approved_by ? nameMap[r.approved_by] : undefined,
-        item_name: itemMap[r.item_code]?.item_name || r.item_code,
-        part_number: itemMap[r.item_code]?.part_number || null,
-        master_serial_no: itemMap[r.item_code]?.master_serial_no || null,
-        revision: itemMap[r.item_code]?.revision || null,
-        boxes_packed_qty: boxAgg[r.id]?.sum || 0,
-        boxes_count: boxAgg[r.id]?.count || 0,
-        all_stickers_printed: boxAgg[r.id]?.allPrinted ?? true,
-        // Use actual transferred qty from boxes (source of truth), not the stored field
-        transferred_qty: boxAgg[r.id]?.transferredSum ?? (r.transferred_qty || 0),
-    }));
+    return rows.map((r: any) => {
+        // Use actual box count from packing_boxes if available,
+        // otherwise calculate expected count from total_packed_qty / inner_box_quantity
+        const actualBoxCount = boxAgg[r.id]?.count ?? 0;
+        const innerBoxQty = specMap[r.item_code];
+        const calculatedBoxCount = innerBoxQty && innerBoxQty > 0
+            ? Math.floor(Number(r.total_packed_qty) / innerBoxQty) + (Number(r.total_packed_qty) % innerBoxQty > 0 ? 1 : 0)
+            : 0;
+        const boxesCount = actualBoxCount > 0 ? actualBoxCount : calculatedBoxCount;
+
+        return {
+            ...r,
+            created_by_name: nameMap[r.created_by] || undefined,
+            approved_by_name: r.approved_by ? nameMap[r.approved_by] : undefined,
+            item_name: itemMap[r.item_code]?.item_name || r.item_code,
+            part_number: itemMap[r.item_code]?.part_number || null,
+            master_serial_no: itemMap[r.item_code]?.master_serial_no || null,
+            revision: itemMap[r.item_code]?.revision || null,
+            boxes_packed_qty: boxAgg[r.id]?.sum || 0,
+            boxes_count: boxesCount,
+            all_stickers_printed: boxAgg[r.id]?.allPrinted ?? true,
+            // Use actual transferred qty from boxes (source of truth), not the stored field
+            transferred_qty: boxAgg[r.id]?.transferredSum ?? (r.transferred_qty || 0),
+        };
+    });
 }
 
 export async function fetchBoxesForRequest(requestId: string): Promise<PackingBox[]> {

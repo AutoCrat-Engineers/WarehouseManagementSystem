@@ -818,8 +818,8 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
         setDeleteTarget(null);
     };
 
-    // ── LOADING STATE ──
-    if (loading) {
+    // ── LOADING STATE (only on initial load) ──
+    if (loading && specs.length === 0) {
         return (
             <ModuleLoader moduleName="Packing Details" icon={<ClipboardList size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
         );
@@ -911,7 +911,7 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
                         <ClearFiltersButton onClick={() => setCardFilter('ALL')} />
                     )}
                     <ExportCSVButton onClick={handleExport} />
-                    <RefreshButton onClick={() => { fetchSpecs(); showToast('info', 'Refreshed', 'Data refreshed successfully.'); }} />
+                    <RefreshButton onClick={() => { fetchSpecs().then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); }} loading={loading} />
                     {canAdd && <AddButton label="Add Specification" onClick={() => setShowAddModal(true)} />}
                 </ActionBar>
             </SharedFilterBar>
@@ -926,7 +926,7 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
                         action={!hasActiveFilters && !searchTerm && canAdd ? { label: 'Add Specification', onClick: () => setShowAddModal(true) } : undefined}
                     />
                 ) : (
-                    <div className="table-responsive" style={{ overflowX: 'auto' }}>
+                    <div className="table-responsive" style={{ overflowX: 'auto', opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto' }}>
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead>
                                 <tr style={{ backgroundColor: 'var(--table-header-bg)', borderBottom: '2px solid var(--table-border)' }}>

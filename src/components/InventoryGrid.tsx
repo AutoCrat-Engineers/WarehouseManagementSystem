@@ -14,7 +14,7 @@
  * - View Screen: vw_item_stock_distribution
  */
 
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
     Package,
     RefreshCw,
@@ -27,6 +27,7 @@ import {
     Download,
     X,
     XCircle,
+    Info,
 } from 'lucide-react';
 import { Card, Button, Badge, LoadingSpinner, EmptyState, Modal, ModuleLoader } from './ui/EnterpriseUI';
 import {
@@ -396,6 +397,13 @@ export function InventoryGrid() {
 
     // Local state
     const [refreshing, setRefreshing] = useState(false);
+    const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; title: string; text: string } | null>(null);
+    const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const showToast = useCallback((type: 'success' | 'error' | 'warning' | 'info', title: string, text: string, dur = 3000) => {
+        if (toastTimer.current) clearTimeout(toastTimer.current);
+        setToast({ type, title, text });
+        toastTimer.current = setTimeout(() => setToast(null), dur);
+    }, []);
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState<StockStatus | 'ALL'>('ALL');
     const [activeStatusFilter, setActiveStatusFilter] = useState<ActiveStatusFilter>('ALL');
@@ -414,6 +422,7 @@ export function InventoryGrid() {
         setRefreshing(true);
         await refetch();
         setRefreshing(false);
+        showToast('info', 'Refreshed', 'Data refreshed successfully.');
     };
 
     // Handle sort
@@ -563,6 +572,36 @@ export function InventoryGrid() {
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            {/* Toast */}
+            {toast && (
+                <div style={{
+                    position: 'fixed', top: '24px', right: '24px', zIndex: 9999,
+                    padding: '16px 20px', borderRadius: '14px', maxWidth: '420px', minWidth: '320px',
+                    background: toast.type === 'success' ? 'linear-gradient(135deg, #f0fdf4, #dcfce7)'
+                        : toast.type === 'error' ? 'linear-gradient(135deg, #fef2f2, #fee2e2)'
+                            : toast.type === 'warning' ? 'linear-gradient(135deg, #fffbeb, #fef3c7)'
+                                : 'linear-gradient(135deg, #eff6ff, #dbeafe)',
+                    border: `1.5px solid ${toast.type === 'success' ? '#86efac' : toast.type === 'error' ? '#fca5a5' : toast.type === 'warning' ? '#fcd34d' : '#93c5fd'}`,
+                    boxShadow: '0 10px 40px rgba(0,0,0,0.12)', display: 'flex', alignItems: 'flex-start', gap: '12px',
+                    animation: 'slideInDown 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+                }}>
+                    <div style={{
+                        width: '36px', height: '36px', borderRadius: '10px', flexShrink: 0,
+                        background: toast.type === 'success' ? 'linear-gradient(135deg, #16a34a, #15803d)' : toast.type === 'error' ? 'linear-gradient(135deg, #dc2626, #b91c1c)' : toast.type === 'warning' ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                        {toast.type === 'success' && <CheckCircle size={18} style={{ color: '#fff' }} />}
+                        {toast.type === 'error' && <XCircle size={18} style={{ color: '#fff' }} />}
+                        {toast.type === 'warning' && <AlertTriangle size={18} style={{ color: '#fff' }} />}
+                        {toast.type === 'info' && <Info size={18} style={{ color: '#fff' }} />}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '13px', fontWeight: 800, color: toast.type === 'success' ? '#14532d' : toast.type === 'error' ? '#7f1d1d' : toast.type === 'warning' ? '#78350f' : '#1e3a5f', marginBottom: '2px' }}>{toast.title}</div>
+                        <div style={{ fontSize: '12px', fontWeight: 500, lineHeight: '1.5', color: toast.type === 'success' ? '#166534' : toast.type === 'error' ? '#991b1b' : toast.type === 'warning' ? '#92400e' : '#1e40af' }}>{toast.text}</div>
+                    </div>
+                    <button onClick={() => { if (toastTimer.current) clearTimeout(toastTimer.current); setToast(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', borderRadius: '6px', display: 'flex', color: 'var(--enterprise-gray-400)' }}><X size={16} /></button>
+                </div>
+            )}
             {/* Summary Cards - Responsive Grid with Click-to-Filter */}
             <SummaryCardsGrid>
                 <SummaryCard
@@ -647,7 +686,7 @@ export function InventoryGrid() {
                     />
                 ) : (
                     <>
-                        <div className="table-responsive" style={{ overflowX: 'auto' }}>
+                        <div className="table-responsive" style={{ overflowX: 'auto', opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                                 <thead>
                                     <tr style={{
@@ -851,6 +890,10 @@ export function InventoryGrid() {
                 }
                 .spinning {
                     animation: spin 1s linear infinite;
+                }
+                @keyframes slideInDown {
+                    from { opacity: 0; transform: translateY(-16px); }
+                    to { opacity: 1; transform: translateY(0); }
                 }
             `}</style>
         </div >

@@ -8,11 +8,11 @@
  *   - Operator instruction panel
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
     Package, CheckCircle2, AlertTriangle, Truck, Layers, Box,
     ChevronDown, ChevronRight, Search, RefreshCw, Eye, Info, Clock,
-    ArrowRightLeft, Loader2,
+    ArrowRightLeft, Loader2, X, XCircle,
 } from 'lucide-react';
 import { Card, Modal, EmptyState, ModuleLoader, Button } from '../ui/EnterpriseUI';
 import {
@@ -94,6 +94,13 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
     const supabase = getSupabaseClient();
     const [pallets, setPallets] = useState<Pallet[]>([]);
     const [loading, setLoading] = useState(true);
+    const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; title: string; text: string } | null>(null);
+    const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const showToast = useCallback((type: 'success' | 'error' | 'warning' | 'info', title: string, text: string, dur = 3000) => {
+        if (toastTimer.current) clearTimeout(toastTimer.current);
+        setToast({ type, title, text });
+        toastTimer.current = setTimeout(() => setToast(null), dur);
+    }, []);
     const [searchTerm, setSearchTerm] = useState('');
     const [stateFilter, setStateFilter] = useState('ALL');
     const [expandedPallet, setExpandedPallet] = useState<string | null>(null);
@@ -245,8 +252,43 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
     // RENDER
     // ════════════════════════════════════════════════════════════════════
 
+    // ── FIRST-LOAD: full-page skeleton ──
+    if (loading && pallets.length === 0) {
+        return <ModuleLoader moduleName="Pallet Dashboard" icon={<Layers size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
+    }
+
     return (
         <div style={{ paddingBottom: 40 }}>
+            {/* Toast */}
+            {toast && (
+                <div style={{
+                    position: 'fixed', top: '24px', right: '24px', zIndex: 9999,
+                    padding: '16px 20px', borderRadius: '14px', maxWidth: '420px', minWidth: '320px',
+                    background: toast.type === 'success' ? 'linear-gradient(135deg, #f0fdf4, #dcfce7)'
+                        : toast.type === 'error' ? 'linear-gradient(135deg, #fef2f2, #fee2e2)'
+                            : toast.type === 'warning' ? 'linear-gradient(135deg, #fffbeb, #fef3c7)'
+                                : 'linear-gradient(135deg, #eff6ff, #dbeafe)',
+                    border: `1.5px solid ${toast.type === 'success' ? '#86efac' : toast.type === 'error' ? '#fca5a5' : toast.type === 'warning' ? '#fcd34d' : '#93c5fd'}`,
+                    boxShadow: '0 10px 40px rgba(0,0,0,0.12)', display: 'flex', alignItems: 'flex-start', gap: '12px',
+                    animation: 'slideInDown 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+                }}>
+                    <div style={{
+                        width: '36px', height: '36px', borderRadius: '10px', flexShrink: 0,
+                        background: toast.type === 'success' ? 'linear-gradient(135deg, #16a34a, #15803d)' : toast.type === 'error' ? 'linear-gradient(135deg, #dc2626, #b91c1c)' : toast.type === 'warning' ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                        {toast.type === 'success' && <CheckCircle2 size={18} style={{ color: '#fff' }} />}
+                        {toast.type === 'error' && <XCircle size={18} style={{ color: '#fff' }} />}
+                        {toast.type === 'warning' && <AlertTriangle size={18} style={{ color: '#fff' }} />}
+                        {toast.type === 'info' && <Info size={18} style={{ color: '#fff' }} />}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '13px', fontWeight: 800, color: toast.type === 'success' ? '#14532d' : toast.type === 'error' ? '#7f1d1d' : toast.type === 'warning' ? '#78350f' : '#1e3a5f', marginBottom: '2px' }}>{toast.title}</div>
+                        <div style={{ fontSize: '12px', fontWeight: 500, lineHeight: '1.5', color: toast.type === 'success' ? '#166534' : toast.type === 'error' ? '#991b1b' : toast.type === 'warning' ? '#92400e' : '#1e40af' }}>{toast.text}</div>
+                    </div>
+                    <button onClick={() => { if (toastTimer.current) clearTimeout(toastTimer.current); setToast(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', borderRadius: '6px', display: 'flex', color: 'var(--enterprise-gray-400)' }}><X size={16} /></button>
+                </div>
+            )}
             {/* SUMMARY CARDS */}
             <SummaryCardsGrid>
                 <SummaryCard
@@ -316,13 +358,13 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
                         <ClearFiltersButton onClick={() => { setSearchTerm(''); setStateFilter('ALL'); setDateFrom(''); setDateTo(''); }} />
                     )}
                     <ExportCSVButton onClick={handleExport} />
-                    <RefreshButton onClick={fetchData} loading={loading} />
+                    <RefreshButton onClick={() => { fetchData().then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); }} loading={loading} />
                 </ActionBar>
             </FilterBar>
 
             {/* TABLE */}
             <Card style={{ padding: 0 }}>
-                {loading ? (
+                {loading && pallets.length === 0 ? (
                     <ModuleLoader moduleName="Pallet Dashboard" icon={<Layers size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
                 ) : filtered.length === 0 ? (
                     <EmptyState
@@ -331,7 +373,7 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
                         description="Once contract configs are set and containers are created, pallets will appear here automatically."
                     />
                 ) : (
-                    <div style={{ overflowX: 'auto' }}>
+                    <div style={{ overflowX: 'auto', opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto' }}>
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead>
                                 <tr>
@@ -550,7 +592,10 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
                 )}
             </Card>
 
-            <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+            <style>{`
+                @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+                @keyframes slideInDown { from { opacity: 0; transform: translateY(-16px); } to { opacity: 1; transform: translateY(0); } }
+            `}</style>
         </div>
     );
 }
