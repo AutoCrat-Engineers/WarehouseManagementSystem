@@ -94,6 +94,7 @@ export interface Pallet {
     // Joined
     item_name?: string;
     master_serial_no?: string;
+    part_number?: string;
 }
 
 export interface PackingList {
@@ -639,7 +640,7 @@ export async function fetchPallets(filters?: {
         .from('pack_pallets')
         .select(`
             *,
-            items!pack_pallets_item_id_fkey (item_name, master_serial_no)
+            items!pack_pallets_item_id_fkey (item_name, master_serial_no, part_number)
         `)
         .order('created_at', { ascending: false });
 
@@ -658,6 +659,7 @@ export async function fetchPallets(filters?: {
         ...d,
         item_name: d.items?.item_name,
         master_serial_no: d.items?.master_serial_no,
+        part_number: d.items?.part_number,
     }));
 }
 
