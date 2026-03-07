@@ -17,7 +17,7 @@ import {
 import { Card, Modal, EmptyState, ModuleLoader, Button } from '../ui/EnterpriseUI';
 import {
     SummaryCard, SummaryCardsGrid, SearchBox, FilterBar, ActionBar,
-    StatusFilter, RefreshButton, ExportCSVButton,
+    StatusFilter, RefreshButton, ExportCSVButton, DateRangeFilter, ClearFiltersButton,
 } from '../ui/SharedComponents';
 import * as svc from './packingEngineService';
 import type { Pallet, PalletState, PackContainer } from './packingEngineService';
@@ -103,6 +103,10 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
     const [displayCount, setDisplayCount] = useState(20);
     const ITEMS_PER_PAGE = 20;
 
+    // Date range filter
+    const [dateFrom, setDateFrom] = useState('');
+    const [dateTo, setDateTo] = useState('');
+
     // Cache all container packing IDs for search
     const [allContainerMap, setAllContainerMap] = useState<Record<string, string[]>>({});
 
@@ -180,12 +184,21 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
                 // Search through inner box packing IDs / container numbers
                 (allContainerMap[p.id] || []).some(id => id.includes(term));
             const matchState = stateFilter === 'ALL' || p.state === stateFilter;
-            return matchSearch && matchState;
+
+            // Date range filter on created_at
+            let matchDate = true;
+            if (dateFrom || dateTo) {
+                const palletDate = p.created_at ? p.created_at.split('T')[0] : '';
+                if (dateFrom && palletDate < dateFrom) matchDate = false;
+                if (dateTo && palletDate > dateTo) matchDate = false;
+            }
+
+            return matchSearch && matchState && matchDate;
         });
-    }, [pallets, searchTerm, stateFilter, allContainerMap]);
+    }, [pallets, searchTerm, stateFilter, allContainerMap, dateFrom, dateTo]);
 
     // Reset display count when search/filter changes
-    useEffect(() => { setDisplayCount(ITEMS_PER_PAGE); }, [searchTerm, stateFilter]);
+    useEffect(() => { setDisplayCount(ITEMS_PER_PAGE); }, [searchTerm, stateFilter, dateFrom, dateTo]);
 
     const visiblePallets = useMemo(() => filtered.slice(0, displayCount), [filtered, displayCount]);
     const hasMore = displayCount < filtered.length;
@@ -289,7 +302,19 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
                         { value: 'IN_TRANSIT', label: 'In Transit' },
                     ]}
                 />
+
+                {/* Date Range Filter */}
+                <DateRangeFilter
+                    dateFrom={dateFrom}
+                    dateTo={dateTo}
+                    onDateFromChange={setDateFrom}
+                    onDateToChange={setDateTo}
+                />
+
                 <ActionBar>
+                    {(searchTerm || stateFilter !== 'ALL' || dateFrom || dateTo) && (
+                        <ClearFiltersButton onClick={() => { setSearchTerm(''); setStateFilter('ALL'); setDateFrom(''); setDateTo(''); }} />
+                    )}
                     <ExportCSVButton onClick={handleExport} />
                     <RefreshButton onClick={fetchData} loading={loading} />
                 </ActionBar>

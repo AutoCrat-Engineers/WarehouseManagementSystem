@@ -309,65 +309,165 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
                                                                     </div>
                                                                 )}
 
-                                                                {/* Ready pallets */}
-                                                                {readyPallets.length > 0 && (
-                                                                    <>
-                                                                        <div style={{ fontSize: 12, fontWeight: 700, color: '#16a34a', marginBottom: 6, textTransform: 'uppercase' }}>
-                                                                            Ready Pallets ({readyPallets.length})
-                                                                        </div>
-                                                                        {readyPallets.map(p => (
-                                                                            <div key={p.id} style={{
-                                                                                display: 'flex', alignItems: 'center', gap: 12,
-                                                                                padding: '8px 12px', borderRadius: 8,
-                                                                                background: selectedPalletIds.has(p.id) ? '#eff6ff' : 'white',
-                                                                                border: `1px solid ${selectedPalletIds.has(p.id) ? '#2563eb' : '#e5e7eb'}`,
-                                                                                marginBottom: 6, cursor: canCreate ? 'pointer' : 'default',
-                                                                            }}
-                                                                                onClick={() => canCreate && togglePallet(p.id)}>
-                                                                                {canCreate && (
-                                                                                    <div style={{
-                                                                                        width: 20, height: 20, borderRadius: 4,
-                                                                                        border: `2px solid ${selectedPalletIds.has(p.id) ? '#2563eb' : '#d1d5db'}`,
-                                                                                        background: selectedPalletIds.has(p.id) ? '#2563eb' : 'white',
-                                                                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                                                    }}>
-                                                                                        {selectedPalletIds.has(p.id) && <Check size={14} color="white" />}
-                                                                                    </div>
-                                                                                )}
-                                                                                <span style={{ fontFamily: 'monospace', fontWeight: 600, fontSize: 13, color: '#1e3a8a' }}>{p.pallet_number}</span>
-                                                                                <span style={{ fontWeight: 600, fontSize: 13 }}>{p.current_qty.toLocaleString()} pcs</span>
-                                                                                <span style={{ fontSize: 12, color: '#6b7280' }}>{p.container_count} containers</span>
-                                                                                <span style={{ fontSize: 11, color: '#16a34a', fontWeight: 600, marginLeft: 'auto' }}>READY</span>
-                                                                            </div>
-                                                                        ))}
-                                                                    </>
-                                                                )}
+                                                                {/* ═══ ALL PALLETS — Crate-on-Pallet Cards ═══ */}
+                                                                {(readyPallets.length > 0 || partialPallets.length > 0) && (
+                                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 24, padding: '4px 0' }}>
+                                                                        {[...readyPallets, ...partialPallets].map(p => {
+                                                                            const isReady = p.state === 'READY';
+                                                                            const isSelected = selectedPalletIds.has(p.id);
+                                                                            const pct = p.target_qty > 0 ? Math.round((p.current_qty / p.target_qty) * 100) : 0;
+                                                                            const normalBoxes = p.container_count - (p.adjustment_container_count || 0);
+                                                                            const topOffBoxes = p.adjustment_container_count || 0;
+                                                                            const innerBoxQty = r.inner_box_qty || 0;
+                                                                            const topOffQty = p.current_qty - (normalBoxes * innerBoxQty);
 
-                                                                {/* Partial pallets */}
-                                                                {partialPallets.length > 0 && (
-                                                                    <>
-                                                                        <div style={{ fontSize: 12, fontWeight: 700, color: '#d97706', marginTop: 16, marginBottom: 6, textTransform: 'uppercase' }}>
-                                                                            Partial Pallets ({partialPallets.length})
-                                                                        </div>
-                                                                        {partialPallets.map(p => (
-                                                                            <div key={p.id} style={{
-                                                                                display: 'flex', alignItems: 'center', gap: 12,
-                                                                                padding: '8px 12px', borderRadius: 8,
-                                                                                background: '#fffbeb', border: '1px solid #fcd34d',
-                                                                                marginBottom: 6, opacity: 0.7,
-                                                                            }}>
-                                                                                <span style={{ fontFamily: 'monospace', fontWeight: 600, fontSize: 13 }}>{p.pallet_number}</span>
-                                                                                <span style={{ fontSize: 13 }}>{p.current_qty.toLocaleString()} / {p.target_qty.toLocaleString()} pcs</span>
-                                                                                <span style={{ fontSize: 12, color: '#6b7280' }}>{p.container_count} containers</span>
-                                                                                <span style={{
-                                                                                    fontSize: 11, fontWeight: 600, marginLeft: 'auto',
-                                                                                    color: STATE_COLORS[p.state]?.color || '#6b7280',
-                                                                                }}>
-                                                                                    {p.state === 'ADJUSTMENT_REQUIRED' ? '⚠ ADJ REQUIRED' : p.state}
-                                                                                </span>
-                                                                            </div>
-                                                                        ))}
-                                                                    </>
+                                                                            // Colors
+                                                                            const accent = isSelected ? '#2563eb' : isReady ? '#16a34a' : '#d97706';
+                                                                            const accentLight = isSelected ? '#dbeafe' : isReady ? '#dcfce7' : '#fef3c7';
+                                                                            const palletColor = isSelected ? '#1e3a8a' : '#1f2937';
+                                                                            const stateLabel = isSelected ? 'SELECTED' : isReady ? 'READY' : p.state === 'ADJUSTMENT_REQUIRED' ? 'ADJ REQ' : p.state;
+
+                                                                            return (
+                                                                                <div
+                                                                                    key={p.id}
+                                                                                    onClick={() => canCreate && isReady && togglePallet(p.id)}
+                                                                                    style={{
+                                                                                        width: 230,
+                                                                                        cursor: canCreate && isReady ? 'pointer' : 'default',
+                                                                                        transition: 'transform 0.15s ease',
+                                                                                        transform: isSelected ? 'translateY(-3px)' : 'none',
+                                                                                        opacity: !isReady ? 0.85 : 1,
+                                                                                    }}
+                                                                                >
+                                                                                    {/* ══ CRATE — box sitting on pallet ══ */}
+                                                                                    <div style={{
+                                                                                        border: `4px solid ${accent}`,
+                                                                                        borderRadius: '10px 10px 0 0',
+                                                                                        borderBottom: 'none',
+                                                                                        background: '#ffffff',
+                                                                                        position: 'relative',
+                                                                                        marginLeft: 14,
+                                                                                        marginRight: 14,
+                                                                                        padding: '10px 12px 10px',
+                                                                                    }}>
+                                                                                        {/* Checkbox (ready only) */}
+                                                                                        {canCreate && isReady && (
+                                                                                            <div style={{
+                                                                                                position: 'absolute', top: 8, right: 8,
+                                                                                                width: 18, height: 18, borderRadius: 3,
+                                                                                                border: `2px solid ${isSelected ? '#2563eb' : '#cbd5e1'}`,
+                                                                                                background: isSelected ? '#2563eb' : '#fff',
+                                                                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                                                                zIndex: 2,
+                                                                                            }}>
+                                                                                                {isSelected && <Check size={12} color="white" strokeWidth={3} />}
+                                                                                            </div>
+                                                                                        )}
+
+                                                                                        {/* Pallet # */}
+                                                                                        <div style={{
+                                                                                            fontFamily: 'monospace', fontWeight: 700, fontSize: 11,
+                                                                                            color: accent, marginBottom: 2,
+                                                                                        }}>
+                                                                                            {p.pallet_number}
+                                                                                        </div>
+
+                                                                                        {/* MSN */}
+                                                                                        {p.master_serial_no && (
+                                                                                            <div style={{ fontSize: 9.5, color: '#64748b', fontFamily: 'monospace', fontWeight: 600, marginBottom: 4 }}>
+                                                                                                MSN: {p.master_serial_no}
+                                                                                            </div>
+                                                                                        )}
+
+                                                                                        {/* Total Qty — big number */}
+                                                                                        <div style={{
+                                                                                            fontSize: 22, fontWeight: 800, color: '#0f172a',
+                                                                                            fontFamily: 'monospace', lineHeight: 1.1,
+                                                                                        }}>
+                                                                                            {p.current_qty.toLocaleString()}
+                                                                                            {!isReady && (
+                                                                                                <span style={{ fontSize: 11, fontWeight: 500, color: '#94a3b8' }}>
+                                                                                                    {' '}/ {p.target_qty.toLocaleString()}
+                                                                                                </span>
+                                                                                            )}
+                                                                                            <span style={{ fontSize: 9, fontWeight: 500, color: '#94a3b8', marginLeft: 2 }}>PCS</span>
+                                                                                        </div>
+
+                                                                                        {/* Progress bar (partial only) */}
+                                                                                        {!isReady && (
+                                                                                            <div style={{ height: 3, borderRadius: 2, background: '#e2e8f0', marginTop: 4, marginBottom: 2, overflow: 'hidden' }}>
+                                                                                                <div style={{ width: `${pct}%`, height: '100%', borderRadius: 2, background: accent, transition: 'width 0.3s' }} />
+                                                                                            </div>
+                                                                                        )}
+
+                                                                                        {/* Divider */}
+                                                                                        <div style={{ borderTop: `1px solid ${accentLight}`, margin: '5px 0' }} />
+
+                                                                                        {/* Data grid 2×2 */}
+                                                                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 6px' }}>
+                                                                                            <div>
+                                                                                                <div style={{ color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', fontSize: 8.5, letterSpacing: '0.4px' }}>Inner Boxes</div>
+                                                                                                <div style={{ fontWeight: 700, color: '#334155', fontSize: 11.5, fontFamily: 'monospace' }}>
+                                                                                                    {normalBoxes} <span style={{ fontSize: 8.5, color: '#94a3b8', fontWeight: 500 }}>× {innerBoxQty}</span>
+                                                                                                </div>
+                                                                                            </div>
+                                                                                            <div>
+                                                                                                <div style={{ color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', fontSize: 8.5, letterSpacing: '0.4px' }}>Top-off</div>
+                                                                                                <div style={{ fontWeight: 700, color: topOffBoxes > 0 ? '#b45309' : '#94a3b8', fontSize: 11.5, fontFamily: 'monospace' }}>
+                                                                                                    {topOffBoxes > 0 ? `${topOffBoxes} × ${topOffQty > 0 ? topOffQty : '—'}` : '—'}
+                                                                                                </div>
+                                                                                            </div>
+                                                                                            <div>
+                                                                                                <div style={{ color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', fontSize: 8.5, letterSpacing: '0.4px' }}>Total Boxes</div>
+                                                                                                <div style={{ fontWeight: 700, color: '#334155', fontSize: 11.5, fontFamily: 'monospace' }}>{p.container_count}</div>
+                                                                                            </div>
+                                                                                            <div>
+                                                                                                <div style={{ color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', fontSize: 8.5, letterSpacing: '0.4px' }}>Status</div>
+                                                                                                <span style={{
+                                                                                                    display: 'inline-block', fontSize: 9, fontWeight: 700,
+                                                                                                    color: accent, background: accentLight,
+                                                                                                    padding: '1px 6px', borderRadius: 3,
+                                                                                                    textTransform: 'uppercase', letterSpacing: '0.4px',
+                                                                                                }}>
+                                                                                                    {stateLabel}
+                                                                                                </span>
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    </div>
+
+                                                                                    {/* ── Bottom edge of crate (sits on pallet) ── */}
+                                                                                    <div style={{
+                                                                                        height: 4, marginLeft: 14, marginRight: 14,
+                                                                                        background: accent,
+                                                                                    }} />
+
+                                                                                    {/* ══ PALLET — wider flat deck + 3 block feet ══ */}
+                                                                                    {/* Deck — full width, flat slab */}
+                                                                                    <div style={{
+                                                                                        height: 10,
+                                                                                        background: palletColor,
+                                                                                        borderRadius: '2px 2px 0 0',
+                                                                                        marginTop: 0,
+                                                                                    }} />
+                                                                                    {/* 3 block feet with gaps */}
+                                                                                    <div style={{
+                                                                                        display: 'flex',
+                                                                                        justifyContent: 'space-between',
+                                                                                        padding: '0 8px',
+                                                                                    }}>
+                                                                                        {[0, 1, 2].map(i => (
+                                                                                            <div key={i} style={{
+                                                                                                width: 50,
+                                                                                                height: 14,
+                                                                                                background: palletColor,
+                                                                                                borderRadius: '0 0 4px 4px',
+                                                                                            }} />
+                                                                                        ))}
+                                                                                    </div>
+                                                                                </div>
+                                                                            );
+                                                                        })}
+                                                                    </div>
                                                                 )}
 
                                                                 {readyPallets.length === 0 && partialPallets.length === 0 && (
