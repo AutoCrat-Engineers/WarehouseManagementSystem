@@ -94,6 +94,7 @@ export interface Pallet {
     // Joined
     item_name?: string;
     master_serial_no?: string;
+    part_number?: string;
 }
 
 export interface PackingList {
@@ -639,7 +640,7 @@ export async function fetchPallets(filters?: {
         .from('pack_pallets')
         .select(`
             *,
-            items!pack_pallets_item_id_fkey (item_name, master_serial_no)
+            items!pack_pallets_item_id_fkey (item_name, master_serial_no, part_number)
         `)
         .order('created_at', { ascending: false });
 
@@ -658,6 +659,7 @@ export async function fetchPallets(filters?: {
         ...d,
         item_name: d.items?.item_name,
         master_serial_no: d.items?.master_serial_no,
+        part_number: d.items?.part_number,
     }));
 }
 
@@ -786,7 +788,7 @@ export async function calculatePalletImpact(
     const willFillAllFullContainers = afterThisMove_fullContainers >= fullContainersPerPallet;
 
     // AUTO-ADJUSTMENT: When pallet boundary is crossed, convert 1 box to adjustment
-    // e.g., L1 enters 10 â†’ becomes 9Ã—450 + 1Ã—300 = 4,350 PCS
+    // e.g., L1 enters 10 -> becomes 9 x 450 + 1 x 300 = 4,350 PCS
     let adjustmentBoxIncluded = false;
     let adjustedInnerBoxCount = incoming_box_count;
     let adjustedTotalQty = incoming_box_count * innerQty;
@@ -803,32 +805,32 @@ export async function calculatePalletImpact(
     const willCompletePallet = willFillAllFullContainers && (adjustmentBoxIncluded || !adjustmentNeeded);
     const mustCreateAdjustmentFirst = willFillAllFullContainers && adjustmentNeeded && incoming_box_count > 0;
 
-    // Breakdown text: "9 Ã— 450 + 1 Ã— 300 = 4,350 PCS"
+    // Breakdown text: "9 Boxes x 450 PCS + 1 Top-off Box x 300 PCS = 4,350 PCS"
     let breakdownText = '';
     if (adjustmentBoxIncluded) {
-        breakdownText = `${adjustedInnerBoxCount} Ã— ${innerQty.toLocaleString()} + 1 Ã— ${adjustmentQtyPerPallet.toLocaleString()} = ${adjustedTotalQty.toLocaleString()} PCS`;
+        breakdownText = `${adjustedInnerBoxCount} Boxes x ${innerQty.toLocaleString()} PCS + 1 Top-off Box x ${adjustmentQtyPerPallet.toLocaleString()} PCS = ${adjustedTotalQty.toLocaleString()} PCS`;
     } else {
-        breakdownText = `${incoming_box_count} Ã— ${innerQty.toLocaleString()} = ${adjustedTotalQty.toLocaleString()} PCS`;
+        breakdownText = `${incoming_box_count} Boxes x ${innerQty.toLocaleString()} PCS = ${adjustedTotalQty.toLocaleString()} PCS`;
     }
 
     // Warnings
     const warnings: string[] = [];
     if (adjustmentBoxIncluded && innerBoxesToNewPallet > 0) {
         warnings.push(
-            `âš ï¸ PALLET COMPLETION: From ${incoming_box_count} boxes entered, system creates ` +
-            `${innerBoxesToCurrentPallet > 0 ? innerBoxesToCurrentPallet + ' inner + ' : ''}` +
-            `1 adjustment box (${adjustmentQtyPerPallet} PCS) to complete ${currentPallet?.pallet_number || 'current pallet'}. ` +
-            `Remaining ${innerBoxesToNewPallet} box(es) â†’ new pallet.`
+            `PALLET COMPLETION: Out of ${incoming_box_count} Boxes entered, ` +
+            `${innerBoxesToCurrentPallet > 0 ? innerBoxesToCurrentPallet + ' regular Boxes + ' : ''}` +
+            `1 Top-off Box (${adjustmentQtyPerPallet} PCS) will be used to complete ${currentPallet?.pallet_number || 'current pallet'}. ` +
+            `Remaining ${innerBoxesToNewPallet} Box(es) will go to a new pallet.`
         );
     } else if (adjustmentBoxIncluded) {
         warnings.push(
-            `ðŸ”” System auto-creates 1 adjustment box of ${adjustmentQtyPerPallet} PCS. ` +
+            `System will auto-create 1 Top-off Box of ${adjustmentQtyPerPallet} PCS. ` +
             `This will ${willCompletePallet ? 'COMPLETE' : 'continue filling'} ${currentPallet?.pallet_number || 'the pallet'}.`
         );
     } else if (innerBoxesToNewPallet > 0) {
         warnings.push(
-            `ðŸ“¦ ${innerBoxesToCurrentPallet} box(es) â†’ ${currentPallet?.pallet_number || 'current pallet'}, ` +
-            `${innerBoxesToNewPallet} box(es) â†’ new pallet.`
+            `${innerBoxesToCurrentPallet} Box(es) will go to ${currentPallet?.pallet_number || 'current pallet'}, ` +
+            `${innerBoxesToNewPallet} box(es) will go to a new pallet.`
         );
     }
 
@@ -836,14 +838,14 @@ export async function calculatePalletImpact(
     const palletNumber = currentPallet?.pallet_number || 'NEW';
     let palletSummary = '';
     if (!currentPallet) {
-        palletSummary = `No active pallet. New pallet (${totalContainersPerPallet} containers) will be created.`;
+        palletSummary = `No active pallet. New pallet (${totalContainersPerPallet} inner boxes) will be created.`;
     } else {
-        palletSummary = `Pallet ${palletNumber}: ${currentQty.toLocaleString()}/${targetQty.toLocaleString()} PCS (${containersFilled}/${totalContainersPerPallet} containers).`;
+        palletSummary = `Pallet ${palletNumber}: ${currentQty.toLocaleString()}/${targetQty.toLocaleString()} PCS (${containersFilled}/${totalContainersPerPallet} inner boxes).`;
         if (adjustmentBoxIncluded) {
-            palletSummary += ` Movement: ${adjustedInnerBoxCount}Ã—${innerQty} + 1Ã—${adjustmentQtyPerPallet} adj.`;
+            palletSummary += ` Movement: ${adjustedInnerBoxCount} Boxes x ${innerQty} PCS + 1 Top-off Box x ${adjustmentQtyPerPallet} PCS.`;
         }
         if (innerBoxesToNewPallet > 0) {
-            palletSummary += ` â†’ ${innerBoxesToNewPallet} box(es) overflow to new pallet.`;
+            palletSummary += ` ${innerBoxesToNewPallet} Box(es) will overflow to new pallet.`;
         }
     }
 

@@ -9,6 +9,8 @@
  *       a) "Move Packed Stock" — partial transfer of completed boxes
  *       b) "Complete Packing" → confirms final stock transfer
  *   - Supports partial packing + partial stock transfer (like SAP MIGO partial GR)
+ *
+ * @version v0.4.1 — Performance optimized (batch ID generation, parallel fetches)
  */
 import { getSupabaseClient } from '../../utils/supabase/client';
 import { isValidTransition, generatePackingId } from '../../types/packing';
@@ -17,6 +19,8 @@ import type {
     PackingRequestStatus, PackingAuditAction,
 } from '../../types/packing';
 import { processPackingBoxAsContainer } from '../packing-engine/packingEngineService';
+import { generateBoxBatch } from '../../utils/idGenerator';
+import { logInfo, logWarn, logError, withTiming } from '../../utils/auditLogger';
 
 const supabase = getSupabaseClient();
 
@@ -144,8 +148,8 @@ export async function fetchPackingRequests(onlyMine: boolean = false): Promise<P
     const itemCodes = [...new Set(rows.map((r: any) => r.item_code).filter(Boolean))];
     const requestIds = rows.map((r: any) => r.id);
 
-    // ── PARALLEL ENRICHMENT — all 3 queries run simultaneously ──
-    const [profilesResult, itemsResult, boxesResult] = await Promise.all([
+    // ── PARALLEL ENRICHMENT — all 4 queries run simultaneously ──
+    const [profilesResult, itemsResult, boxesResult, specsResult] = await Promise.all([
         userIds.length
             ? supabase.from('profiles').select('id, full_name').in('id', userIds)
             : Promise.resolve({ data: [] as any[] }),
@@ -154,6 +158,9 @@ export async function fetchPackingRequests(onlyMine: boolean = false): Promise<P
             : Promise.resolve({ data: [] as any[] }),
         requestIds.length
             ? supabase.from('packing_boxes').select('packing_request_id, box_qty, sticker_printed, is_transferred').in('packing_request_id', requestIds)
+            : Promise.resolve({ data: [] as any[] }),
+        itemCodes.length
+            ? supabase.from('packing_specifications').select('item_code, inner_box_quantity').eq('is_active', true).in('item_code', itemCodes)
             : Promise.resolve({ data: [] as any[] }),
     ]);
 
@@ -170,6 +177,14 @@ export async function fetchPackingRequests(onlyMine: boolean = false): Promise<P
         };
     });
 
+    // Packing spec map — inner_box_quantity per item_code
+    const specMap: Record<string, number> = {};
+    (specsResult.data || []).forEach((s: any) => {
+        if (s.inner_box_quantity && s.inner_box_quantity > 0) {
+            specMap[s.item_code] = s.inner_box_quantity;
+        }
+    });
+
     const boxAgg: Record<string, { sum: number; count: number; allPrinted: boolean; transferredSum: number }> = {};
     (boxesResult.data || []).forEach((b: any) => {
         if (!boxAgg[b.packing_request_id]) boxAgg[b.packing_request_id] = { sum: 0, count: 0, allPrinted: true, transferredSum: 0 };
@@ -179,20 +194,31 @@ export async function fetchPackingRequests(onlyMine: boolean = false): Promise<P
         if (b.is_transferred) boxAgg[b.packing_request_id].transferredSum += Number(b.box_qty);
     });
 
-    return rows.map((r: any) => ({
-        ...r,
-        created_by_name: nameMap[r.created_by] || undefined,
-        approved_by_name: r.approved_by ? nameMap[r.approved_by] : undefined,
-        item_name: itemMap[r.item_code]?.item_name || r.item_code,
-        part_number: itemMap[r.item_code]?.part_number || null,
-        master_serial_no: itemMap[r.item_code]?.master_serial_no || null,
-        revision: itemMap[r.item_code]?.revision || null,
-        boxes_packed_qty: boxAgg[r.id]?.sum || 0,
-        boxes_count: boxAgg[r.id]?.count || 0,
-        all_stickers_printed: boxAgg[r.id]?.allPrinted ?? true,
-        // Use actual transferred qty from boxes (source of truth), not the stored field
-        transferred_qty: boxAgg[r.id]?.transferredSum ?? (r.transferred_qty || 0),
-    }));
+    return rows.map((r: any) => {
+        // Use actual box count from packing_boxes if available,
+        // otherwise calculate expected count from total_packed_qty / inner_box_quantity
+        const actualBoxCount = boxAgg[r.id]?.count ?? 0;
+        const innerBoxQty = specMap[r.item_code];
+        const calculatedBoxCount = innerBoxQty && innerBoxQty > 0
+            ? Math.floor(Number(r.total_packed_qty) / innerBoxQty) + (Number(r.total_packed_qty) % innerBoxQty > 0 ? 1 : 0)
+            : 0;
+        const boxesCount = actualBoxCount > 0 ? actualBoxCount : calculatedBoxCount;
+
+        return {
+            ...r,
+            created_by_name: nameMap[r.created_by] || undefined,
+            approved_by_name: r.approved_by ? nameMap[r.approved_by] : undefined,
+            item_name: itemMap[r.item_code]?.item_name || r.item_code,
+            part_number: itemMap[r.item_code]?.part_number || null,
+            master_serial_no: itemMap[r.item_code]?.master_serial_no || null,
+            revision: itemMap[r.item_code]?.revision || null,
+            boxes_packed_qty: boxAgg[r.id]?.sum || 0,
+            boxes_count: boxesCount,
+            all_stickers_printed: boxAgg[r.id]?.allPrinted ?? true,
+            // Use actual transferred qty from boxes (source of truth), not the stored field
+            transferred_qty: boxAgg[r.id]?.transferredSum ?? (r.transferred_qty || 0),
+        };
+    });
 }
 
 export async function fetchBoxesForRequest(requestId: string): Promise<PackingBox[]> {
@@ -364,119 +390,127 @@ export async function deleteBox(requestId: string, boxId: string) {
 export async function autoGenerateBoxes(requestId: string): Promise<PackingBox[]> {
     const { userId, role } = await getAuthContext();
 
-    // Parallel: fetch request + check existing boxes
-    const [reqResult, existingBoxes] = await Promise.all([
-        supabase.from('packing_requests')
-            .select('status, total_packed_qty, item_code, movement_number, movement_header_id')
-            .eq('id', requestId).single(),
-        fetchBoxesForRequest(requestId),
-    ]);
-    const req = reqResult.data;
-    if (!req) throw new Error('Packing request not found');
-    if (existingBoxes.length > 0) return existingBoxes;
+    return withTiming('autoGenerateBoxes', 'PACKING', userId, requestId, async () => {
+        // ── PHASE 1: Parallel fetch — auth context already fetched, now get request + boxes + spec ──
+        const [reqResult, existingBoxes] = await Promise.all([
+            supabase.from('packing_requests')
+                .select('status, total_packed_qty, item_code, movement_number, movement_header_id')
+                .eq('id', requestId).single(),
+            fetchBoxesForRequest(requestId),
+        ]);
+        const req = reqResult.data;
+        if (!req) throw new Error('Packing request not found');
+        if (existingBoxes.length > 0) return existingBoxes;
 
-    if (req.status !== 'APPROVED') {
-        throw new Error('Can only auto-generate boxes for APPROVED requests');
-    }
+        if (req.status !== 'APPROVED') {
+            throw new Error('Can only auto-generate boxes for APPROVED requests');
+        }
 
-    // Fetch packing specification for the item
-    const { data: packingSpec } = await supabase.from('packing_specifications')
-        .select('inner_box_quantity')
-        .eq('item_code', req.item_code)
-        .eq('is_active', true)
-        .single();
+        // Fetch packing spec — can't parallelize with above due to item_code dependency
+        const { data: packingSpec } = await supabase.from('packing_specifications')
+            .select('inner_box_quantity')
+            .eq('item_code', req.item_code)
+            .eq('is_active', true)
+            .single();
 
-    if (!packingSpec || !packingSpec.inner_box_quantity || packingSpec.inner_box_quantity <= 0) {
-        throw new Error('No valid packing specification found for this item. Please add one in Packing Details first.');
-    }
+        if (!packingSpec || !packingSpec.inner_box_quantity || packingSpec.inner_box_quantity <= 0) {
+            throw new Error('No valid packing specification found for this item. Please add one in Packing Details first.');
+        }
 
-    const innerBoxQty = packingSpec.inner_box_quantity;
-    const totalQty = Number(req.total_packed_qty);
-    const fullBoxes = Math.floor(totalQty / innerBoxQty);
-    const remainder = totalQty % innerBoxQty;
-    const totalBoxes = fullBoxes + (remainder > 0 ? 1 : 0);
+        const innerBoxQty = packingSpec.inner_box_quantity;
+        const totalQty = Number(req.total_packed_qty);
+        const fullBoxes = Math.floor(totalQty / innerBoxQty);
+        const remainder = totalQty % innerBoxQty;
+        const totalBoxes = fullBoxes + (remainder > 0 ? 1 : 0);
 
-    if (totalBoxes <= 0) throw new Error('Cannot generate boxes — total quantity is 0');
+        if (totalBoxes <= 0) throw new Error('Cannot generate boxes — total quantity is 0');
 
-    // Parallel: status transition + audit
-    await Promise.all([
-        supabase.from('packing_requests').update({
-            status: 'PACKING_IN_PROGRESS',
-            started_at: new Date().toISOString(),
-        }).eq('id', requestId),
-        logAudit(requestId, 'PACKING_STARTED', userId, role, {
-            movement_number: req.movement_number,
+        // ── PHASE 2: Status transition + audit (parallel) ──
+        await Promise.all([
+            supabase.from('packing_requests').update({
+                status: 'PACKING_IN_PROGRESS',
+                started_at: new Date().toISOString(),
+            }).eq('id', requestId),
+            logAudit(requestId, 'PACKING_STARTED', userId, role, {
+                movement_number: req.movement_number,
+                auto_generated: true,
+                total_boxes: totalBoxes,
+                inner_box_qty: innerBoxQty,
+            }),
+        ]);
+
+        // ── PHASE 3: BATCH INSERT with pre-computed IDs (single DB call!) ──
+        // v0.4.1 optimization: Generate UUIDs + packing IDs client-side
+        // before INSERT. This eliminates the N update calls that were the
+        // main bottleneck (100 boxes = 100 individual UPDATE calls → 0).
+        const boxInserts = generateBoxBatch(
+            totalBoxes, requestId, userId, innerBoxQty, remainder
+        );
+
+        const { data: insertedBoxes, error: insertError } = await supabase
+            .from('packing_boxes')
+            .insert(boxInserts)
+            .select();
+        if (insertError) throw insertError;
+
+        // Map inserted boxes with packing IDs (already computed)
+        const createdBoxes: PackingBox[] = (insertedBoxes || []).map((box: any, idx: number) => ({
+            ...box,
+            packing_id: boxInserts[idx]?.packing_id || generatePackingId(box.id),
+        }));
+
+        logInfo('PACKING', 'batchBoxInsert', userId, requestId, {
+            total_boxes: totalBoxes,
+            inner_box_qty: innerBoxQty,
+        });
+
+        // ── PHASE 4: PACKING ENGINE — Create containers + assign to pallets ──
+        try {
+            const { data: itemData } = await supabase.from('items')
+                .select('id').eq('item_code', req.item_code).single();
+            if (itemData) {
+                for (const box of createdBoxes) {
+                    try {
+                        const result = await processPackingBoxAsContainer({
+                            movement_header_id: req.movement_header_id || '',
+                            movement_number: req.movement_number,
+                            packing_request_id: requestId,
+                            packing_box_id: box.id,
+                            item_id: itemData.id,
+                            item_code: req.item_code,
+                            box_qty: Number(box.box_qty),
+                        });
+                        logInfo('CONTAINER', 'containerAssigned', userId, box.id, {
+                            box_number: box.box_number,
+                            container: result.container.container_number,
+                            pallet: result.pallet.pallet_number,
+                            pallet_state: result.pallet.state,
+                        });
+                    } catch (boxErr: any) {
+                        logWarn('CONTAINER', 'containerFailed', userId, box.id, {
+                            box_number: box.box_number,
+                            error: boxErr.message,
+                        });
+                    }
+                }
+            }
+        } catch (engineErr: any) {
+            logError('PACKING', 'batchContainerCreation', userId, requestId, {
+                error: engineErr.message,
+            });
+        }
+
+        // Audit — log auto-generation
+        await logAudit(requestId, 'BOX_CREATED', userId, role, {
             auto_generated: true,
             total_boxes: totalBoxes,
             inner_box_qty: innerBoxQty,
-        }),
-    ]);
-
-    // Create all boxes
-    const boxInserts = [];
-    for (let i = 0; i < totalBoxes; i++) {
-        const isLastPartialBox = (i === totalBoxes - 1 && remainder > 0);
-        boxInserts.push({
-            packing_request_id: requestId,
-            box_number: i + 1,
-            box_qty: isLastPartialBox ? remainder : innerBoxQty,
-            created_by: userId,
-            is_transferred: false,
-            sticker_printed: false,
+            total_qty: totalQty,
+            movement_number: req.movement_number,
         });
-    }
 
-    const { data: insertedBoxes, error: insertError } = await supabase
-        .from('packing_boxes')
-        .insert(boxInserts)
-        .select();
-    if (insertError) throw insertError;
-
-    // BATCH: Generate packing IDs for all boxes in parallel (not one-at-a-time)
-    const createdBoxes: PackingBox[] = [];
-    const updatePromises = (insertedBoxes || []).map(box => {
-        const packingId = generatePackingId(box.id);
-        createdBoxes.push({ ...box, packing_id: packingId });
-        return supabase.from('packing_boxes').update({ packing_id: packingId }).eq('id', box.id);
+        return createdBoxes;
     });
-    await Promise.all(updatePromises);
-
-    // ── PACKING ENGINE: Create containers + assign to pallets for all boxes ──
-    try {
-        const { data: itemData } = await supabase.from('items')
-            .select('id').eq('item_code', req.item_code).single();
-        if (itemData) {
-            for (const box of createdBoxes) {
-                try {
-                    const result = await processPackingBoxAsContainer({
-                        movement_header_id: req.movement_header_id || '',
-                        movement_number: req.movement_number,
-                        packing_request_id: requestId,
-                        packing_box_id: box.id,
-                        item_id: itemData.id,
-                        item_code: req.item_code,
-                        box_qty: Number(box.box_qty),
-                    });
-                    console.log(`[PackingEngine] Box #${box.box_number} → Container ${result.container.container_number} → Pallet ${result.pallet.pallet_number} (${result.pallet.state})`);
-                } catch (boxErr: any) {
-                    console.warn(`[PackingEngine] Box #${box.box_number} engine failed:`, boxErr.message);
-                }
-            }
-        }
-    } catch (engineErr: any) {
-        console.warn('[PackingEngine] Batch container/pallet creation failed (non-blocking):', engineErr.message);
-    }
-
-    // Audit — log auto-generation
-    await logAudit(requestId, 'BOX_CREATED', userId, role, {
-        auto_generated: true,
-        total_boxes: totalBoxes,
-        inner_box_qty: innerBoxQty,
-        total_qty: totalQty,
-        movement_number: req.movement_number,
-    });
-
-    return createdBoxes;
 }
 
 // ============================================================================
@@ -563,7 +597,9 @@ export async function transferPackedStock(
     requestId: string,
     boxIds?: string[]
 ): Promise<{ transferredQty: number; boxesTransferred: number; isComplete: boolean }> {
-    // ── PHASE 1: Parallel fetch — auth + request + eligible boxes ──
+    // ── PHASE 1: Parallel fetch — auth + request + boxes + movement header ──
+    // v0.4.1: Movement header fetch moved into Phase 1 parallel block
+    // (was previously a sequential Phase 2 call, adding unnecessary latency)
     let boxQuery = supabase.from('packing_boxes')
         .select('*')
         .eq('packing_request_id', requestId)
@@ -595,7 +631,7 @@ export async function transferPackedStock(
 
     const transferQty = eligibleBoxes.reduce((sum: number, b: any) => sum + Number(b.box_qty), 0);
 
-    // ── PHASE 2: Parallel fetch — movement header (needed for warehouse IDs) ──
+    // ── PHASE 2: Movement header fetch (now uses movement_header_id from Phase 1) ──
     const { data: movementHeader } = await supabase.from('inv_movement_headers')
         .select('source_warehouse_id, destination_warehouse_id')
         .eq('id', req.movement_header_id).single();

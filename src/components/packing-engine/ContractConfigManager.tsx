@@ -97,6 +97,11 @@ export function ContractConfigManager({ accessToken, userRole, userPerms = {} }:
         borderBottom: '1px solid #f3f4f6', whiteSpace: 'nowrap',
     };
 
+    // ── FIRST-LOAD: full-page skeleton ──
+    if (loading && specs.length === 0) {
+        return <ModuleLoader moduleName="Packing Specifications" icon={<Settings size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
+    }
+
     return (
         <div style={{ paddingBottom: 40 }}>
             <SummaryCardsGrid>
@@ -134,14 +139,14 @@ export function ContractConfigManager({ accessToken, userRole, userPerms = {} }:
             </FilterBar>
 
             <Card style={{ padding: 0 }}>
-                {loading ? (
+                {loading && specs.length === 0 ? (
                     <ModuleLoader moduleName="Packing Specifications" icon={<Settings size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
                 ) : filtered.length === 0 ? (
                     <EmptyState icon={<Settings size={48} style={{ color: 'var(--enterprise-gray-400)' }} />}
                         title="No Packing Specifications"
                         description="Add packing specifications in Packing Details first." />
                 ) : (
-                    <div style={{ overflowX: 'auto' }}>
+                    <div style={{ overflowX: 'auto', opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto' }}>
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead>
                                 <tr>
@@ -149,7 +154,7 @@ export function ContractConfigManager({ accessToken, userRole, userPerms = {} }:
                                     <th style={{ ...th, textAlign: 'right' }}>Outer Box Qty</th>
                                     <th style={{ ...th, textAlign: 'right' }}>Inner Box Qty</th>
                                     <th style={{ ...th, textAlign: 'center' }}>Full Containers</th>
-                                    <th style={{ ...th, textAlign: 'center' }}>Adjustment</th>
+                                    <th style={{ ...th, textAlign: 'center' }}>Top-off</th>
                                     <th style={{ ...th, textAlign: 'center' }}>Status</th>
                                 </tr>
                             </thead>
@@ -235,7 +240,7 @@ export function ContractConfigManager({ accessToken, userRole, userPerms = {} }:
                                                                 <div style={{ fontSize: 13, lineHeight: 2 }}>
                                                                     <div>{b.full} full containers × {s.inner_box_quantity} pcs = <strong>{b.full * s.inner_box_quantity}</strong> pcs</div>
                                                                     {b.adjustment > 0 && (
-                                                                        <div>+ 1 adjustment box = <strong>{b.adjustment}</strong> pcs</div>
+                                                                        <div>+ 1 Top-off Box = <strong>{b.adjustment}</strong> pcs</div>
                                                                     )}
                                                                     <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 4, marginTop: 4 }}>
                                                                         Total: <strong style={{ color: '#1e3a8a' }}>{s.outer_box_quantity.toLocaleString()}</strong> pcs per pallet

@@ -144,12 +144,9 @@ const LOCATIONS: Record<LocationCode, { name: string; icon: React.ElementType; c
 };
 
 const VALID_ROUTES: MovementRoute[] = [
+  // Stock In: Only Production → FG Warehouse (positive flow)
   { from: 'PRODUCTION', to: 'PW', movementType: 'PRODUCTION_RECEIPT', flow: 'FORWARD', label: 'Production → FG Warehouse' },
-  { from: 'PW', to: 'IT', movementType: 'DISPATCH_TO_TRANSIT', flow: 'FORWARD', label: 'PW → In-Transit' },
-  { from: 'IT', to: 'SV', movementType: 'TRANSFER_TO_WAREHOUSE', flow: 'FORWARD', label: 'In-Transit → S&V' },
-  { from: 'IT', to: 'US', movementType: 'TRANSFER_TO_WAREHOUSE', flow: 'FORWARD', label: 'In-Transit → US' },
-  { from: 'SV', to: 'CUSTOMER', movementType: 'CUSTOMER_SALE', flow: 'FORWARD', label: 'S&V → Customer' },
-  { from: 'US', to: 'CUSTOMER', movementType: 'CUSTOMER_SALE', flow: 'FORWARD', label: 'US → Customer' },
+  // Negative flows: ALL kept as-is from original
   { from: 'CUSTOMER', to: 'SV', movementType: 'CUSTOMER_RETURN', flow: 'REVERSE', label: 'Customer → S&V' },
   { from: 'CUSTOMER', to: 'US', movementType: 'CUSTOMER_RETURN', flow: 'REVERSE', label: 'Customer → US' },
   { from: 'SV', to: 'IT', movementType: 'RETURN_TO_PRODUCTION_FLOW', flow: 'REVERSE', label: 'S&V → In-Transit' },
@@ -185,12 +182,26 @@ const DB_CODE_MAP: Record<string, LocationCode> = {
   'WH-US-TRANSIT': 'US',
 };
 
-const REFERENCE_TYPES = [
+
+// Stock In: only Work Order + Inventory Adjustment
+const STOCK_IN_REFERENCE_TYPES = [
+  { value: 'WORK_ORDER', label: 'Work Order' },
+  { value: 'INVENTORY_ADJUSTMENT', label: 'Inventory Adjustment' },
+];
+
+// Rejection: all original reference types
+const REJECTION_REFERENCE_TYPES = [
   { value: 'DELIVERY_NOTE', label: 'Delivery Note' },
   { value: 'RETURN_NOTE', label: 'Return Note' },
   { value: 'WORK_ORDER', label: 'Work Order' },
   { value: 'TRANSFER_ORDER', label: 'Transfer Order' },
   { value: 'ADJUSTMENT_MEMO', label: 'Adjustment Memo' },
+];
+
+// Combined for display in review/print (all types)
+const REFERENCE_TYPES = [
+  ...STOCK_IN_REFERENCE_TYPES,
+  ...REJECTION_REFERENCE_TYPES.filter(r => !STOCK_IN_REFERENCE_TYPES.some(s => s.value === r.value)),
 ];
 
 const STATUS_CONFIG: Record<string, { color: string; bg: string; label: string }> = {
@@ -204,18 +215,26 @@ const STATUS_CONFIG: Record<string, { color: string; bg: string; label: string }
   COMPLETED: { color: '#16a34a', bg: '#f0fdf4', label: 'Completed' },
 };
 
-function getRoutesForWarehouse(warehouse: LocationCode, stockType: StockType): MovementRoute[] {
+function getRoutesForWarehouse(warehouse: string, stockType: StockType): MovementRoute[] {
   if (stockType === 'STOCK_IN') {
     return VALID_ROUTES.filter(r => r.to === warehouse && r.flow === 'FORWARD');
   }
-  return VALID_ROUTES.filter(r => r.to === warehouse && r.flow === 'REVERSE');
+  // For rejection: show routes FROM or TO this warehouse (both directions relevant)
+  if (warehouse === 'CUSTOMER') {
+    return VALID_ROUTES.filter(r => r.from === 'CUSTOMER' && r.flow === 'REVERSE');
+  }
+  return VALID_ROUTES.filter(r => (r.from === warehouse || r.to === warehouse) && r.flow === 'REVERSE');
 }
 
-function getWarehousesForStockType(stockType: StockType): LocationCode[] {
-  const whs = new Set<LocationCode>();
+function getWarehousesForStockType(stockType: StockType): string[] {
+  const whs = new Set<string>();
   VALID_ROUTES.forEach(r => {
-    if ((stockType === 'STOCK_IN' && r.flow === 'FORWARD') || (stockType === 'REJECTION' && r.flow === 'REVERSE')) {
-      if (r.to in LOCATIONS) whs.add(r.to as LocationCode);
+    if (stockType === 'STOCK_IN' && r.flow === 'FORWARD') {
+      if (r.to in LOCATIONS) whs.add(r.to);
+    } else if (stockType === 'REJECTION' && r.flow === 'REVERSE') {
+      // Show all endpoints involved in reverse flows
+      if (r.from in LOCATIONS) whs.add(r.from);
+      if (r.from === 'CUSTOMER') whs.add('CUSTOMER');
     }
   });
   return Array.from(whs);
@@ -532,6 +551,14 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
 
   useEffect(() => { fetchReasonCodes(); }, [fetchReasonCodes]);
 
+  // Auto-default reason code for Stock In if reason codes load after stock type was set
+  useEffect(() => {
+    if (stockType === 'STOCK_IN' && !selectedCategory && reasonCodes.length > 0) {
+      const prodRc = reasonCodes.find(r => r.reason_code.toUpperCase().includes('PROD'));
+      if (prodRc) handleCategoryChange(prodRc.reason_code);
+    }
+  }, [reasonCodes, stockType, selectedCategory]);
+
   // ============================================================================
   // MODAL FORM LOGIC
   // ============================================================================
@@ -669,8 +696,8 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
 
     // ENFORCEMENT: Block if adjustment box is required but not acknowledged
     if (isProductionReceipt && palletImpact?.mustCreateAdjustmentFirst && !adjustmentAcknowledged) {
-      setFormMessage({ type: 'error', text: `Cannot submit: You must acknowledge the adjustment box requirement (${palletImpact.adjustmentBoxQty} PCS) to complete the current pallet before starting a new one.` });
-      showToast('error', 'Pallet Completion Required', `Create the adjustment box of ${palletImpact.adjustmentBoxQty} PCS first.`);
+      setFormMessage({ type: 'error', text: `Cannot submit: You must acknowledge the Top-off Box requirement (${palletImpact.adjustmentBoxQty} PCS) to complete the current pallet before starting a new one.` });
+      showToast('error', 'Pallet Completion Required', `Create the Top-off Box of ${palletImpact.adjustmentBoxQty} PCS first.`);
       return;
     }
 
@@ -690,7 +717,11 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
       setFormMessage({ type: 'error', text: 'Reference Type is required.' });
       showToast('error', 'Validation Error', 'Please select a Reference Type.'); return;
     }
-    const effectiveRefId = referenceType === 'WORK_ORDER' ? referenceId.replace(/^AE\/WO\/D\//, '').trim() : referenceId.trim();
+    const effectiveRefId = referenceType === 'WORK_ORDER'
+      ? referenceId.replace(/^AE\/WO\/D\//, '').trim()
+      : referenceType === 'INVENTORY_ADJUSTMENT'
+        ? referenceId.replace(/^AE\/M\/D\//, '').trim()
+        : referenceId.trim();
     if (!effectiveRefId) {
       setFormMessage({ type: 'error', text: 'Reference ID is required.' });
       showToast('error', 'Validation Error', 'Please enter a Reference ID.'); return;
@@ -751,7 +782,9 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
         reference_document_type: referenceType || null,
         reference_document_number: referenceId || null,
         notes: isProductionReceipt
-          ? `${selectedRoute.label} | Boxes: ${boxCount} × ${innerBoxQty} PCS/box = ${finalQty} PCS | Stock Type: ${stockType}`
+          ? (palletImpact?.adjustmentBoxIncluded
+            ? `${selectedRoute.label} | Boxes: ${palletImpact.adjustedInnerBoxCount} x ${innerBoxQty} PCS/box + 1 Top-off Box x ${palletImpact.adjustmentBoxQty} PCS = ${finalQty} PCS | Stock Type: ${stockType}`
+            : `${selectedRoute.label} | Boxes: ${boxCount} x ${innerBoxQty} PCS/box = ${finalQty} PCS | Stock Type: ${stockType}`)
           : `${selectedRoute.label} | Requested Qty: ${finalQty} | Stock Type: ${stockType}`,
         requested_by: userId,
         created_by: userId,
@@ -1129,15 +1162,42 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
 
     // Parse box breakdown from notes field for Production Receipt movements
     // Notes format: "Production → FI Warehouse | Boxes: 5 × 100 PCS/box = 500 PCS | Stock Type: ..."
-    let boxBreakdown: { boxes: number; perBox: number; total: number } | null = null;
-    if (m.movement_type === 'PRODUCTION_RECEIPT' && m.notes) {
-      const boxMatch = m.notes.match(/Boxes:\s*(\d+)\s*×\s*(\d+)\s*PCS\/box\s*=\s*(\d+)\s*PCS/i);
-      if (boxMatch) {
+    // Parse box breakdown from notes field for Production Receipt movements
+    // New format: "... | Boxes: 67 x 450 PCS/box + 1 Adj Box x 300 PCS = 30450 PCS | ..."
+    // Old format: "... | Boxes: 68 × 450 PCS/box = 30450 PCS | ..."
+    let boxBreakdown: { boxes: number; perBox: number; total: number; adjBoxes?: number; adjQty?: number } | null = null;
+    if ((m.movement_type === 'PRODUCTION_RECEIPT' || m.reference_document_type === 'INVENTORY_ADJUSTMENT') && m.notes) {
+      // Try new format with adj box first
+      const adjMatch = m.notes.match(/Boxes:\s*(\d+)\s*x\s*(\d+)\s*PCS\/box\s*\+\s*(\d+)\s*(?:Adj|Top-off)\s*Box\s*x\s*(\d+)\s*PCS\s*=\s*([\d,]+)\s*PCS/i);
+      if (adjMatch) {
         boxBreakdown = {
-          boxes: parseInt(boxMatch[1], 10),
-          perBox: parseInt(boxMatch[2], 10),
-          total: parseInt(boxMatch[3], 10),
+          boxes: parseInt(adjMatch[1], 10),
+          perBox: parseInt(adjMatch[2], 10),
+          adjBoxes: parseInt(adjMatch[3], 10),
+          adjQty: parseInt(adjMatch[4], 10),
+          total: parseInt(adjMatch[5].replace(/,/g, ''), 10),
         };
+      } else {
+        // Try old format (× or x)
+        const boxMatch = m.notes.match(/Boxes:\s*(\d+)\s*[×x]\s*(\d+)\s*PCS\/box\s*=\s*([\d,]+)\s*PCS/i);
+        if (boxMatch) {
+          const innerBoxes = parseInt(boxMatch[1], 10);
+          const perBox = parseInt(boxMatch[2], 10);
+          const total = parseInt(boxMatch[3].replace(/,/g, ''), 10);
+          const expectedTotal = innerBoxes * perBox;
+          // Detect adjustment from math mismatch
+          if (total !== expectedTotal && total < expectedTotal) {
+            // total is less than boxes × perBox → adj box is included, calculate adj qty
+            const adjQtyCalc = total - ((innerBoxes - 1) * perBox);
+            if (adjQtyCalc > 0 && adjQtyCalc < perBox) {
+              boxBreakdown = { boxes: innerBoxes - 1, perBox, total, adjBoxes: 1, adjQty: adjQtyCalc };
+            } else {
+              boxBreakdown = { boxes: innerBoxes, perBox, total };
+            }
+          } else {
+            boxBreakdown = { boxes: innerBoxes, perBox, total };
+          }
+        }
       }
     }
     const printTimestamp = new Date().toLocaleString('en-IN', {
@@ -1464,7 +1524,14 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
     <tr>
       <td colspan="8" class="bdr-b cp-sm" style="padding:6px 12px;">
         <span class="fs8 fw800 uc ls1" style="color:#000; margin-right:8px;">BOX BREAKDOWN:</span>
-        <span class="mono fw700 fs10" style="color:#000;">${boxBreakdown.boxes} Boxes × ${boxBreakdown.perBox} PCS/Box = ${boxBreakdown.total.toLocaleString()} PCS</span>
+        ${boxBreakdown.adjBoxes && boxBreakdown.adjQty ? `
+          <span class="mono fw700 fs10" style="color:#000;">${boxBreakdown.boxes} Inner Boxes x ${boxBreakdown.perBox} PCS/Box = ${(boxBreakdown.boxes * boxBreakdown.perBox).toLocaleString()} PCS</span>
+          <span class="mono fw700 fs10" style="color:#000; margin-left:12px;">+</span>
+          <span class="mono fw700 fs10" style="color:#000; margin-left:12px;">${boxBreakdown.adjBoxes} Top-off Box x ${boxBreakdown.adjQty} PCS = ${(boxBreakdown.adjBoxes * boxBreakdown.adjQty).toLocaleString()} PCS</span>
+          <span class="mono fw800 fs10" style="color:#000; margin-left:16px;">TOTAL: ${boxBreakdown.total.toLocaleString()} PCS</span>
+        ` : `
+          <span class="mono fw700 fs10" style="color:#000;">${boxBreakdown.boxes} Boxes x ${boxBreakdown.perBox} PCS/Box = ${boxBreakdown.total.toLocaleString()} PCS</span>
+        `}
       </td>
     </tr>
     ` : ''}
@@ -1585,6 +1652,11 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   // RENDER: MAIN PAGE
   // ============================================================================
 
+  // ── FIRST-LOAD: full-page skeleton ──
+  if (loading && movements.length === 0) {
+    return <ModuleLoader moduleName="Stock Movements" icon={<ArrowRightLeft size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
+  }
+
   return (
     <div>
       {/* ─── SUMMARY CARDS ─── */}
@@ -1666,7 +1738,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
       </FilterBar>
 
       {/* ─── MOVEMENT RECORDS TABLE ─── */}
-      {loading ? (
+      {loading && movements.length === 0 ? (
         <ModuleLoader moduleName="Stock Movements" icon={<ArrowRightLeft size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
       ) : movements.length === 0 ? (
         <EmptyState
@@ -1680,6 +1752,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
           <div style={{
             background: 'white', borderRadius: '8px', border: '1px solid var(--enterprise-gray-200)',
             overflow: 'hidden', boxShadow: 'var(--shadow-sm)',
+            opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto',
           }}>
             <div className="table-responsive" style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 380px)', overflowY: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
@@ -1898,9 +1971,31 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
               <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '16px', alignItems: 'end' }}>
                 <div>
                   <label style={mLabelStyle}>Stock Type *</label>
-                  <select value={stockType} onChange={e => { setStockType(e.target.value as StockType); setSelectedWarehouse(''); setSelectedRoute(null); setAvailableRoutes([]); }} style={mSelectStyle}>
+                  <select value={stockType} onChange={e => {
+                    const newType = e.target.value as StockType;
+                    setStockType(newType);
+                    if (newType === 'STOCK_IN') {
+                      // Auto-default: FG Warehouse + Production Receipt route + Prod Receive reason
+                      setSelectedWarehouse('PW');
+                      const routes = getRoutesForWarehouse('PW', 'STOCK_IN');
+                      setAvailableRoutes(routes);
+                      setSelectedRoute(routes.length >= 1 ? routes[0] : null);
+                      // Auto-default reason code to Prod Receive
+                      const prodRc = reasonCodes.find(r =>
+                        r.reason_code.toUpperCase().includes('PROD')
+                      );
+                      if (prodRc) {
+                        handleCategoryChange(prodRc.reason_code);
+                      } else if (reasonCodes.length > 0) {
+                        handleCategoryChange(reasonCodes[0].reason_code);
+                      }
+                    } else {
+                      setSelectedWarehouse(''); setSelectedRoute(null); setAvailableRoutes([]);
+                      setSelectedCategory(''); setNote(''); setNotePrefix('');
+                    }
+                  }} style={mSelectStyle}>
                     <option value="">Select stock type...</option>
-                    <option value="STOCK_IN">Stock In</option>
+                    <option value="STOCK_IN">Stock In (Production → FG)</option>
                     <option value="REJECTION">From Rejection</option>
                   </select>
                 </div>
@@ -1932,7 +2027,9 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                   <select value={selectedWarehouse} onChange={e => setSelectedWarehouse(e.target.value as LocationCode)} style={mSelectStyle}>
                     <option value="">Choose warehouse...</option>
                     {getWarehousesForStockType(stockType).map(code => (
-                      <option key={code} value={code}>{LOCATIONS[code].name} ({code})</option>
+                      <option key={code} value={code}>
+                        {code === 'CUSTOMER' ? 'Customer' : `${LOCATIONS[code as LocationCode]?.name || code} (${code})`}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -2036,7 +2133,56 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                 </div>
               )}
 
-              {/* Row 3: Reason Code + Quantity */}
+              {/* Row 2: Reference Type + Reference ID (FIRST per requirement 6) */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                <div>
+                  <label style={mLabelStyle}>Reference Type *</label>
+                  <select value={referenceType} onChange={e => {
+                    setReferenceType(e.target.value);
+                    if (e.target.value === 'WORK_ORDER') { setReferenceId('AE/WO/D/'); }
+                    else if (e.target.value === 'INVENTORY_ADJUSTMENT') { setReferenceId('AE/M/D/'); }
+                    else { setReferenceId(''); }
+                  }} style={mSelectStyle}>
+                    <option value="">Select type...</option>
+                    {(stockType === 'STOCK_IN' ? STOCK_IN_REFERENCE_TYPES : REJECTION_REFERENCE_TYPES).map(rt => <option key={rt.value} value={rt.value}>{rt.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={mLabelStyle}>Reference ID *</label>
+                  {referenceType === 'WORK_ORDER' ? (
+                    <div style={{ position: 'relative' }}>
+                      <span style={{
+                        position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)',
+                        fontSize: '13px', fontWeight: 600, color: '#1e40af', pointerEvents: 'none', userSelect: 'none',
+                      }}>AE/WO/D/</span>
+                      <input type="text"
+                        value={referenceId.startsWith('AE/WO/D/') ? referenceId.slice(8) : referenceId}
+                        onChange={e => setReferenceId('AE/WO/D/' + e.target.value)}
+                        placeholder="Enter ID..."
+                        style={{ ...mInputStyle, paddingLeft: '88px' }}
+                      />
+                    </div>
+                  ) : referenceType === 'INVENTORY_ADJUSTMENT' ? (
+                    <div style={{ position: 'relative' }}>
+                      <span style={{
+                        position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)',
+                        fontSize: '13px', fontWeight: 600, color: '#7c3aed', pointerEvents: 'none', userSelect: 'none',
+                      }}>AE/M/D/</span>
+                      <input type="text"
+                        value={referenceId.startsWith('AE/M/D/') ? referenceId.slice(7) : referenceId}
+                        onChange={e => setReferenceId('AE/M/D/' + e.target.value)}
+                        placeholder="Enter ID..."
+                        style={{ ...mInputStyle, paddingLeft: '72px' }}
+                      />
+                    </div>
+                  ) : (
+                    <input type="text" value={referenceId} onChange={e => setReferenceId(e.target.value)}
+                      placeholder="Select reference type first..." style={mInputStyle} disabled={!referenceType} />
+                  )}
+                </div>
+              </div>
+
+              {/* Row 3: Reason Code + Number of Boxes/Quantity (SECOND per requirement 6) */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div>
                   <label style={mLabelStyle}>Reason Code *</label>
@@ -2089,178 +2235,220 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                 )}
               </div>
 
-              {/* ═══════════════ PALLET INTELLIGENCE PANEL ═══════════════ */}
+              {/* ═══════════════ PALLET INTELLIGENCE PANEL — ERP STANDARD ═══════════════ */}
               {selectedRoute?.movementType === 'PRODUCTION_RECEIPT' && boxCount > 0 && (
                 <div style={{
-                  padding: '14px 16px', borderRadius: '10px',
-                  background: palletImpact?.mustCreateAdjustmentFirst
-                    ? 'linear-gradient(135deg, #fef2f2, #fee2e2)'
-                    : palletImpact?.adjustmentBoxRequired
-                      ? 'linear-gradient(135deg, #fffbeb, #fef3c7)'
-                      : 'linear-gradient(135deg, #f0fdf4, #dcfce7)',
-                  border: `1.5px solid ${palletImpact?.mustCreateAdjustmentFirst ? '#fca5a5'
-                    : palletImpact?.adjustmentBoxRequired ? '#fcd34d'
-                      : '#86efac'
-                    }`,
+                  borderRadius: 'var(--border-radius-lg, 12px)', overflow: 'hidden',
+                  background: 'var(--card-background, #fff)',
+                  border: '1px solid var(--border-color, #e5e7eb)',
+                  boxShadow: 'var(--shadow-sm, 0 1px 2px rgba(0,0,0,0.05))',
                 }}>
+                  {/* ── HEADER ── */}
                   <div style={{
-                    display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10,
-                    fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px',
-                    color: palletImpact?.mustCreateAdjustmentFirst ? '#991b1b'
-                      : palletImpact?.adjustmentBoxRequired ? '#92400e' : '#166534',
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '10px 14px',
+                    background: 'var(--enterprise-primary, #1e3a8a)',
+                    borderBottom: '1px solid var(--border-color, #e5e7eb)',
                   }}>
-                    <Package size={15} />
-                    Pallet Intelligence
-                    {loadingPalletImpact && (
-                      <span style={{ display: 'inline-block', width: 12, height: 12, border: '2px solid #93c5fd', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite', marginLeft: 4 }} />
-                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Package size={15} style={{ color: '#fff' }} />
+                      <span style={{ fontSize: 13, fontWeight: 700, color: '#fff', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
+                        Pallet Intelligence
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {loadingPalletImpact && (
+                        <span style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                      )}
+                      {palletImpact && !loadingPalletImpact && (
+                        <span style={{
+                          fontSize: 11, fontWeight: 700, padding: '4px 12px', borderRadius: 4,
+                          background: 'rgba(255,255,255,0.15)',
+                          color: '#fff',
+                          border: '1px solid rgba(255,255,255,0.3)',
+                        }}>
+                          {palletImpact.mustCreateAdjustmentFirst ? 'ACTION REQUIRED' : palletImpact.adjustmentBoxRequired ? 'TOP-OFF INCLUDED' : 'READY'}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {palletImpact && !loadingPalletImpact && (
-                    <>
-                      {/* Current Pallet Status */}
+                    <div style={{ padding: '12px' }}>
+                      {/* ── PALLET STATUS ── */}
                       {palletImpact.currentPallet && (
-                        <div style={{
-                          display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12,
-                          padding: '10px 12px', borderRadius: 8, background: 'rgba(255,255,255,0.7)',
-                          marginBottom: 10,
-                        }}>
-                          <div>
-                            <div style={{ fontSize: 10, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase' }}>Pallet</div>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: '#1e3a8a', fontFamily: 'monospace' }}>{palletImpact.currentPallet.pallet_number}</div>
+                        <div style={{ marginBottom: 10 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--enterprise-primary, #1e3a8a)' }}>
+                              {palletImpact.currentPallet.pallet_number}
+                            </span>
+                            <span style={{
+                              fontSize: 11, fontWeight: 600, padding: '2px 10px', borderRadius: 4,
+                              background: 'var(--enterprise-gray-100, #f3f4f6)',
+                              color: 'var(--enterprise-gray-700, #374151)',
+                              border: '1px solid var(--enterprise-gray-200, #e5e7eb)',
+                            }}>
+                              {palletImpact.currentPallet.state.replace(/_/g, ' ')}
+                            </span>
                           </div>
-                          <div>
-                            <div style={{ fontSize: 10, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase' }}>Fill</div>
-                            <div style={{ fontSize: 13, fontWeight: 700 }}>
-                              {palletImpact.currentPallet.containers_filled}/{palletImpact.total_containers_per_pallet}
-                              <span style={{ fontSize: 10, fontWeight: 500, color: '#6b7280' }}> containers</span>
+                          {/* Progress Bar */}
+                          <div style={{ marginBottom: 10 }}>
+                            <div style={{ height: 8, borderRadius: 4, background: 'var(--enterprise-gray-200, #e5e7eb)', overflow: 'hidden' }}>
+                              <div style={{
+                                height: '100%', borderRadius: 4, transition: 'width 0.4s ease',
+                                width: `${Math.min(100, (palletImpact.currentPallet.containers_filled / palletImpact.total_containers_per_pallet) * 100)}%`,
+                                background: 'var(--enterprise-primary, #1e3a8a)',
+                              }} />
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, fontSize: 11, color: 'var(--enterprise-gray-500, #6b7280)', fontWeight: 500 }}>
+                              <span>{palletImpact.currentPallet.containers_filled} of {palletImpact.total_containers_per_pallet} inner boxes filled</span>
+                              <span style={{ fontWeight: 700 }}>{Math.round((palletImpact.currentPallet.containers_filled / palletImpact.total_containers_per_pallet) * 100)}%</span>
                             </div>
                           </div>
-                          <div>
-                            <div style={{ fontSize: 10, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase' }}>Qty</div>
-                            <div style={{ fontSize: 13, fontWeight: 700 }}>
-                              {palletImpact.currentPallet.current_qty.toLocaleString()}/{palletImpact.currentPallet.target_qty.toLocaleString()}
+                          {/* Stat Row */}
+                          <div style={{ display: 'grid', gridTemplateColumns: palletImpact.adjustment_qty_per_pallet > 0 ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 6 }}>
+                            <div style={{ background: 'var(--enterprise-gray-50, #f9fafb)', borderRadius: 8, padding: '10px', textAlign: 'center', border: '1px solid var(--enterprise-gray-200, #e5e7eb)' }}>
+                              <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500, #6b7280)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 3 }}>Current</div>
+                              <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--enterprise-primary, #1e3a8a)' }}>{palletImpact.currentPallet.current_qty.toLocaleString()}</div>
                             </div>
-                          </div>
-                          <div>
-                            <div style={{ fontSize: 10, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase' }}>Need</div>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: '#dc2626' }}>
-                              {palletImpact.currentPallet.containers_needed} box + {palletImpact.adjustment_qty_per_pallet > 0 ? `1×${palletImpact.adjustment_qty_per_pallet}` : '0'} adj
+                            <div style={{ background: 'var(--enterprise-gray-50, #f9fafb)', borderRadius: 8, padding: '10px', textAlign: 'center', border: '1px solid var(--enterprise-gray-200, #e5e7eb)' }}>
+                              <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500, #6b7280)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 3 }}>Target</div>
+                              <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--enterprise-gray-700, #374151)' }}>{palletImpact.currentPallet.target_qty.toLocaleString()}</div>
                             </div>
+                            <div style={{ background: 'var(--enterprise-gray-50, #f9fafb)', borderRadius: 8, padding: '10px', textAlign: 'center', border: '1px solid var(--enterprise-gray-200, #e5e7eb)' }}>
+                              <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500, #6b7280)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 3 }}>Still Needed</div>
+                              <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--enterprise-primary, #1e3a8a)' }}>
+                                {palletImpact.currentPallet.containers_needed} box{palletImpact.currentPallet.containers_needed !== 1 ? 'es' : ''}
+                              </div>
+                            </div>
+                            {palletImpact.adjustment_qty_per_pallet > 0 && (
+                              <div style={{ background: '#f5f3ff', borderRadius: 8, padding: '10px', textAlign: 'center', border: '1px solid #e9d5ff' }}>
+                                <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500, #6b7280)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 3 }}>Top-off Box</div>
+                                <div style={{ fontSize: 18, fontWeight: 800, color: '#7c3aed' }}>{palletImpact.adjustment_qty_per_pallet} PCS</div>
+                              </div>
+                            )}
                           </div>
                         </div>
                       )}
 
-                      {/* Movement Breakdown */}
+                      {/* ── MOVEMENT BREAKDOWN ── */}
                       <div style={{
-                        padding: '10px 12px', borderRadius: 8, background: 'rgba(255,255,255,0.6)',
-                        marginBottom: 8,
+                        background: 'var(--enterprise-gray-50, #f9fafb)', borderRadius: 8, padding: '14px',
+                        marginBottom: 10, border: '1px solid var(--enterprise-gray-200, #e5e7eb)',
                       }}>
-                        <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>Movement Breakdown</div>
-                        <div style={{ fontSize: 15, fontWeight: 700, color: '#1e3a8a', fontFamily: 'monospace' }}>
+                        <div style={{ fontSize: 11, color: 'var(--enterprise-gray-500, #6b7280)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 6, textAlign: 'center' }}>
+                          This Movement
+                        </div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--enterprise-gray-900, #111827)', lineHeight: 1.5, textAlign: 'center' }}>
                           {palletImpact.breakdownText}
                         </div>
                         {palletImpact.adjustmentBoxIncluded && (
-                          <div style={{ fontSize: 11, color: '#b45309', fontWeight: 600, marginTop: 4 }}>
-                            ⚡ 1 box auto-converted to adjustment ({palletImpact.adjustmentBoxQty} PCS)
+                          <div style={{
+                            marginTop: 8, padding: '8px 12px', borderRadius: 6,
+                            background: '#f5f3ff', border: '1px solid #e9d5ff',
+                            fontSize: 12, fontWeight: 600, color: '#7c3aed',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                          }}>
+                            <Info size={14} style={{ flexShrink: 0 }} />
+                            1 Box will be auto-converted to a Top-off Box ({palletImpact.adjustmentBoxQty} PCS)
                           </div>
                         )}
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8, fontSize: 12 }}>
-                          <div>
-                            <span style={{ color: '#6b7280' }}>→ Current Pallet: </span>
-                            <strong>{palletImpact.boxesToCurrentPallet} inner</strong>
-                            {palletImpact.adjustmentBoxIncluded && <strong style={{ color: '#b45309' }}> + 1 adj</strong>}
-                            <span style={{ color: '#6b7280' }}>
-                              {' '}({(palletImpact.boxesToCurrentPallet * palletImpact.inner_box_qty) + (palletImpact.adjustmentBoxIncluded ? palletImpact.adjustmentBoxQty : 0)} PCS)
-                            </span>
+
+                        {/* Distribution */}
+                        <div style={{ display: 'grid', gridTemplateColumns: palletImpact.boxesToNewPallet > 0 ? '1fr 1fr' : '1fr', gap: 8, marginTop: 10 }}>
+                          <div style={{
+                            background: '#fff', borderRadius: 6, padding: '12px 14px',
+                            border: '1px solid var(--enterprise-gray-200, #e5e7eb)',
+                            borderLeft: '4px solid var(--enterprise-primary, #1e3a8a)',
+                            textAlign: 'center',
+                          }}>
+                            <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500, #6b7280)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>Current Pallet</div>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--enterprise-primary, #1e3a8a)' }}>
+                              {palletImpact.boxesToCurrentPallet} Box{palletImpact.boxesToCurrentPallet !== 1 ? 'es' : ''}
+                              {palletImpact.adjustmentBoxIncluded && <span style={{ color: '#7c3aed' }}> + 1 Top-off</span>}
+                            </div>
+                            <div style={{ fontSize: 12, color: 'var(--enterprise-gray-500, #6b7280)', marginTop: 2, fontWeight: 500 }}>
+                              {((palletImpact.boxesToCurrentPallet * palletImpact.inner_box_qty) + (palletImpact.adjustmentBoxIncluded ? palletImpact.adjustmentBoxQty : 0)).toLocaleString()} PCS total
+                            </div>
                           </div>
                           {palletImpact.boxesToNewPallet > 0 && (
-                            <div>
-                              <span style={{ color: '#6b7280' }}>→ New Pallet: </span>
-                              <strong style={{ color: '#1e40af' }}>{palletImpact.boxesToNewPallet} inner</strong>
-                              <span style={{ color: '#6b7280' }}> ({palletImpact.boxesToNewPallet * palletImpact.inner_box_qty} PCS)</span>
+                            <div style={{
+                              background: '#fff', borderRadius: 6, padding: '12px 14px',
+                              border: '1px solid var(--enterprise-gray-200, #e5e7eb)',
+                              borderLeft: '4px solid var(--enterprise-success, #16a34a)',
+                              textAlign: 'center',
+                            }}>
+                              <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500, #6b7280)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>New Pallet</div>
+                              <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--enterprise-success, #16a34a)' }}>
+                                {palletImpact.boxesToNewPallet} Box{palletImpact.boxesToNewPallet !== 1 ? 'es' : ''}
+                              </div>
+                              <div style={{ fontSize: 12, color: 'var(--enterprise-gray-500, #6b7280)', marginTop: 2, fontWeight: 500 }}>
+                                {(palletImpact.boxesToNewPallet * palletImpact.inner_box_qty).toLocaleString()} PCS total
+                              </div>
                             </div>
                           )}
                         </div>
                       </div>
 
-                      {/* Warnings */}
+                      {/* ── WARNINGS ── */}
                       {palletImpact.warnings.map((w, i) => (
                         <div key={i} style={{
-                          padding: '8px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
-                          marginBottom: 6,
-                          background: palletImpact.mustCreateAdjustmentFirst ? '#fee2e2' : '#fef3c7',
-                          color: palletImpact.mustCreateAdjustmentFirst ? '#991b1b' : '#78350f',
-                          border: `1px solid ${palletImpact.mustCreateAdjustmentFirst ? '#fca5a5' : '#fde68a'}`,
-                          lineHeight: 1.4,
+                          padding: '10px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+                          marginBottom: 8, lineHeight: 1.5,
+                          background: 'var(--enterprise-warning-bg, #fffbeb)',
+                          color: 'var(--enterprise-warning, #d97706)',
+                          border: '1px solid #fde68a',
+                          display: 'flex', alignItems: 'flex-start', gap: 8,
                         }}>
-                          {w}
+                          <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 2 }} />
+                          <span>{w}</span>
                         </div>
                       ))}
 
-                      {/* ENFORCEMENT: Acknowledgment checkbox */}
+                      {/* ── ACKNOWLEDGMENT ── */}
                       {palletImpact.mustCreateAdjustmentFirst && (
                         <label style={{
-                          display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer',
-                          marginTop: 8, padding: '10px 12px', borderRadius: 8,
-                          background: adjustmentAcknowledged ? '#dcfce7' : '#fee2e2',
-                          border: `1.5px solid ${adjustmentAcknowledged ? '#86efac' : '#fca5a5'}`,
+                          display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer',
+                          padding: '12px 14px', borderRadius: 8,
+                          background: adjustmentAcknowledged ? 'var(--enterprise-success-bg, #f0fdf4)' : 'var(--enterprise-gray-50, #f9fafb)',
+                          border: `1.5px solid ${adjustmentAcknowledged ? 'var(--enterprise-success, #16a34a)' : 'var(--border-color, #e5e7eb)'}`,
                           transition: 'all 0.2s ease',
                         }}>
-                          <input
-                            type="checkbox"
-                            checked={adjustmentAcknowledged}
-                            onChange={e => setAdjustmentAcknowledged(e.target.checked)}
-                            style={{ width: 18, height: 18, accentColor: '#16a34a', marginTop: 2, flexShrink: 0 }}
-                          />
-                          <span style={{ fontSize: 12, fontWeight: 600, color: adjustmentAcknowledged ? '#166534' : '#991b1b', lineHeight: 1.4 }}>
-                            I confirm that an adjustment box of <strong>{palletImpact.adjustmentBoxQty} PCS</strong> will be
+                          <div style={{
+                            width: 20, height: 20, borderRadius: 4, flexShrink: 0, marginTop: 1,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            background: adjustmentAcknowledged ? 'var(--enterprise-success, #16a34a)' : '#fff',
+                            transition: 'all 0.2s ease',
+                            border: adjustmentAcknowledged ? '1px solid var(--enterprise-success, #16a34a)' : '1px solid var(--enterprise-gray-300, #d1d5db)',
+                          }}>
+                            {adjustmentAcknowledged && <CheckCircle2 size={13} style={{ color: '#fff' }} />}
+                          </div>
+                          <input type="checkbox" checked={adjustmentAcknowledged} onChange={e => setAdjustmentAcknowledged(e.target.checked)}
+                            style={{ display: 'none' }} />
+                          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--enterprise-gray-700, #374151)', lineHeight: 1.5 }}>
+                            I confirm that a Top-off Box of <strong>{palletImpact.adjustmentBoxQty} PCS</strong> will be
                             created during packing to complete{' '}
                             <strong>{palletImpact.currentPallet?.pallet_number || 'the current pallet'}</strong> before
-                            starting a new pallet. The system will auto-generate this box.
+                            starting a new pallet.
                           </span>
                         </label>
                       )}
 
-                      {/* Summary */}
-                      <div style={{ marginTop: 6, fontSize: 11, color: '#6b7280', fontStyle: 'italic' }}>
+                      {/* ── FOOTER ── */}
+                      <div style={{
+                        marginTop: 8, padding: '8px 12px', borderRadius: 6,
+                        background: 'var(--enterprise-gray-50, #f9fafb)',
+                        fontSize: 12, color: 'var(--enterprise-gray-500, #6b7280)', fontStyle: 'italic',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                        border: '1px solid var(--enterprise-gray-200, #e5e7eb)',
+                      }}>
+                        <Info size={13} style={{ flexShrink: 0 }} />
                         {palletImpact.palletSummary}
                       </div>
-                    </>
+                    </div>
                   )}
                 </div>
               )}
-
-              {/* Row 2: Reference Type + Reference ID (mandatory) */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <div>
-                  <label style={mLabelStyle}>Reference Type *</label>
-                  <select value={referenceType} onChange={e => { setReferenceType(e.target.value); if (e.target.value === 'WORK_ORDER') { setReferenceId('AE/WO/D/'); } else { setReferenceId(''); } }} style={mSelectStyle}>
-                    <option value="">Select type...</option>
-                    {REFERENCE_TYPES.map(rt => <option key={rt.value} value={rt.value}>{rt.label}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label style={mLabelStyle}>Reference ID *</label>
-                  {referenceType === 'WORK_ORDER' ? (
-                    <div style={{ position: 'relative' }}>
-                      <span style={{
-                        position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)',
-                        fontSize: '13px', fontWeight: 600, color: '#1e40af', pointerEvents: 'none', userSelect: 'none',
-                      }}>AE/WO/D/</span>
-                      <input type="text"
-                        value={referenceId.startsWith('AE/WO/D/') ? referenceId.slice(8) : referenceId}
-                        onChange={e => setReferenceId('AE/WO/D/' + e.target.value)}
-                        placeholder="Enter ID..."
-                        style={{ ...mInputStyle, paddingLeft: '88px' }}
-                      />
-                    </div>
-                  ) : (
-                    <input type="text" value={referenceId} onChange={e => setReferenceId(e.target.value)}
-                      placeholder="Enter reference ID..." style={mInputStyle} />
-                  )}
-                </div>
-              </div>
 
               {/* Row 4: Note (full width) */}
               <div>
@@ -2357,7 +2545,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
             <Button
               variant="primary"
               onClick={handleSubmitRequest}
-              disabled={submitting || !selectedRoute || (selectedRoute?.movementType === 'PRODUCTION_RECEIPT' ? (boxCount <= 0 || innerBoxQty <= 0) : quantity <= 0) || !selectedCategory || !note.trim() || !referenceType || !(referenceType === 'WORK_ORDER' ? referenceId.replace(/^AE\/WO\/D\//, '').trim() : referenceId.trim())}
+              disabled={submitting || !selectedRoute || (selectedRoute?.movementType === 'PRODUCTION_RECEIPT' ? (boxCount <= 0 || innerBoxQty <= 0) : quantity <= 0) || !selectedCategory || !note.trim() || !referenceType || !(referenceType === 'WORK_ORDER' ? referenceId.replace(/^AE\/WO\/D\//, '').trim() : referenceType === 'INVENTORY_ADJUSTMENT' ? referenceId.replace(/^AE\/M\/D\//, '').trim() : referenceId.trim())}
               icon={submitting ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <Shield size={16} />}
             >
               {submitting ? 'Submitting...' : 'Submit Request'}
@@ -2641,18 +2829,18 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                       </div>
                     </div>
 
-                    {/* Adjustment box row (if applicable) */}
+                    {/* Top-off box row (if applicable) */}
                     {reviewBoxInfo.adjIncluded && reviewBoxInfo.adjQty && (
                       <>
                         <div style={{ margin: '12px 0 8px', borderTop: '1px dashed #93a8d2' }} />
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr', alignItems: 'center' }}>
                           <div style={{ textAlign: 'center' }}>
-                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Adj. Box</div>
+                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Top-off Box</div>
                             <div style={{ fontSize: '22px', fontWeight: 800, color: '#b45309', lineHeight: '1' }}>1</div>
                           </div>
                           <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>×</div>
                           <div style={{ textAlign: 'center' }}>
-                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Adj. Qty</div>
+                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Top-off Qty</div>
                             <div style={{ fontSize: '22px', fontWeight: 800, color: '#b45309', lineHeight: '1' }}>
                               {reviewBoxInfo.adjQty}
                               <span style={{ fontSize: '13px', fontWeight: 500, color: '#6b7a8d', marginLeft: '4px' }}>PCS</span>

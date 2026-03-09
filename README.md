@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/Version-0.4.0-blue?style=for-the-badge" alt="Version" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Version-0.4.1-blue?style=for-the-badge" alt="Version" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Status-Active_Development-brightgreen?style=for-the-badge" alt="Status" /></a>
   <a href="#"><img src="https://img.shields.io/badge/License-Proprietary-red?style=for-the-badge" alt="License" /></a>
   <a href="#"><img src="https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=white" alt="React" /></a>
@@ -32,6 +32,7 @@
 - [Security & RBAC](#-security--rbac)
 - [Database Schema](#-database-schema)
 - [API Reference](#-api-reference)
+- [Documentation](#-documentation)
 - [Contributing](#-contributing)
 - [Versioning](#-versioning)
 - [Authors & Maintainers](#-authors--maintainers)
@@ -47,7 +48,7 @@ Modern manufacturing warehouses face critical challenges with inventory accuracy
 
 ### Our Solution
 
-The **Warehouse Management System (WMS)** is a type-safe, real-time application engineered to automate the entire stock lifecycle — from goods receipt and inward movements, through multi-warehouse distribution, to final dispatch and delivery. It features a built-in **Holt-Winters Triple Exponential Smoothing** forecasting engine for data-driven procurement decisions, a comprehensive **Packing Module** with sticker generation, barcode traceability and box-level stock transfer, a comprehensive audit trail for every stock movement, and a role-based access control system ensuring operational security.
+The **Warehouse Management System (WMS)** is a type-safe, real-time application engineered to automate the entire stock lifecycle — from goods receipt and inward movements, through multi-warehouse distribution, to final dispatch and delivery. It features a built-in **Holt-Winters Triple Exponential Smoothing** forecasting engine for data-driven procurement decisions, a comprehensive **Packing Engine** with sticker generation, barcode traceability, palletization, container-level tracking and box-level stock transfer, a comprehensive audit trail for every stock movement, and a granular role-based access control system ensuring operational security.
 
 > _Built by engineers, for engineers — designed to handle real-world manufacturing complexity at scale._
 
@@ -57,17 +58,26 @@ The **Warehouse Management System (WMS)** is a type-safe, real-time application 
 
 | Module | Description |
 | :--- | :--- |
-| **📊 Enterprise Dashboard** | Real-time KPIs, critical stock alerts, and operational summaries for warehouse managers. |
+| **📊 Enterprise Dashboard** | Real-time KPIs, critical stock alerts, stock distribution, and operational summaries for warehouse managers. |
 | **📦 Item Master** | Centralised catalogue of Finished Goods (FG) with part numbers, descriptions, and master serial numbers. |
 | **🏗️ Multi-Warehouse Inventory** | Real-time stock tracking across multiple warehouse types (S&V, Production, In Transit, Distribution) with status monitoring (Healthy, Warning, Critical, Overstock). |
 | **🔄 Stock Movements** | Full ledger-based transaction system with movement types (Inward, Outward, Transfer, Adjustment), approval workflows, and printed slips. |
-| **📦 Packing Module** | End-to-end FG packing workflow — sticker generation with barcodes, packing details management, packing lists against invoices and sub-invoices, box-level stock transfer from Production to FG Warehouse. |
+| **📦 Packing Module** | End-to-end FG packing workflow — sticker generation with QR-coded barcodes, packing details management, box management. |
+| **⚙️ Packing Engine** | Advanced container management, pallet state machine with automatic fill detection and adjustment box handling, rack view. |
+| **📋 Packing Details** | Packing specifications, dimensions, and weight templates for each FG part. |
+| **🎯 Pallet Dashboard** | Visual pallet state tracking, completion monitoring, and management. |
+| **📝 Contract Configs** | Customer-specific packing rules and configuration management. |
+| **🚚 Dispatch Selection** | Dispatch readiness verification and Master Packing List creation. |
+| **📄 Master Packing List** | MPL generation, print, and export for completed dispatches. |
+| **🧾 Performa Invoice** | Shipment batching and stock dispatch management. |
+| **🔍 Traceability** | Full backward trace for any container — from dispatch back to production receipt. |
 | **📋 Blanket Orders** | Comprehensive handling of long-term customer contracts with order line items. |
 | **📅 Blanket Releases** | Delivery scheduling against blanket orders with automatic inventory deduction upon delivery. |
 | **📈 Demand Forecasting** | Advanced demand prediction using Holt-Winters algorithm with trend and seasonality analysis. |
 | **🔧 MRP Planning** | Automated replenishment recommendations based on lead times, safety stock levels, and forecast data. |
-| **👥 User Management** | Role-based access control (L1 Operator, L2 Supervisor, L3 Manager) with **granular per-user permissions** and account activation/deactivation. |
+| **👥 User Management** | Granular Role-Based Access Control (GRBAC) with L1 Operator, L2 Supervisor, L3 Manager tiers. |
 | **🔔 Notifications** | Real-time notification bell with alerts for stock movements, approvals, and system events. |
+| **🗄️ Rack View** | Visual warehouse rack layout for spatial stock organisation. |
 
 ---
 
@@ -79,22 +89,33 @@ The system follows a **clean, layered architecture** ensuring scalability, testa
 ┌─────────────────────────────────────────────────────────────┐
 │                   PRESENTATION LAYER                         │
 │         React 18 + TypeScript + Enterprise Design System     │
-├─────────────────────────────────────────────────────────────┤
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐     │
+│  │Dashboard │ │Item Mstr │ │Stock Mvt │ │  Packing   │     │
+│  │          │ │          │ │          │ │  Engine    │     │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └─────┬──────┘     │
+├───────┼─────────────┼────────────┼─────────────┼────────────┤
 │                   BUSINESS LOGIC LAYER                       │
-│      Custom Hooks (useDashboard, useInventory)               │
-│      Services (inventoryService, authService, packingService)│
-├─────────────────────────────────────────────────────────────┤
-│                   API / EDGE FUNCTIONS                        │
-│           Supabase Edge Functions (Hono Framework)            │
-│      Repositories → Services → Route Handlers                │
-├─────────────────────────────────────────────────────────────┤
-│                      DATA LAYER                              │
-│       Supabase (PostgreSQL) + Row Level Security             │
-│     Views, Triggers, Foreign Key Constraints                 │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │  Custom Hooks (useDashboard, useInventory)            │   │
+│  │  Services (inventoryService, packingService,          │   │
+│  │           packingEngineService, mplService)            │   │
+│  └───────────────────────┬──────────────────────────────┘   │
+├──────────────────────────┼──────────────────────────────────┤
+│                   API / DATA LAYER                           │
+│           Supabase (PostgreSQL) + PostgREST + Auth           │
+│  ┌───────────────────────┴───────────────────────────┐      │
+│  │  Tables: items · inventory · packing_requests     │      │
+│  │  packing_boxes · pack_containers · pallets        │      │
+│  │  packing_lists · invoices · warehouse_stock       │      │
+│  │  stock_ledger · movement_headers · profiles       │      │
+│  ├───────────────────────────────────────────────────┤      │
+│  │  Functions: get_effective_permissions()            │      │
+│  │  RLS Policies: Role-based row security            │      │
+│  └───────────────────────────────────────────────────┘      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-For detailed architecture documentation, see [`docs/architecture/00-ARCHITECTURE-INDEX.md`](docs/architecture/00-ARCHITECTURE-INDEX.md).
+For detailed architecture documentation, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and the [Architecture Series](docs/architecture/).
 
 ---
 
@@ -111,10 +132,10 @@ For detailed architecture documentation, see [`docs/architecture/00-ARCHITECTURE
 | **Forms** | React Hook Form | Performant form management |
 | **Toasts** | Sonner | Non-intrusive notifications |
 | **Backend / Database** | Supabase (PostgreSQL) | Managed database with real-time subscriptions |
-| **Edge Functions** | Deno + Hono | Serverless API layer |
 | **Authentication** | Supabase Auth (JWT) | Secure session management |
 | **State Management** | React Hooks + Context | Lightweight state handling |
-| **Barcode Generation** | QRCode library | Sticker barcode printing for packing |
+| **Barcode / QR** | QRCode library | Sticker barcode printing for packing |
+| **Deployment** | Docker, Nginx, GitHub Actions, AWS EC2 | CI/CD and hosting |
 
 ---
 
@@ -125,6 +146,7 @@ WarehouseManagementSystem/
 │
 ├── 📄 .gitignore                # Git ignore rules
 ├── 📄 README.md                 # This file
+├── 📄 CHANGELOG.md              # Version history and release notes
 ├── 📄 LICENSE                   # Proprietary license
 ├── 📄 package.json              # Dependencies and scripts
 ├── 📄 tsconfig.json             # TypeScript configuration
@@ -141,7 +163,6 @@ WarehouseManagementSystem/
 │   ├── presentschema.sql        # Current full schema reference
 │   ├── rbac.sql                 # RBAC tables, roles, policies
 │   ├── supabasesetup.sql        # Initial DB setup
-│   ├── 003_add_employee_columns.sql
 │   ├── packing.sql              # Packing module schema
 │   ├── packing_module_migration.sql
 │   ├── packing_data_migration.sql
@@ -152,20 +173,22 @@ WarehouseManagementSystem/
 │   └── today.sql                # Latest consolidated SQL
 │
 ├── 📁 docs/                     # Technical documentation
-│   ├── architecture.md          # Legacy architecture overview
-│   ├── developer.md             # Developer onboarding guide
-│   ├── architecture/            # ⭐ Architecture document suite (13 files)
+│   ├── ARCHITECTURE.md          # System architecture overview
+│   ├── DATABASE_SCHEMA.md       # Complete schema reference
+│   ├── MODULE_OVERVIEW.md       # Module catalog and dependency map
+│   ├── DEPLOYMENT_GUIDE.md      # Deployment instructions
+│   ├── CONTRIBUTING.md          # Code standards and PR process
+│   ├── architecture/            # ⭐ Architecture series (12 files)
 │   │   ├── 00-ARCHITECTURE-INDEX.md
 │   │   ├── 01-SYSTEM-OVERVIEW.md
 │   │   ├── ...
 │   │   └── 12-DIRECTORY-STRUCTURE.md
-│   └── readme/                  # Module-specific documentation (26 files)
-│       ├── DATABASE_SCHEMA.md
-│       ├── ARCHITECTURE.md
-│       ├── RBAC_AUTHENTICATION.md
-│       ├── STOCK_MOVEMENT_GUIDE.md
-│       ├── TROUBLESHOOTING.md
-│       └── ...
+│   ├── reference/               # Reference documentation
+│   │   ├── rbac-database.md     # Granular RBAC system details
+│   │   ├── troubleshooting.md   # Common issues and fixes
+│   │   └── design-system.md     # UI design tokens
+│   └── workflows/               # Workflow documentation
+│       └── stock-movement.md    # Stock movement workflow
 │
 ├── 📁 public/                   # Static assets
 │   ├── logo.png
@@ -174,24 +197,24 @@ WarehouseManagementSystem/
 │   └── data/quotes.json
 │
 └── 📁 src/                      # Application source code
-    ├── 📄 App.tsx               # Root application component (~900 lines)
+    ├── 📄 App.tsx               # Root application component with routing + RBAC
     ├── 📄 main.tsx              # React entry point
-    ├── 📄 index.css             # Global styles & design tokens (~43KB)
+    ├── 📄 index.css             # Global styles & design tokens
     │
     ├── 📁 auth/                 # Authentication & RBAC module
     │   ├── index.ts             # Auth barrel exports
     │   ├── components/          # Auth-specific UI components
     │   │   ├── ProtectedRoute.tsx
-    │   │   ├── RoleBadge.tsx
-    │   │   └── GrantAccessModal.tsx  # Granular RBAC permission editor
+    │   │   ├── GrantAccessModal.tsx
+    │   │   └── RoleBadge.tsx
     │   ├── context/             # Auth context provider
     │   │   └── AuthContext.tsx
     │   ├── login/               # Login page component
     │   │   └── LoginPage.tsx
-    │   ├── services/            # Auth service layer
+    │   ├── services/            # Auth & permission services
     │   │   ├── authService.ts
     │   │   ├── userService.ts
-    │   │   └── permissionService.ts  # DB-backed granular RBAC engine
+    │   │   └── permissionService.ts
     │   └── users/               # User management module
     │       └── UserManagement.tsx
     │
@@ -199,16 +222,14 @@ WarehouseManagementSystem/
     │   ├── DashboardNew.tsx     # Enterprise dashboard
     │   ├── ItemMasterSupabase.tsx  # Item catalogue (Supabase)
     │   ├── InventoryGrid.tsx    # Multi-warehouse inventory grid
-    │   ├── StockMovement.tsx    # Stock movement ledger (~137KB)
+    │   ├── StockMovement.tsx    # Stock movement ledger
     │   ├── BlanketOrders.tsx    # Blanket order management
     │   ├── BlanketReleases.tsx  # Blanket release management
     │   ├── ForecastingModule.tsx # Demand forecasting engine
-    │   ├── Module.tsx   # MRP  module
+    │   ├── PlanningModule.tsx   # MRP planning module
     │   ├── StockDistributionCard.tsx # Stock breakdown card
-    │   ├── SampleDataInfo.tsx   # Sample data banner
     │   ├── ErrorBoundary.tsx    # Error boundary wrapper
     │   ├── LoadingPage.tsx      # Branded loading screen
-    │   ├── LoginPage.tsx        # Legacy login redirect
     │   │
     │   ├── 📁 packing/         # 📦 FG Packing module
     │   │   ├── index.ts         # Barrel exports
@@ -216,10 +237,21 @@ WarehouseManagementSystem/
     │   │   ├── PackingDetail.tsx # Single packing detail view
     │   │   ├── PackingDetails.tsx # Packing specifications manager
     │   │   ├── PackingList.tsx   # Packing list component
-    │   │   ├── PackingListInvoice.tsx    # Packing list against invoice
-    │   │   ├── PackingListSubInvoice.tsx # Packing list against sub-invoice
-    │   │   ├── StickerPrint.tsx  # Sticker/barcode generation
+    │   │   ├── StickerPrint.tsx  # Sticker/QR barcode generation
     │   │   └── packingService.ts # Packing business logic
+    │   │
+    │   ├── 📁 packing-engine/  # ⚙️ Advanced Packing Engine
+    │   │   ├── index.ts         # Barrel exports
+    │   │   ├── PackingEngine.tsx # Container & pallet management
+    │   │   ├── PalletDashboard.tsx # Pallet state tracking
+    │   │   ├── ContractConfigManager.tsx # Customer packing rules
+    │   │   ├── DispatchSelection.tsx # Dispatch readiness & MPL creation
+    │   │   ├── PackingListManager.tsx # Master Packing List home
+    │   │   ├── MasterPackingListHome.tsx # MPL generation & print
+    │   │   ├── PerformaInvoice.tsx # Shipment batching
+    │   │   ├── TraceabilityViewer.tsx # Full backward trace
+    │   │   ├── RackView.tsx     # Visual rack layout
+    │   │   └── packingEngineService.ts # Engine business logic
     │   │
     │   ├── 📁 notifications/   # 🔔 Notification system
     │   │   └── NotificationBell.tsx
@@ -235,30 +267,15 @@ WarehouseManagementSystem/
     │
     ├── 📁 hooks/                # Custom React hooks
     │   ├── useDashboard.ts      # Dashboard data fetching
-    │   └── useInventory.ts      # Inventory operations (8 hooks)
+    │   └── useInventory.ts      # Inventory operations
     │
     ├── 📁 services/             # Business logic services
     │   └── inventoryService.ts  # Inventory CRUD operations
     │
-    ├── 📁 supabase/             # Supabase edge functions
-    │   └── functions/server/    # API route handlers
-    │       ├── index.tsx        # Main edge function entry (~86KB)
-    │       ├── services/        # Backend services (6 files)
-    │       │   ├── ItemService.ts
-    │       │   ├── InventoryService.ts
-    │       │   ├── BlanketOrderService.ts
-    │       │   ├── BlanketReleaseService.ts
-    │       │   ├── ForecastingService.ts
-    │       │   └── Service.ts
-    │       └── repositories/    # Data access layer (3 files)
-    │           ├── ItemRepository.ts
-    │           ├── InventoryRepository.ts
-    │           └── BlanketOrderRepository.ts
-    │
     ├── 📁 types/                # TypeScript type definitions
     │   ├── index.ts             # Core application types
     │   ├── inventory.ts         # Inventory-specific types
-    │   └── packing.ts           # Packing module types (v5)
+    │   └── packing.ts           # Packing module types
     │
     └── 📁 utils/                # Utility functions
         ├── api/                 # API client & fetch utilities
@@ -266,6 +283,9 @@ WarehouseManagementSystem/
         │   ├── fetchWithAuth.ts # Authenticated fetch wrapper
         │   ├── itemsSupabase.ts # Item Master API
         │   └── services.ts      # General API services
+        ├── auth.ts              # Shared auth helpers
+        ├── auditLogger.ts       # Structured logging module
+        ├── idGenerator.ts       # ID generation utilities
         ├── notifications/       # Notification utilities
         │   └── notificationService.ts
         └── supabase/            # Supabase client & auth helpers
@@ -299,21 +319,28 @@ cd WarehouseManagementSystem
 **2. Install dependencies:**
 
 ```bash
-npm install
+npm ci
 ```
 
-**3. Configure environment variables:**
+**3. Configure Supabase connection:**
 
-Create a `.env` file in the project root (see [Environment Variables](#-environment-variables)):
+Update `src/utils/supabase/info.tsx` with your Supabase project credentials:
 
-```env
-VITE_SUPABASE_URL=your_supabase_project_url
-VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+```typescript
+export const projectId = 'your-project-id';
+export const publicAnonKey = 'your-anon-key';
 ```
 
-**4. Initialise the database:**
+**4. Run database migrations:**
 
-Apply the SQL schemas from `config/` and `.db_reference/` to your Supabase project via the SQL Editor.
+Execute the migration scripts in order in the Supabase SQL Editor. Apply schemas from `config/` and `.db_reference/` as needed:
+
+```
+supabase/migrations/packing_engine/001_contract_configs.sql
+supabase/migrations/packing_engine/002_containers.sql
+...
+supabase/migrations/packing_engine/013_performance_indexes.sql
+```
 
 **5. Start the development server:**
 
@@ -419,7 +446,7 @@ chore(deps): upgrade React to v18.3.1
 | `VITE_SUPABASE_URL` | ✅ | Your Supabase project URL |
 | `VITE_SUPABASE_ANON_KEY` | ✅ | Your Supabase anonymous/public key |
 
-> ⚠️ **Never commit `.env` files to version control.** The `.gitignore` is configured to exclude all environment files.
+> ⚠️ **Never commit `.env` files or service role keys to version control.** The `.gitignore` is configured to exclude all environment files. The application uses the public anon key with Row Level Security (RLS) for all operations.
 
 ---
 
@@ -431,51 +458,26 @@ chore(deps): upgrade React to v18.3.1
 - Secure session management with automatic token refresh
 - Protected routes and API calls
 
-### Role-Based Access Control (RBAC)
+### Granular Role-Based Access Control (GRBAC)
 
-| Role | Level | Default Permissions |
+| Role | Level | Permissions |
 | :--- | :--- | :--- |
-| **Operator** | L1 | View data only (no create/edit/delete by default) |
-| **Supervisor** | L2 | L1 + create stock movements, manage packing |
-| **Manager** | L3 | **Full access to everything — always** |
-
-### Granular Permission System (v0.4.0)
-
-The system now supports **granular per-user permissions** that override role defaults:
-
-- **L3 (Manager)** can grant or restrict specific permissions for **L1** and **L2** users via the **Grant Access Modal**
-- Permissions are stored in the `user_permissions` table with `override_mode = 'full_control'`
-- The `get_effective_permissions()` PostgreSQL function merges role defaults with user-specific overrides
-- Frontend reads permissions via the `permissionService.ts` engine, controlled by the `permission_source` feature flag in `system_settings`
-
-**Permission Keys** follow the pattern `module.action` (e.g., `items.create`, `stock-movements.edit`):
-
-| Module | Permission Keys |
-| :--- | :--- |
-| Item Master | `items.view`, `items.create`, `items.edit`, `items.delete` |
-| Stock Movements | `stock-movements.view`, `stock-movements.create`, `stock-movements.edit`, `stock-movements.delete` |
-| Packing Details | `packing.packing-details.view`, `.create`, `.edit`, `.delete` |
-| Packing Sticker | `packing.sticker-generation.view`, `.create`, `.edit` |
-| Inventory | `inventory.view`, `inventory.create`, `inventory.edit` |
-| Dashboard | `dashboard.view` |
-| Orders | `orders.view`, `orders.create`, `orders.edit`, `orders.delete` |
-| Releases | `releases.view`, `releases.create`, `releases.edit`, `releases.delete` |
-| Forecasting | `forecast.view`, `forecast.create`, `forecast.edit` |
-| MRP Planning | `planning.view`, `planning.create`, `planning.edit` |
-| User Management | `users.view`, `users.create`, `users.edit`, `users.delete` |
-
-For the complete database RBAC reference, see [`docs/readme/DB_RBAC_REFERENCE.md`](docs/readme/DB_RBAC_REFERENCE.md).
+| **Operator** | L1 | View data, create stock movements |
+| **Supervisor** | L2 | L1 + approve/reject movements, edit items, manage packing |
+| **Manager** | L3 | L2 + user management, full system administration, grant/revoke granular permissions |
 
 ### Security Best Practices
 
 - ✅ End-to-end TypeScript for type safety
 - ✅ Database-level constraints and triggers
 - ✅ Row Level Security (RLS) on Supabase tables
-- ✅ JWT validation on all edge function endpoints
-- ✅ Granular per-user permission overrides (DB-backed)
+- ✅ JWT validation on all API calls
+- ✅ Granular per-user permission overrides
 - ✅ Input sanitisation and validation
 - ✅ No hardcoded secrets in source code
 - ✅ Mutable search path fixes applied to all database functions
+
+For detailed RBAC documentation, see [`docs/reference/rbac-database.md`](docs/reference/rbac-database.md).
 
 ---
 
@@ -493,42 +495,58 @@ The system uses a relational PostgreSQL schema with the following core tables:
 | `profiles` | User profiles with roles and status |
 | `packing_requests` | FG packing workflow requests |
 | `packing_boxes` | Individual box records with PKG IDs |
+| `pack_containers` | Container-level tracking |
+| `pallets` | Pallet state machine records |
+| `packing_lists` | Master packing list records |
+| `invoices` | Invoice & proforma records |
 | `packing_audit_log` | Packing operation audit trail |
 | `packing_details` | Packing dimension/specification templates |
-| `user_permissions` | Granular per-user permission overrides |
-| `module_registry` | Registry of all WMS modules for RBAC |
-| `system_settings` | Feature flags (e.g., `permission_source`) |
+| `contract_configs` | Customer-specific packing configurations |
+| `user_permissions` | Granular RBAC permission overrides |
 
-Database migrations are stored in `.db_reference/migrations/`.  
-Full schema documentation is available at [`docs/readme/DATABASE_SCHEMA.md`](docs/readme/DATABASE_SCHEMA.md).  
-RBAC database reference is at [`docs/readme/DB_RBAC_REFERENCE.md`](docs/readme/DB_RBAC_REFERENCE.md).
+Database migrations are stored in `config/`, `.db_reference/`, and `supabase/migrations/`.
+Full schema documentation is available at [`docs/DATABASE_SCHEMA.md`](docs/DATABASE_SCHEMA.md).
 
 ---
 
 ## 📡 API Reference
 
-The backend API is powered by **Supabase Edge Functions** using the Hono framework.
+The backend API is powered by **Supabase PostgREST** with direct client-side access via the Supabase JS SDK.
 
 ### Architecture Pattern
 
 ```
-Request → Route Handler → Service → Repository → Database
+React Component → Service Layer → Supabase Client → PostgreSQL (with RLS)
 ```
 
-### Key Endpoints
+### Key Operations
 
-| Method | Endpoint | Description |
+| Operation | Service | Description |
 | :--- | :--- | :--- |
-| `GET` | `/items` | Fetch all items |
-| `POST` | `/items` | Create a new item |
-| `PUT` | `/items/:id` | Update an item |
-| `DELETE` | `/items/:id` | Delete an item (cascading) |
-| `GET` | `/inventory` | Fetch inventory data |
-| `GET` | `/blanket-orders` | Fetch blanket orders |
-| `GET` | `/forecasting` | Run demand forecasting |
-| `GET` | `/` | Generate MRP plans |
+| Item CRUD | `itemsSupabase.ts` | Fetch, create, update, delete items |
+| Inventory Queries | `inventoryService.ts` | Multi-warehouse stock data |
+| Stock Movements | `StockMovement.tsx` | Ledger-based transactions |
+| Packing Workflow | `packingService.ts` | Sticker generation, box management |
+| Container/Pallet Ops | `packingEngineService.ts` | Container creation, pallet state machine |
+| MPL Generation | `PackingListManager.tsx` | Master packing list creation |
+| Auth & Permissions | `authService.ts` | JWT auth, role resolution |
 
-Edge function source is located at `src/supabase/functions/server/`.
+---
+
+## 📚 Documentation
+
+| Document | Description |
+| :--- | :--- |
+| [Architecture](docs/ARCHITECTURE.md) | System architecture with diagrams |
+| [Architecture Series](docs/architecture/) | 12-part detailed architecture deep-dive |
+| [Database Schema](docs/DATABASE_SCHEMA.md) | Complete schema reference |
+| [Module Overview](docs/MODULE_OVERVIEW.md) | Module catalog and dependency map |
+| [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) | Deployment instructions |
+| [Contributing](docs/CONTRIBUTING.md) | Code standards and PR process |
+| [RBAC Reference](docs/reference/rbac-database.md) | Granular RBAC system details |
+| [Troubleshooting](docs/reference/troubleshooting.md) | Common issues and fixes |
+| [Design System](docs/reference/design-system.md) | UI design tokens |
+| [Stock Movement](docs/workflows/stock-movement.md) | Stock movement workflow |
 
 ---
 
@@ -565,6 +583,9 @@ We follow the **GitHub Flow** model. All changes must go through Pull Requests.
 - ✅ Use the Enterprise Design System components for UI consistency
 - ✅ No `console.log` in production code (use proper error handling)
 - ✅ Meaningful commit messages following Conventional Commits
+- ✅ All new modules must implement GRBAC (see [workflow](/.agents/workflows/add-new-module.md))
+
+See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) for full contribution guidelines.
 
 ---
 
@@ -582,7 +603,20 @@ MAJOR.MINOR.PATCH
 | **MINOR** | New features, backwards-compatible |
 | **PATCH** | Bug fixes and minor improvements |
 
-**Current Version:** `v0.4.0`
+**Current Version:** `v0.4.1`
+
+### Version History
+
+| Version | Date | Type | Highlights |
+| :--- | :--- | :--- | :--- |
+| **0.4.1** | 2026-03-06 | Patch | Performance optimization, documentation overhaul, structured logging |
+| 0.4.0 | 2026-03-05 | Minor | Master Packing List, Performa Invoice, Traceability |
+| 0.3.2 | 2026-02-25 | Patch | RBAC refinements, version management |
+| 0.3.0 | 2026-02-23 | Minor | Granular RBAC, Supabase security hardening |
+| 0.2.0 | 2026-02-15 | Minor | Packing Engine v2, pallets, containers |
+| 0.1.0 | 2026-01-20 | Initial | Core WMS with inventory, movements, orders |
+
+See [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
 
 ---
 
@@ -597,7 +631,7 @@ MAJOR.MINOR.PATCH
   </tr>
 </table>
 
-**Organisation:** AutoCrat Engineers  
+**Organisation:** AutoCrat Engineers
 **Repository:** [github.com/AutoCrat-Engineers/WarehouseManagementSystem](https://github.com/AutoCrat-Engineers/WarehouseManagementSystem)
 
 ---
