@@ -1,9 +1,9 @@
 name: Build, Test, Deploy (deploy/test-1)
 
 on:
-  push:
-    branches:
-      - deploy/test-1
+  push:
+    branches:
+      - deploy/test-1
 
 jobs:
 
