@@ -3,11 +3,25 @@ FROM node:18-alpine AS build
 
 WORKDIR /app
 
+# Install dependencies required for node-canvas
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    pkgconfig \
+    cairo-dev \
+    pango-dev \
+    jpeg-dev \
+    giflib-dev
+
 COPY package*.json ./
+
 RUN npm ci
 
 COPY . .
+
 RUN npm run build
+
 
 # ===== Stage 2: Serve with Nginx =====
 FROM nginx:alpine
