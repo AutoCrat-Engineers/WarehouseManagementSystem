@@ -242,61 +242,241 @@ export function PackingListPrint({ accessToken, userRole, userPerms = {} }: Prop
         const pl = bt.packingList;
         const details = bt.palletDetails;
         const ts = new Date().toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
-        const invDate = hd?.invoice_date ? new Date(hd.invoice_date + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+        const nowStr = new Date().toLocaleString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ', ' + new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
+        const invDate = hd?.invoice_date ? new Date(hd.invoice_date + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
         const poDate = hd?.purchase_order_date ? new Date(hd.purchase_order_date + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
         const totalNet = details.reduce((s, d) => s + Number(d.net_weight_kg || 0), 0);
         const totalGross = details.reduce((s, d) => s + Number(d.gross_weight_kg || 0), 0);
         const totalQty = details.reduce((s, d) => s + (d.qty_per_pallet || 0), 0);
         const totalPkgs = details.length;
 
+        /* ── hardcoded defaults (override from hd when available) ── */
+        const D = {
+            expName: hd?.exporter_name || 'AUTOCRAT ENGINEERS',
+            expAddr: hd?.exporter_address || 'NO. 21 & 22, Export Promotion Industrial Park, Phase - I, Whitefield,\nBangalore-560066, KARNATAKA - INDIA',
+            expPhone: hd?.exporter_phone || 'PH 91 80 43330127',
+            expEmail: hd?.exporter_email || 'dispatch@autocratengineers.in',
+            expGstin: hd?.exporter_gstin || '29ABLPK6831H1ZB',
+            expRef: hd?.exporter_ref || '-NIL-',
+            expIec: hd?.exporter_iec_code || '0702002747',
+            expAd: hd?.exporter_ad_code || '6361504-8400009',
+            vendorNo: hd?.vendor_number || '',
+            conName: hd?.consignee_name || 'Milano Millworks, LLC',
+            conAddr: hd?.consignee_address || '9223 Industrial Blvd NE Leland\nNC 28451 USA',
+            conPhone: hd?.consignee_phone || '(910) 443-3075',
+            buyName: hd?.buyer_name || 'Brown, Sherry',
+            buyPhone: hd?.buyer_phone || '919-209-2411',
+            buyEmail: hd?.buyer_email || 'sherry.brown@opwglobal.com',
+            billName: hd?.bill_to_name || 'OPW Fueling Components, LLC',
+            billAddr: hd?.bill_to_address || '3250 US Highway 70 Business West\nSmithfield, NC 27577\nUnited States',
+            preCarr: hd?.pre_carriage_by || 'Road',
+            receipt: hd?.place_of_receipt || 'BANGALORE',
+            origin: hd?.country_of_origin || 'INDIA',
+            dest: hd?.country_of_destination || 'UNITED STATES',
+            portLoad: hd?.port_of_loading || 'BANGALORE, ICD',
+            delivery: hd?.terms_of_delivery || 'DDP',
+            payment: hd?.payment_terms || 'Net-30',
+            portDisc: hd?.port_of_discharge || 'CHARLESTON',
+            finalDest: hd?.final_destination || 'UNITED STATES',
+            transport: hd?.mode_of_transport || 'Sea',
+            itemHdr: hd?.item_description_header || 'PRECISION MACHINED COMPONENTS',
+            itemSub: hd?.item_description_sub_header || '(OTHERS FUELING COMPONENTS)',
+        };
+
+        /* ── item rows ── */
         const itemRows = details.map(d => {
-            const dim = d.pallet_length_cm && d.pallet_width_cm && d.pallet_height_cm ? `${d.pallet_length_cm} X ${d.pallet_width_cm} X ${d.pallet_height_cm}` : '—';
+            const dim = d.pallet_length_cm && d.pallet_width_cm && d.pallet_height_cm
+                ? `${d.pallet_length_cm} X ${d.pallet_width_cm} X ${d.pallet_height_cm}` : '\u2014';
             return `<tr>
-                <td class="b br p vt" style="width:22%"><div class="fw7 f9">${d.pallet_number}</div>${d.carton_number ? `<div class="f8 g6">Carton: ${d.carton_number}</div>` : ''}</td>
-                <td class="b br p vt" style="width:26%"><div class="fw7 f10">${d.item_name || d.item_code}</div><div class="f9">${d.part_number || ''} ${d.master_serial_no ? '(' + d.master_serial_no + ')' : ''}</div>${d.hts_code ? `<div class="f8 g6">HTS CODE: ${d.hts_code}</div>` : ''}</td>
-                <td class="b br p tc vm f10 fw6">${d.num_pallets || 1}</td>
-                <td class="b br p tc vm f9">${dim}</td>
-                <td class="b br p tc vm f10">${d.part_revision || '—'}</td>
-                <td class="b br p tr vm mono fw7 f10">${(d.qty_per_pallet || 0).toLocaleString()}<br/><span class="f8 g6">Nos</span></td>
-                <td class="b br p tr vm mono fw6 f10">${Number(d.net_weight_kg || 0).toFixed(2)}</td>
-                <td class="b p tr vm mono fw7 f10">${Number(d.gross_weight_kg || 0).toFixed(2)}</td></tr>`;
+<td class="bb br c4">${d.pallet_number || ''}</td>
+<td class="bb br c4"><b>${d.master_serial_no || ''}</b><br/>${d.part_number || ''}<br/>${d.item_name || d.item_code || ''}${d.hts_code ? '<br/><span class="sm">HTS CODE: ' + d.hts_code + '</span>' : ''}</td>
+<td class="bb br c4 ctr">${d.num_pallets || 1}</td>
+<td class="bb br c4 ctr">${dim}</td>
+<td class="bb br c4 ctr">${d.part_revision || '\u2014'}</td>
+<td class="bb br c4 rgt mono">${(d.qty_per_pallet || 0).toLocaleString()}<br/><span class="sm">Nos</span></td>
+<td class="bb br c4 rgt mono">${Number(d.net_weight_kg || 0).toFixed(2)}</td>
+<td class="bb c4 rgt mono"><b>${Number(d.gross_weight_kg || 0).toFixed(2)}</b></td></tr>`;
         }).join('');
 
+        /* ── full HTML ── */
         const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>PL-${pl.packing_list_number}</title>
-<style>@page{size:A4 portrait;margin:8mm}*{margin:0;padding:0;box-sizing:border-box}html,body{font-family:Arial,sans-serif;color:#000;font-size:9px;line-height:1.3;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-table{border-collapse:collapse;width:100%;page-break-inside:avoid}.bdr{border:1px solid #000}.b{border-bottom:1px solid #000}.br{border-right:1px solid #000}.bt{border-top:1px solid #000}.p{padding:3px 6px}.tc{text-align:center}.tr{text-align:right}.tl{text-align:left}.vt{vertical-align:top}.vm{vertical-align:middle}
-.fw8{font-weight:800}.fw7{font-weight:700}.fw6{font-weight:600}.f8{font-size:8px}.f9{font-size:9px}.f10{font-size:10px}.f11{font-size:11px}.f14{font-size:14px}.g6{color:#666}.mono{font-family:'Courier New',monospace}.uc{text-transform:uppercase}
-.wm{position:fixed;top:46%;left:50%;transform:translate(-50%,-50%) rotate(-35deg);font-size:58px;font-weight:900;color:rgba(0,0,0,.04);letter-spacing:12px;text-transform:uppercase;pointer-events:none;z-index:0;white-space:nowrap}
-@media print{.no-print{display:none!important}@page{size:A4 portrait;margin:8mm}}</style></head><body>
+<style>
+@page{size:A4 portrait;margin:6mm}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{font-family:Arial,Helvetica,sans-serif;color:#000;font-size:9px;line-height:1.25;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;height:100%}
+b{font-weight:700}
+table{border-collapse:collapse;width:100%}
+td,th{vertical-align:top}
+.outer{border:1.5px solid #000;display:flex;flex-direction:column;min-height:calc(100vh - 12mm)}
+.grow{flex:1}
+.bb{border-bottom:1px solid #000}
+.br{border-right:1px solid #000}
+.bt{border-top:1px solid #000}
+.c4{padding:3px 5px}
+.ctr{text-align:center}
+.rgt{text-align:right}
+.sm{font-size:7.5px;color:#555}
+.lbl{font-size:8px;font-weight:700}
+.mono{font-family:'Courier New',monospace}
+.wm{position:fixed;top:46%;left:50%;transform:translate(-50%,-50%) rotate(-35deg);font-size:56px;font-weight:900;color:rgba(0,0,0,.035);letter-spacing:10px;text-transform:uppercase;pointer-events:none;z-index:0;white-space:nowrap}
+@media print{.no-print{display:none!important}@page{size:A4 portrait;margin:6mm}}
+</style></head><body>
 <div class="wm">AUTOCRAT ENGINEERS</div>
-<table class="bdr"><tr><td class="tc" style="padding:6px"><div class="f14 fw8 uc" style="letter-spacing:3px">PACKING LIST</div></td></tr></table>
-<table class="bdr" style="border-top:none"><tr>
-<td class="vt br" style="width:40%" rowspan="3"><table style="border:none;width:100%"><tr><td class="b p f8 fw7 uc">Exporter</td></tr><tr><td class="p f9" style="line-height:1.5"><div class="fw8 f10">${hd?.exporter_name || 'AUTOCRAT ENGINEERS'}</div><div class="f8">${hd?.exporter_address || 'NO. 21 & 22, Export Promotion Industrial Park, Phase - I, Whitefield, Bangalore-560066, KARNATAKA - INDIA'}</div><div class="f8">${hd?.exporter_phone || 'PH 91 80 43330127'}</div><div class="f8">E mail: ${hd?.exporter_email || 'dispatch@autocratengineers.in'}</div><div class="f8">GSTIN: ${hd?.exporter_gstin || '29ABLPK6831H1ZB'}</div></td></tr></table></td>
-<td class="b br p f8 fw7 uc" style="width:22%">Invoice No. & Date</td><td class="b p f9 fw7 mono" style="width:16%">${hd?.invoice_number || '—'}<br/><span class="f8">DT.${invDate}</span></td>
-<td class="p vt" rowspan="3" style="width:22%"><div class="f8 fw7">Exporter's Ref</div><div class="f9">${hd?.exporter_ref || '-NIL-'}</div><div class="f8 fw7" style="margin-top:4px">VENDOR NO:</div><div class="f9 fw8">${hd?.vendor_number || '—'}</div></td></tr>
-<tr><td class="b br p f8 fw7 uc">Purchase Order No. & Date</td><td class="b p f9 fw7 mono">${hd?.purchase_order_number || '—'}${poDate ? '<br/><span class="f8">DT.' + poDate + '</span>' : ''}</td></tr>
-<tr><td class="br p f8 fw7 uc">Ship Via</td><td class="p fw7">${hd?.ship_via || '—'}</td></tr></table>
-<table class="bdr" style="border-top:none"><tr>
-<td class="vt br" style="width:40%"><table style="border:none;width:100%"><tr><td class="b p f8 fw7 uc">Consignee</td></tr><tr><td class="p f9" style="line-height:1.5"><div class="fw7">${hd?.consignee_name || '—'}</div><div class="f8">${hd?.consignee_address || ''}</div>${hd?.consignee_phone ? '<div class="f8">Telephone: ' + hd.consignee_phone + '</div>' : ''}</td></tr></table></td>
-<td class="vt" style="width:60%"><table style="border:none;width:100%"><tr><td class="b p f8 fw7 uc" colspan="2">Others Reference(s) :</td></tr>
-<tr><td class="b br p f8 fw7" style="width:30%">Buyer</td><td class="b p f9">: ${hd?.buyer_name || '—'}</td></tr>
-<tr><td class="b br p f8 fw7">Phone No</td><td class="b p f9">: ${hd?.buyer_phone || '—'}</td></tr>
-<tr><td class="b br p f8 fw7">E-Mail ID</td><td class="b p f9">: ${hd?.buyer_email || '—'}</td></tr>
-<tr><td class="br p f8 fw7 vt">Bill To :</td><td class="p f8" style="line-height:1.5">${hd?.bill_to_name || '—'}<br/>${hd?.bill_to_address || ''}</td></tr></table></td></tr></table>
-<table class="bdr" style="border-top:none">
-<tr><td class="b br p f8 fw7" style="width:14%">Pre-Carriage by</td><td class="b br p f9" style="width:12%">${hd?.pre_carriage_by || 'Road'}</td><td class="b br p f8 fw7" style="width:12%">Place of Receipt</td><td class="b br p f9" style="width:12%">${hd?.place_of_receipt || 'BANGALORE'}</td><td class="b br p f8 fw7" style="width:14%">Country of Origin</td><td class="b br p f9" style="width:10%">${hd?.country_of_origin || 'INDIA'}</td><td class="b br p f8 fw7" style="width:14%">Country of Final Dest.</td><td class="b p f9" style="width:12%">${hd?.country_of_destination || '—'}</td></tr>
-<tr><td class="b br p f8 fw7">Vessel/Flight No.</td><td class="b br p f9">${hd?.vessel_flight_no || '—'}</td><td class="b br p f8 fw7">Port of Loading</td><td class="b br p f9">${hd?.port_of_loading || 'BANGALORE, ICD'}</td><td class="b br p f8 fw7">Terms of Delivery</td><td class="b br p f9" colspan="2">${hd?.terms_of_delivery || 'DDP'}<br/><span class="f8">${hd?.payment_terms || 'Net-30'}</span></td><td class="b p f8">${hd?.payment_terms ? 'Days from the date of Invoice' : ''}</td></tr>
-<tr><td class="br p f8 fw7">Port of Discharge</td><td class="br p f9">${hd?.port_of_discharge || '—'}</td><td class="br p f8 fw7">Final Destination</td><td class="br p f9">${hd?.final_destination || '—'}</td><td class="br p f8 fw7">Mode of Transport</td><td class="br p f9">${hd?.mode_of_transport || 'Sea'}</td><td class="br p f8 fw7">IEC Code No:</td><td class="p f9 mono">${hd?.exporter_iec_code || '0702002747'}</td></tr></table>
-<table class="bdr" style="border-top:none"><tr><td class="b p tc fw8 f10 uc">${hd?.item_description_header || 'PRECISION MACHINED COMPONENTS'}</td></tr>
-${hd?.item_description_sub_header ? '<tr><td class="b p tc fw7 f9 uc">' + hd.item_description_sub_header + '</td></tr>' : ''}</table>
-<table class="bdr" style="border-top:none">
-<tr style="background:#f0f0f0"><th class="b br p tl f8 fw8 uc" style="width:22%">PW/Pallet No. & Batch No.</th><th class="b br p tl f8 fw8 uc" style="width:26%">Part No. & Description with P.O No.</th><th class="b br p tc f8 fw8 uc" style="width:6%">No. of Pallet</th><th class="b br p tc f8 fw8 uc" style="width:12%">Pallet Size in CMs.</th><th class="b br p tc f8 fw8 uc" style="width:5%">Part Rev</th><th class="b br p tr f8 fw8 uc" style="width:10%">Qty Per Pallet</th><th class="b br p tr f8 fw8 uc" style="width:9%">Net Wt in KGs</th><th class="b p tr f8 fw8 uc" style="width:10%">Gross Wt in KGs</th></tr>
-${hd?.batch_number ? '<tr><td colspan="8" class="b p fw7 f9">BATCH NO: ' + hd.batch_number + '</td></tr>' : ''}
+
+<!-- DATE BAR -->
+<table><tr>
+<td class="c4" style="font-size:9px">${nowStr}</td>
+<td class="c4 ctr" style="font-size:9px">PL-${pl.packing_list_number}</td>
+<td class="c4 rgt" style="font-size:9px"></td>
+</tr></table>
+
+<div class="outer">
+
+<!-- ═══ HEADER: PACKING LIST ═══ -->
+<table><tr>
+<td class="bb c4 ctr" style="padding:8px"><span style="font-size:20px;font-weight:800;letter-spacing:5px;text-transform:uppercase;font-style:italic">PACKING LIST</span></td>
+</tr></table>
+
+<!-- ═══ EXPORTER + INVOICE/PO/SHIP + REF ═══ -->
+<table>
+<colgroup><col style="width:40%"/><col style="width:18%"/><col style="width:22%"/><col style="width:20%"/></colgroup>
+<tr>
+<td class="bb br c4 lbl" rowspan="5" style="vertical-align:top">
+<div class="bb" style="padding:2px 5px;font-size:8px">Exporter</div>
+<div style="padding:4px 5px;line-height:1.5">
+<div style="font-size:10px;font-weight:800">${D.expName}</div>
+<div style="font-size:8px">${D.expAddr.replace(/\n/g, '<br/>')}</div>
+<div style="font-size:8px">${D.expPhone}</div>
+<div style="font-size:8px">E mail : ${D.expEmail}</div>
+<div style="font-size:8px">GSTIN : ${D.expGstin}</div>
+</div>
+</td>
+<td class="bb br c4 lbl">Invoice No. & Date</td>
+<td class="bb br c4 mono" style="font-weight:700">${hd?.invoice_number || ''} ${invDate ? 'DT.' + invDate : ''}</td>
+<td class="bb c4" rowspan="5" style="vertical-align:top;padding:4px 5px">
+<div class="lbl">Exporter's Ref</div><div>${D.expRef}</div>
+<div class="lbl" style="margin-top:8px">VENDOR NO:</div><div style="font-size:13px;font-weight:800">${D.vendorNo}</div>
+</td>
+</tr>
+<tr><td class="bb br c4 lbl">Purchase Order No. & Date :</td><td class="bb br c4 mono" style="font-weight:700">${hd?.purchase_order_number || ''} ${poDate ? 'DT.' + poDate : ''}</td></tr>
+<tr><td class="bb br c4 lbl">Ship Via :</td><td class="bb br c4" style="font-weight:700">${hd?.ship_via || ''}</td></tr>
+<tr><td class="bb br c4 lbl">Others Reference(s) :</td><td class="bb br c4"></td></tr>
+</table>
+
+<!-- ═══ CONSIGNEE + BUYER/BILL TO ═══ -->
+<table>
+<colgroup><col style="width:40%"/><col style="width:18%"/><col style="width:42%"/></colgroup>
+<tr>
+<td class="bb br c4" rowspan="4" style="vertical-align:top">
+<div class="bb" style="padding:2px 5px;font-size:8px;font-weight:700">Consignee</div>
+<div style="padding:4px 5px;line-height:1.5">
+<div style="font-weight:700">${D.conName}</div>
+<div style="font-size:8px">${D.conAddr.replace(/\n/g, '<br/>')}</div>
+<div style="font-size:8px">Telephone: ${D.conPhone}</div>
+</div>
+</td>
+<td class="bb br c4 lbl">Buyer</td><td class="bb c4">: ${D.buyName}</td>
+</tr>
+<tr><td class="bb br c4 lbl">Phone No</td><td class="bb c4">${D.buyPhone}</td></tr>
+<tr><td class="bb br c4 lbl">E-Mail ID</td><td class="bb c4">${D.buyEmail}</td></tr>
+<tr><td class="bb br c4 lbl" style="vertical-align:top">Bill To :</td><td class="bb c4" style="font-size:8px;line-height:1.5">${D.billName}<br/>${D.billAddr.replace(/\n/g, '<br/>')}</td></tr>
+</table>
+
+<!-- ═══ SHIPPING DETAILS ═══ -->
+<table>
+<colgroup><col style="width:16%"/><col style="width:18%"/><col style="width:18%"/><col style="width:16%"/><col style="width:16%"/><col style="width:16%"/></colgroup>
+<tr>
+<td class="bb br c4 lbl">Pre-Carriage by<br/><span style="font-weight:400">${D.preCarr}</span></td>
+<td class="bb br c4 lbl">Place of Receipt of Pre-Carrier<br/><span style="font-weight:700">${D.receipt}</span></td>
+<td class="bb br c4 lbl" colspan="2">Country of Origin of Goods<br/><span style="font-weight:700">${D.origin}</span></td>
+<td class="bb c4 lbl" colspan="2">Country of Final Destination<br/><span style="font-weight:700">${D.dest}</span></td>
+</tr>
+<tr>
+<td class="bb br c4 lbl">Vessel/Flight No.</td>
+<td class="bb br c4 lbl">Port of Loading<br/><span style="font-weight:700">${D.portLoad}</span></td>
+<td class="bb br c4 lbl" colspan="2">Terms of Delivery & Payment<br/><span style="font-weight:400">${D.delivery}</span><br/><span style="font-weight:400">${D.payment}</span></td>
+<td class="bb c4" colspan="2" style="font-size:8px">Days from the date of Invoice</td>
+</tr>
+<tr>
+<td class="bb br c4 lbl">Port of Discharge</td>
+<td class="bb br c4 lbl">Final Destination</td>
+<td class="bb br c4 lbl">Mode of Transport<br/><span style="font-weight:400">${D.transport}</span></td>
+<td class="bb br c4"></td>
+<td class="bb br c4 lbl">IEC Code No :<br/><span class="mono" style="font-weight:400">${D.expIec}</span></td>
+<td class="bb c4 lbl">AD Code No:<br/><span class="mono" style="font-weight:400">${D.expAd}</span></td>
+</tr>
+<tr>
+<td class="bb br c4" style="font-weight:700">${D.portDisc}</td>
+<td class="bb br c4" style="font-weight:700">${D.finalDest}</td>
+<td class="bb c4" colspan="4"></td>
+</tr>
+</table>
+
+<!-- ═══ ITEM DESCRIPTION ═══ -->
+<table><tr><td class="bb c4 ctr" style="padding:5px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:1px">${D.itemHdr}<br/><span style="font-weight:700;font-size:9px">${D.itemSub}</span></td></tr></table>
+
+<!-- ═══ ITEMS TABLE ═══ -->
+<table>
+<colgroup><col style="width:16%"/><col style="width:22%"/><col style="width:6%"/><col style="width:12%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
+<tr style="background:#f5f5f5">
+<th class="bb br c4 lbl" style="text-align:left">PW/Pallet No. & Batch No.</th>
+<th class="bb br c4 lbl" style="text-align:left">Part No. & Description with P.O No.</th>
+<th class="bb br c4 lbl ctr">No. of Pallet</th>
+<th class="bb br c4 lbl ctr">Pallet Size in CMs.</th>
+<th class="bb br c4 lbl ctr">Part Rev</th>
+<th class="bb br c4 lbl rgt">Qty Per Pallet</th>
+<th class="bb br c4 lbl rgt">Net Wt in KGs</th>
+<th class="bb c4 lbl rgt">Gross Wt in KGs</th>
+</tr>
 ${itemRows}
-<tr style="background:#f0f0f0"><td class="br p fw8 f9" colspan="2">Total No of Pkgs. ${String(totalPkgs).padStart(2, '0')}<br/>Net. Wt.in Kgs. ${totalNet.toFixed(2)}<br/>in kgs ${totalGross.toFixed(2)}</td><td class="br p tc f8 fw8">Total<br/>Total Gross</td><td class="br p tc mono fw8 f10">${String(totalPkgs).padStart(2, '0')}</td><td class="br p"></td><td class="br p tr mono fw8 f10">${totalQty.toLocaleString()}</td><td class="br p tr mono fw8 f10">${totalNet.toFixed(2)}<br/><span class="f8">Kgs</span></td><td class="p tr mono fw8 f10">${totalGross.toFixed(2)}<br/><span class="f8">Kgs</span></td></tr></table>
-<table style="margin-top:6px;border-top:1.5px solid #000;width:100%">
-<tr><td class="p f8 fw7 b tc">This is a system-generated packing list and forms part of dispatch audit records.</td></tr>
-<tr><td style="padding:4px 6px"><table style="border:none;width:100%"><tr><td class="tl f8 g6" style="width:33%">PL#: ${pl.packing_list_number}</td><td class="tc f8 g6" style="width:34%">Printed: ${ts}</td><td class="tr f8" style="width:33%"><div class="fw7">for AUTOCRAT ENGINEERS</div><div style="margin-top:24px" class="f8">Authorised Signatory</div></td></tr></table></td></tr></table>
+</table>
+
+<!-- ═══ SPACER (pushes totals to bottom) ═══ -->
+<div class="grow"></div>
+
+<!-- ═══ TOTALS ═══ -->
+<table>
+<colgroup><col style="width:16%"/><col style="width:22%"/><col style="width:6%"/><col style="width:12%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
+<tr style="background:#f5f5f5">
+<td class="bt br c4" colspan="2" style="font-weight:800;font-size:9px">Total No of Pkgs. ${String(totalPkgs).padStart(2, '0')}<br/>Net. Wt.in Kgs. ${totalNet.toFixed(2)}<br/>in kgs ${totalGross.toFixed(2)}</td>
+<td class="bt br c4 ctr lbl">Total<br/>Total<br/>Gross</td>
+<td class="bt br c4 ctr mono" style="font-weight:800">${String(totalPkgs).padStart(2, '0')}</td>
+<td class="bt br c4"></td>
+<td class="bt br c4 rgt mono" style="font-weight:800">${totalQty.toLocaleString()}</td>
+<td class="bt br c4 rgt mono" style="font-weight:800">${totalNet.toFixed(2)}<br/><span class="sm">Kgs</span></td>
+<td class="bt c4 rgt mono" style="font-weight:800">${totalGross.toFixed(2)}<br/><span class="sm">Kgs</span></td>
+</tr>
+</table>
+
+<!-- ═══ ITC HS CODE ═══ -->
+<table><tr><td class="bt c4" style="font-size:9px;font-weight:700;padding:4px 5px">ITC HS CODE: <span class="mono">84139190</span></td></tr></table>
+
+<!-- ═══ EPCG / LUT + SIGNATORY ═══ -->
+<table style="border-top:1px solid #000">
+<colgroup><col style="width:65%"/><col style="width:35%"/></colgroup>
+<tr>
+<td class="c4" style="padding:6px 5px;vertical-align:top">
+<div style="font-size:8px;text-align:center;color:#c00;font-weight:700;margin-top:2px">The Supply is under EPCG License No: 0731011353 Date 24/05/2024</div>
+<div style="font-size:8px;text-align:center;font-weight:700;margin-top:3px">SUPPLYMEANT FOR EXPORT UNDER LETTER OF UNDERTAKING WITHOUT PAYMENT OF INTEGRATED TAX(IGST) LUT</div>
+<div style="font-size:8px;text-align:center;margin-top:2px">No.AD2903251644306 Dated 29/03/2025</div>
+</td>
+<td class="c4 rgt" style="vertical-align:top;padding:6px 5px">
+<img src="/logo.png" alt="" style="height:24px;margin-bottom:3px;display:block;margin-left:auto" onerror="this.style.display='none'" />
+<div style="font-size:9px;font-weight:700">for AUTOCRAT ENGINEERS</div>
+<div style="margin-top:22px;font-size:8px;font-style:italic">Authorised Signatory</div>
+</td>
+</tr>
+</table>
+
+</div><!-- end .outer -->
+
+<!-- ═══ BOTTOM INFO BAR ═══ -->
+<table style="margin-top:3px"><tr>
+<td class="c4" style="font-size:8px;color:#666;width:33%">MPL#: ${pl.packing_list_number}</td>
+<td class="c4 ctr" style="font-size:8px;color:#666;width:34%">Printed: ${ts}</td>
+<td class="c4 rgt" style="font-size:8px;color:#666;width:33%">System-generated packing list \u2014 dispatch audit record</td>
+</tr></table>
+
 <script>window.onload=function(){window.print();}<\/script></body></html>`;
 
         const w = window.open('', '_blank', 'width=900,height=1100');

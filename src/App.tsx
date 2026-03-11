@@ -61,7 +61,7 @@ const compactLogoImage = '/a-logo.png';
 // User role type for RBAC
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
-type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'rack-view' | 'packing' | 'packing-sticker' | 'packing-details' | 'packing-list-invoice' | 'packing-list-sub-invoice' | 'pe-pallet-dashboard' | 'pe-contract-configs' | 'pe-dispatch' | 'pe-mpl-home' | 'pe-performa-invoice' | 'pe-traceability' | 'users';
+type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'rack-view' | 'packing' | 'packing-sticker' | 'packing-details' | 'packing-list-invoice' | 'packing-list-sub-invoice' | 'pe-pallet-dashboard' | 'pe-contract-configs' | 'pe-dispatch' | 'pe-mpl-home' | 'pe-performa-invoice' | 'pe-traceability' | 'dispatch' | 'users';
 
 interface MenuItem {
   id: View;
@@ -72,7 +72,10 @@ interface MenuItem {
 }
 
 // All packing sub-views (used to determine if packing accordion is active)
-const PACKING_SUB_VIEWS: View[] = ['packing', 'packing-sticker', 'packing-details', 'packing-list-invoice', 'packing-list-sub-invoice', 'pe-pallet-dashboard', 'pe-contract-configs', 'pe-dispatch', 'pe-mpl-home', 'pe-performa-invoice', 'pe-traceability'];
+const PACKING_SUB_VIEWS: View[] = ['packing', 'packing-sticker', 'packing-details', 'packing-list-invoice', 'packing-list-sub-invoice', 'pe-pallet-dashboard', 'pe-contract-configs', 'pe-traceability'];
+
+// All dispatch sub-views (used to determine if dispatch accordion is active)
+const DISPATCH_SUB_VIEWS: View[] = ['dispatch', 'pe-dispatch', 'pe-mpl-home', 'pe-performa-invoice'];
 
 // Meta for packing sub-views (displayed in the header bar)
 const PACKING_VIEW_META: Record<string, { label: string; description: string }> = {
@@ -83,10 +86,15 @@ const PACKING_VIEW_META: Record<string, { label: string; description: string }> 
   'packing-list-sub-invoice': { label: 'Packing List — Against Sub Invoice', description: 'Packing by Sub Invoice' },
   'pe-pallet-dashboard': { label: 'Pallet Dashboard', description: 'Real-time Pallet Readiness' },
   'pe-contract-configs': { label: 'Contract Configs', description: 'Contract Packing Rules' },
-  'pe-dispatch': { label: 'Dispatch Selection', description: 'Select Pallets for Dispatch' },
-  'pe-mpl-home': { label: 'MPL Home', description: 'Master Packing List Dashboard' },
-  'pe-performa-invoice': { label: 'Performa Invoice', description: 'Shipment Batching & Stock Dispatch' },
   'pe-traceability': { label: 'Traceability', description: 'Full Backward Trace' },
+};
+
+// Meta for dispatch sub-views (displayed in the header bar)
+const DISPATCH_VIEW_META: Record<string, { label: string; description: string }> = {
+  'dispatch': { label: 'Dispatch', description: 'Dispatch & Shipping' },
+  'pe-dispatch': { label: 'Dispatch Selection', description: 'Select Pallets for Dispatch' },
+  'pe-mpl-home': { label: 'Packing List', description: 'Master Packing List Dashboard' },
+  'pe-performa-invoice': { label: 'Performa Invoice', description: 'Shipment Batching & Stock Dispatch' },
 };
 
 const menuItems: MenuItem[] = [
@@ -96,6 +104,7 @@ const menuItems: MenuItem[] = [
   { id: 'stock-movements', label: 'Stock Movements', icon: ArrowRightLeft, description: 'Audit Trail' },
   { id: 'rack-view', label: 'Rack View', icon: Grid3X3, description: 'US Warehouse Racks' },
   { id: 'packing', label: 'Packing', icon: PackageOpen, description: 'FG Packing Workflow', hasSubmenu: true },
+  { id: 'dispatch' as View, label: 'Dispatch', icon: Truck, description: 'Dispatch & Shipping', hasSubmenu: true },
   { id: 'orders', label: 'Blanket Orders', icon: FileText, description: 'Customer Orders' },
   { id: 'releases', label: 'Blanket Releases', icon: Calendar, description: 'Delivery Schedule' },
   { id: 'forecast', label: 'Forecasting', icon: TrendingUp, description: 'Demand Prediction' },
@@ -131,6 +140,7 @@ export default function App() {
   // SAP-style accordion states
   const [packingMenuOpen, setPackingMenuOpen] = useState(false);
   const [packingListOpen, setPackingListOpen] = useState(false);
+  const [dispatchMenuOpen, setDispatchMenuOpen] = useState(false);
   // Granular permission state (loaded from localStorage)
   const [userPerms, setUserPerms] = useState<PermissionMap>({});
 
@@ -522,11 +532,15 @@ export default function App() {
               userPerms['packing.packing-details.view'] ||
               userPerms['packing.pallet-dashboard.view'] ||
               userPerms['packing.contract-configs.view'] ||
-              userPerms['packing.dispatch.view'] ||
               userPerms['packing.packing-lists.view'] ||
-              userPerms['packing.mpl-home.view'] ||
-              userPerms['packing.performa-invoice.view'] ||
               userPerms['packing.traceability.view']
+            );
+          }
+          if (item.id === 'dispatch') {
+            return (
+              userPerms['packing.dispatch.view'] ||
+              userPerms['packing.mpl-home.view'] ||
+              userPerms['packing.performa-invoice.view']
             );
           }
           return canAccessView(item.id);
@@ -539,11 +553,14 @@ export default function App() {
 
 
 
-  // Resolve the current menu item — for packing sub-views, show packing meta
+  // Resolve the current menu item — for packing/dispatch sub-views, show meta
   const packingMeta = PACKING_VIEW_META[currentView];
+  const dispatchMeta = DISPATCH_VIEW_META[currentView];
   const currentMenuItem = packingMeta
     ? { id: currentView as View, label: packingMeta.label, icon: PackageOpen, description: packingMeta.description }
-    : getMenuItems().find(item => item.id === currentView);
+    : dispatchMeta
+      ? { id: currentView as View, label: dispatchMeta.label, icon: Truck, description: dispatchMeta.description }
+      : getMenuItems().find(item => item.id === currentView);
 
   return (
     <ErrorBoundary>
@@ -829,6 +846,85 @@ export default function App() {
                         </button>
                       )}
 
+                      {/* Traceability */}
+                      {canAccessView('pe-traceability') && (
+                        <button
+                          onClick={() => handleNavigation('pe-traceability')}
+                          style={{
+                            width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                            padding: '9px 24px 9px 44px', border: 'none',
+                            backgroundColor: currentView === 'pe-traceability' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                            borderLeft: currentView === 'pe-traceability' ? '3px solid #1e3a8a' : '3px solid transparent',
+                            color: currentView === 'pe-traceability' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
+                            textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
+                            fontWeight: currentView === 'pe-traceability' ? '600' : '400', fontSize: '13px',
+                          }}
+                          onMouseEnter={(e) => { if (currentView !== 'pe-traceability') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
+                          onMouseLeave={(e) => { if (currentView !== 'pe-traceability') e.currentTarget.style.backgroundColor = 'transparent'; }}
+                        >
+                          <Eye size={15} strokeWidth={currentView === 'pe-traceability' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-traceability' ? 1 : 0.6 }} />
+                          <span>Traceability</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+
+              // ─── SAP-STYLE DISPATCH ACCORDION ───
+              const isDispatchItem = item.hasSubmenu && item.id === 'dispatch';
+              if (isDispatchItem) {
+                const isDispatchActive = DISPATCH_SUB_VIEWS.includes(currentView);
+                return (
+                  <div key={item.id}>
+                    {/* Parent: Dispatch */}
+                    <button
+                      onClick={() => {
+                        setDispatchMenuOpen(!dispatchMenuOpen);
+                      }}
+                      style={{
+                        width: '100%', display: 'flex', alignItems: 'center', gap: sidebarExpanded ? '12px' : '0px',
+                        padding: sidebarExpanded ? '12px 20px' : '12px 0',
+                        justifyContent: sidebarExpanded ? 'flex-start' : 'center',
+                        border: 'none',
+                        backgroundColor: isDispatchActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
+                        borderLeft: isDispatchActive ? '3px solid var(--enterprise-primary)' : '3px solid transparent',
+                        color: isDispatchActive ? 'var(--enterprise-primary)' : 'var(--enterprise-gray-600)',
+                        textAlign: 'left', cursor: 'pointer', transition: 'all 200ms ease',
+                        fontWeight: isDispatchActive ? '600' : '500', fontSize: '14px',
+                      }}
+                      onMouseEnter={(e) => { if (!isDispatchActive) e.currentTarget.style.backgroundColor = 'var(--enterprise-gray-50)'; }}
+                      onMouseLeave={(e) => { if (!isDispatchActive) e.currentTarget.style.backgroundColor = isDispatchActive ? 'rgba(30, 58, 138, 0.08)' : 'transparent'; }}
+                    >
+                      <Icon size={20} strokeWidth={isDispatchActive ? 2.5 : 2} style={{ flexShrink: 0 }} />
+                      {sidebarExpanded && (
+                        <div style={{ flex: 1, overflow: 'hidden' }}>
+                          <div style={{ whiteSpace: 'nowrap' }}>{item.label}</div>
+                          <div style={{ fontSize: '11px', color: 'var(--enterprise-gray-500)', fontWeight: '400', whiteSpace: 'nowrap' }}>
+                            {item.description}
+                          </div>
+                        </div>
+                      )}
+                      {sidebarExpanded && (
+                        <ChevronDown
+                          size={16}
+                          style={{
+                            transition: 'transform 250ms ease',
+                            transform: dispatchMenuOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                            color: isDispatchActive ? 'var(--enterprise-primary)' : 'var(--enterprise-gray-400)',
+                            flexShrink: 0,
+                          }}
+                        />
+                      )}
+                    </button>
+
+                    {/* ─── Dispatch Sub-items ─── */}
+                    <div style={{
+                      maxHeight: (dispatchMenuOpen && sidebarExpanded) ? '400px' : '0',
+                      overflow: 'hidden',
+                      transition: 'max-height 300ms ease',
+                      backgroundColor: 'rgba(30, 58, 138, 0.02)',
+                    }}>
                       {/* Dispatch Selection */}
                       {canAccessView('pe-dispatch') && (
                         <button
@@ -850,9 +946,7 @@ export default function App() {
                         </button>
                       )}
 
-                      {/* Master Packing List — removed, integrated into MPL Home */}
-
-                      {/* MPL Home — Dashboard */}
+                      {/* Packing List */}
                       {canAccessView('pe-mpl-home') && (
                         <button
                           onClick={() => handleNavigation('pe-mpl-home')}
@@ -869,7 +963,7 @@ export default function App() {
                           onMouseLeave={(e) => { if (currentView !== 'pe-mpl-home') e.currentTarget.style.backgroundColor = 'transparent'; }}
                         >
                           <Receipt size={15} strokeWidth={currentView === 'pe-mpl-home' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-mpl-home' ? 1 : 0.6 }} />
-                          <span>MPL Home</span>
+                          <span>Packing List</span>
                         </button>
                       )}
 
@@ -889,29 +983,8 @@ export default function App() {
                           onMouseEnter={(e) => { if (currentView !== 'pe-performa-invoice') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
                           onMouseLeave={(e) => { if (currentView !== 'pe-performa-invoice') e.currentTarget.style.backgroundColor = 'transparent'; }}
                         >
-                          <Truck size={15} strokeWidth={currentView === 'pe-performa-invoice' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-performa-invoice' ? 1 : 0.6 }} />
+                          <FileCheck size={15} strokeWidth={currentView === 'pe-performa-invoice' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-performa-invoice' ? 1 : 0.6 }} />
                           <span>Performa Invoice</span>
-                        </button>
-                      )}
-
-                      {/* Traceability */}
-                      {canAccessView('pe-traceability') && (
-                        <button
-                          onClick={() => handleNavigation('pe-traceability')}
-                          style={{
-                            width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
-                            padding: '9px 24px 9px 44px', border: 'none',
-                            backgroundColor: currentView === 'pe-traceability' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                            borderLeft: currentView === 'pe-traceability' ? '3px solid #1e3a8a' : '3px solid transparent',
-                            color: currentView === 'pe-traceability' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
-                            textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                            fontWeight: currentView === 'pe-traceability' ? '600' : '400', fontSize: '13px',
-                          }}
-                          onMouseEnter={(e) => { if (currentView !== 'pe-traceability') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                          onMouseLeave={(e) => { if (currentView !== 'pe-traceability') e.currentTarget.style.backgroundColor = 'transparent'; }}
-                        >
-                          <Eye size={15} strokeWidth={currentView === 'pe-traceability' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-traceability' ? 1 : 0.6 }} />
-                          <span>Traceability</span>
                         </button>
                       )}
                     </div>
