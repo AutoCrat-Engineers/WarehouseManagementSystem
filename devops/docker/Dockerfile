@@ -1,5 +1,5 @@
 # ===== Stage 1: Build frontend =====
-FROM node:18-alpine AS build
+FROM node:20-alpine AS build
 
 WORKDIR /app
 
@@ -12,7 +12,11 @@ RUN apk add --no-cache \
     cairo-dev \
     pango-dev \
     jpeg-dev \
-    giflib-dev
+    giflib-dev \
+    libc6-compat
+
+# Ensure node-gyp finds python
+ENV PYTHON=/usr/bin/python3
 
 COPY package*.json ./
 
