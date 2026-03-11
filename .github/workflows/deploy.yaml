@@ -29,7 +29,6 @@ jobs:
       - name: Build app
         run: npm run build
 
-
   deploy:
     needs: build-test
     runs-on: ubuntu-latest
@@ -49,14 +48,13 @@ jobs:
         run: docker push shravanaweb/wms:latest
 
       - name: Deploy on EC2 (clean replace strategy)
-        uses: appleboy/ssh-action@v1.2.0
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_KEY }}
           script: |
             set -e
-
             echo "===== DOCKER CLEANUP ====="
             docker stop wms || true
             docker rm wms || true
@@ -86,7 +84,6 @@ jobs:
             curl -f http://localhost:8080 || exit 1
 
             echo "Validation success → switching production container"
-
             docker stop wms-new
             docker rm wms-new
 
