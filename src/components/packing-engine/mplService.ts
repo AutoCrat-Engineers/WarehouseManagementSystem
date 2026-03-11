@@ -154,8 +154,30 @@ export async function fetchMasterPackingLists(filters?: {
     limit?: number;
     offset?: number;
 }): Promise<{ data: MasterPackingList[]; count: number }> {
-    const limit = filters?.limit || 50;
+    const limit = filters?.limit !== undefined ? filters.limit : 50;
     const offset = filters?.offset || 0;
+
+    // Count-only mode (limit === 0): lightweight query just for the count
+    if (limit === 0) {
+        let countQuery = supabase
+            .from('master_packing_lists')
+            .select('id', { count: 'exact' })
+            .limit(1); // Fetch minimal data, rely on count
+        if (filters?.status) countQuery = countQuery.eq('status', filters.status);
+        if (filters?.search) {
+            const s = filters.search.trim();
+            countQuery = countQuery.or(
+                `mpl_number.ilike.%${s}%,` +
+                `invoice_number.ilike.%${s}%,` +
+                `po_number.ilike.%${s}%,` +
+                `item_code.ilike.%${s}%,` +
+                `item_name.ilike.%${s}%`
+            );
+        }
+        const { count, error } = await countQuery;
+        if (error) { console.error('[MPL Count]', error); throw error; }
+        return { data: [], count: count || 0 };
+    }
 
     let query = supabase
         .from('master_packing_lists')
@@ -174,7 +196,6 @@ export async function fetchMasterPackingLists(filters?: {
 
     if (filters?.search) {
         const s = filters.search.trim();
-        // Multi-field search using OR
         query = query.or(
             `mpl_number.ilike.%${s}%,` +
             `invoice_number.ilike.%${s}%,` +
@@ -187,8 +208,22 @@ export async function fetchMasterPackingLists(filters?: {
     const { data, error, count } = await query;
     if (error) throw error;
 
+    // Secondary lookup: fetch master_serial_no from items table
+    const itemCodes = [...new Set((data || []).map((d: any) => d.item_code).filter(Boolean))];
+    let msnMap: Record<string, string> = {};
+    if (itemCodes.length > 0) {
+        const { data: items } = await supabase
+            .from('items')
+            .select('item_code, master_serial_no')
+            .in('item_code', itemCodes);
+        if (items) {
+            msnMap = Object.fromEntries(items.map((i: any) => [i.item_code, i.master_serial_no || '']));
+        }
+    }
+
     const mapped = (data || []).map((d: any) => ({
         ...d,
+        master_serial_no: msnMap[d.item_code] || null,
         created_by_name: d.profiles?.full_name || '—',
         packing_list_number: d.pack_packing_lists?.packing_list_number || null,
         proforma_number: d.pack_proforma_invoices?.proforma_number || null,

@@ -1,25 +1,32 @@
 /**
- * MasterPackingListHome.tsx — MPL Central Hub (integrated PL Print wizard)
+ * MasterPackingListHome.tsx — Packing List (integrated PL Print wizard)
  *
  * MPLs are ONLY created from DispatchSelection. No "Create MPL" button here.
  * Each MPL row has: View, Print (enabled after PO+Invoice filled).
  * Clicking a PENDING MPL opens inline wizard: Review → Weights → Invoice/PO Entry.
  * No container_number shown — only Packing Box ID.
  */
-import React, { useState, useEffect, useCallback } from 'react';
-import { Search, Printer, Eye, XCircle, ChevronLeft, ChevronRight, Package, FileText, Truck, AlertCircle, CheckCircle2, Clock, RefreshCw, Hash, Box, Loader2, Scale, Edit3 } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Search, Printer, Eye, XCircle, ChevronLeft, ChevronRight, ChevronDown, Package, FileText, Truck, AlertCircle, CheckCircle2, Clock, RefreshCw, Hash, Box, Loader2, Scale, Edit3, AlertTriangle, Settings, X, Info } from 'lucide-react';
 import { fetchMasterPackingLists, confirmMpl, markMplPrinted, cancelMpl, fetchMplPallets, fetchDispatchAuditLog } from './mplService';
 import type { MasterPackingList, MplPallet, MplStatus, DispatchAuditEntry } from './mplService';
 import { getSupabaseClient } from '../../utils/supabase/client';
 import * as svc from './packingEngineService';
+import JsBarcode from 'jsbarcode';
 import type { PackingSpec } from './packingEngineService';
+import { Card, Button, Badge, EmptyState, ModuleLoader } from '../ui/EnterpriseUI';
+import {
+    SummaryCard, SummaryCardsGrid,
+    FilterBar as SharedFilterBar, ActionBar,
+    SearchBox, RefreshButton, StatusFilter, DateRangeFilter,
+} from '../ui/SharedComponents';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 interface Props { accessToken?: string; userRole?: UserRole; userPerms?: Record<string, boolean>; onNavigate?: (view: string, data?: any) => void; }
 
 interface EnrichedPallet {
     id: string; pallet_number: string; item_code: string; item_name: string;
-    part_number: string; master_serial_no: string; state: string;
+    part_number: string; master_serial_no: string; revision: string; state: string;
     current_qty: number; target_qty: number; container_count: number;
     spec: PackingSpec | null;
     containers: Array<{ packing_id: string; quantity: number; container_type: string; is_adjustment: boolean; operator: string }>;
@@ -37,12 +44,24 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
     const [mpls, setMpls] = useState<MasterPackingList[]>([]);
     const [totalCount, setTotalCount] = useState(0);
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [successMsg, setSuccessMsg] = useState<string | null>(null);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState<MplStatus | 'ALL'>('ALL');
+    const [cardFilter, setCardFilter] = useState<MplStatus | 'ALL'>('ALL');
+    const [dateFrom, setDateFrom] = useState('');
+    const [dateTo, setDateTo] = useState('');
     const [page, setPage] = useState(0);
     const pageSize = 25;
+
+    // Toast notification (same pattern as ItemMaster/StockMovement)
+    const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; title: string; text: string } | null>(null);
+    const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const showToast = useCallback((type: 'success' | 'error' | 'warning' | 'info', title: string, text: string, duration = 5000) => {
+        if (toastTimer.current) clearTimeout(toastTimer.current);
+        setToast({ type, title, text });
+        toastTimer.current = setTimeout(() => setToast(null), duration);
+    }, []);
 
     // Detail panel
     const [selectedMpl, setSelectedMpl] = useState<MasterPackingList | null>(null);
@@ -51,9 +70,10 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
     const [detailLoading, setDetailLoading] = useState(false);
     const [showDetail, setShowDetail] = useState(false);
 
-    // Cancel
+    // Cancel (type-to-confirm pattern)
     const [cancelTarget, setCancelTarget] = useState<MasterPackingList | null>(null);
     const [cancelReason, setCancelReason] = useState('');
+    const [cancelConfirmInput, setCancelConfirmInput] = useState('');
     const [cancelling, setCancelling] = useState(false);
 
     // Inline wizard state
@@ -69,24 +89,62 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
     // Summary
     const [summary, setSummary] = useState({ total: 0, pending: 0, printed: 0, dispatched: 0 });
 
+    // Actions dropdown
+    const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+    const [dropdownDirection, setDropdownDirection] = useState<'up' | 'down'>('down');
+    const dropdownRef = useRef<HTMLDivElement>(null);
+
+    // Close dropdown on outside click
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) setActiveDropdown(null);
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
     // ─── Load MPLs ───
-    const loadMpls = useCallback(async () => {
+    const loadMpls = useCallback(async (isRefresh = false) => {
         try {
-            setLoading(true); setError(null);
+            if (!isRefresh && mpls.length === 0) setLoading(true); else setRefreshing(true);
+            setError(null);
             const { data, count } = await fetchMasterPackingLists({ status: statusFilter === 'ALL' ? undefined : statusFilter, search: search || undefined, limit: pageSize, offset: page * pageSize });
             setMpls(data); setTotalCount(count);
-        } catch (err: any) { setError(err.message); } finally { setLoading(false); }
+        } catch (err: any) { setError(err.message); } finally { setLoading(false); setRefreshing(false); }
     }, [statusFilter, search, page]);
 
     const loadSummary = useCallback(async () => {
         try {
-            const [all, draft, printed, dispatched] = await Promise.all([
-                fetchMasterPackingLists({ limit: 0 }), fetchMasterPackingLists({ status: 'DRAFT', limit: 0 }),
-                fetchMasterPackingLists({ status: 'PRINTED', limit: 0 }), fetchMasterPackingLists({ status: 'DISPATCHED', limit: 0 }),
-            ]);
-            setSummary({ total: all.count, pending: draft.count, printed: printed.count, dispatched: dispatched.count });
-        } catch { }
+            // Single lightweight query: fetch just status for all MPLs, compute counts client-side
+            const { data, error } = await getSupabaseClient()
+                .from('master_packing_lists')
+                .select('status');
+            if (error) { console.error('[PackingList Summary Query Error]', error); return; }
+            const rows = data || [];
+            const total = rows.length;
+            const pending = rows.filter((r: any) => r.status === 'DRAFT').length;
+            const printed = rows.filter((r: any) => r.status === 'PRINTED').length;
+            const dispatched = rows.filter((r: any) => r.status === 'DISPATCHED').length;
+            console.log('[PackingList Summary]', { total, pending, printed, dispatched });
+            setSummary({ total, pending, printed, dispatched });
+        } catch (err) {
+            console.error('[PackingList Summary Error]', err);
+        }
     }, []);
+
+    // Explicit refresh handler — shows toast on completion (matching InventoryGrid pattern)
+    const handleRefresh = useCallback(async () => {
+        setRefreshing(true);
+        try {
+            await Promise.all([
+                loadMpls(true),
+                loadSummary(),
+            ]);
+            showToast('info', 'Refreshed', 'Packing list data refreshed successfully.');
+        } catch { } finally {
+            setRefreshing(false);
+        }
+    }, [loadMpls, loadSummary, showToast]);
 
     useEffect(() => { loadMpls(); }, [loadMpls]);
     useEffect(() => { loadSummary(); }, [loadSummary]);
@@ -105,7 +163,7 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
             const { data: plItems } = await supabase.from('pack_packing_list_items').select('pallet_id').eq('packing_list_id', plId);
             const palletIds = (plItems || []).map((i: any) => i.pallet_id);
             if (palletIds.length > 0) {
-                const { data: pallets } = await supabase.from('pack_pallets').select('*, items!pack_pallets_item_id_fkey (item_name, master_serial_no, part_number)').in('id', palletIds);
+                const { data: pallets } = await supabase.from('pack_pallets').select('*, items!pack_pallets_item_id_fkey (item_name, master_serial_no, part_number, revision)').in('id', palletIds);
                 const { data: pcJoin } = await supabase.from('pack_pallet_containers').select(`pallet_id, position_sequence, pack_containers!inner (quantity, container_type, is_adjustment, packing_box_id, profiles!pack_containers_created_by_fkey (full_name), packing_boxes:packing_box_id (packing_id))`).in('pallet_id', palletIds).order('position_sequence');
                 const itemCodes = [...new Set((pallets || []).map((p: any) => p.item_code))];
                 const specMap: Record<string, PackingSpec> = {};
@@ -115,7 +173,7 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
                     const detail = details.find((d: any) => d.pallet_id === p.id);
                     return {
                         id: p.id, pallet_number: p.pallet_number, item_code: p.item_code,
-                        item_name: p.items?.item_name || p.item_code, part_number: p.items?.part_number || '', master_serial_no: p.items?.master_serial_no || '',
+                        item_name: p.items?.item_name || p.item_code, part_number: p.items?.part_number || '', master_serial_no: p.items?.master_serial_no || '', revision: p.items?.revision || '',
                         state: p.state, current_qty: p.current_qty, target_qty: p.target_qty, container_count: p.container_count,
                         spec: specMap[p.item_code] || null,
                         containers: pContainers.map((pc: any) => ({ packing_id: pc.pack_containers?.packing_boxes?.packing_id || '—', quantity: pc.pack_containers?.quantity || 0, container_type: pc.pack_containers?.container_type || '', is_adjustment: pc.pack_containers?.is_adjustment || false, operator: pc.pack_containers?.profiles?.full_name || '—' })),
@@ -143,41 +201,358 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
             // Update MPL with invoice/PO
             await supabase.from('master_packing_lists').update({ invoice_number: dispatchForm.invoice_number, po_number: dispatchForm.purchase_order_number, total_gross_weight_kg: enrichedPallets.reduce((s, p) => s + p.gross_weight_kg, 0), updated_at: new Date().toISOString() }).eq('id', wizardMpl.id);
             await confirmMpl(wizardMpl.id);
-            setSuccessMsg(`${wizardMpl.mpl_number} details saved & confirmed — Print is now enabled`);
+            showToast('success', 'Packing List Confirmed', `${wizardMpl.mpl_number} details saved & confirmed — Print is now enabled`);
             setWizardMpl(null); loadMpls(); loadSummary();
-            setTimeout(() => setSuccessMsg(null), 4000);
-        } catch (err: any) { setError(err.message); } finally { setSaving(false); }
+        } catch (err: any) { showToast('error', 'Save Failed', err.message); } finally { setSaving(false); }
     };
 
     // Print MPL
     const handlePrintMpl = async (mpl: MasterPackingList) => {
         try {
             const bt = await svc.getPackingListFullBacktrack(mpl.packing_list_id);
-            openMasterPLPrint(bt, mpl);
+            await openMasterPLPrint(bt, mpl);
             await markMplPrinted(mpl.id);
-            setSuccessMsg(`${mpl.mpl_number} printed`); loadMpls(); loadSummary();
-            setTimeout(() => setSuccessMsg(null), 3000);
-        } catch (err: any) { setError(err.message); }
+            showToast('success', 'Printed', `${mpl.mpl_number} has been printed`); loadMpls(); loadSummary();
+        } catch (err: any) { showToast('error', 'Print Failed', err.message); }
     };
 
-    const openMasterPLPrint = (bt: any, mpl: MasterPackingList) => {
-        const hd = bt.headerData; const details = bt.palletDetails;
+    const openMasterPLPrint = async (bt: any, mpl: MasterPackingList) => {
+        const hd = bt.headerData;
+        const details = bt.palletDetails;
         const ts = new Date().toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
-        const invDate = hd?.invoice_date ? new Date(hd.invoice_date + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+        const nowStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ', ' + new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
+        const invDate = hd?.invoice_date ? new Date(hd.invoice_date + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
+        const poDate = hd?.purchase_order_date ? new Date(hd.purchase_order_date + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
         const totalNet = details.reduce((s: number, d: any) => s + Number(d.net_weight_kg || 0), 0);
         const totalGross = details.reduce((s: number, d: any) => s + Number(d.gross_weight_kg || 0), 0);
         const totalQty = details.reduce((s: number, d: any) => s + (d.qty_per_pallet || 0), 0);
-        const w = window.open('', '_blank', 'width=900,height=700');
-        if (!w) { alert('Please allow popups'); return; }
-        w.document.write(`<html><head><title>MPL ${mpl.mpl_number}</title><style>body{font-family:Arial;margin:20px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:6px 8px;font-size:12px}th{background:#1e3a8a;color:white}@media print{button{display:none}}</style></head><body>`);
-        w.document.write(`<h2 style="text-align:center">MASTER PACKING LIST</h2><p style="text-align:center;font-size:18px;font-weight:bold">${mpl.mpl_number}</p>`);
-        w.document.write(`<table><tr><td><b>Invoice:</b> ${hd?.invoice_number || '—'}</td><td><b>Date:</b> ${invDate}</td><td><b>PO:</b> ${hd?.purchase_order_number || '—'}</td><td><b>Ship Via:</b> ${hd?.ship_via || '—'}</td></tr></table><br>`);
-        w.document.write(`<table><thead><tr><th>#</th><th>Pallet</th><th>Item</th><th>Qty</th><th>Boxes</th><th>Net Wt</th><th>Gross Wt</th></tr></thead><tbody>`);
-        details.forEach((d: any, i: number) => { w.document.write(`<tr><td>${i + 1}</td><td>${d.pallet_number || '—'}</td><td>${d.item_code || '—'}</td><td style="text-align:right">${(d.qty_per_pallet || 0).toLocaleString()}</td><td style="text-align:right">${d.containers_per_pallet || 0}</td><td style="text-align:right">${Number(d.net_weight_kg || 0).toFixed(2)}</td><td style="text-align:right">${Number(d.gross_weight_kg || 0).toFixed(2)}</td></tr>`); });
-        w.document.write(`<tr style="font-weight:bold;background:#f0f0f0"><td colspan="3">TOTAL</td><td style="text-align:right">${totalQty.toLocaleString()}</td><td></td><td style="text-align:right">${totalNet.toFixed(2)}</td><td style="text-align:right">${totalGross.toFixed(2)}</td></tr>`);
-        w.document.write(`</tbody></table><p style="font-size:10px;color:#666;margin-top:20px">Generated: ${ts}</p><button onclick="window.print()" style="margin-top:10px;padding:8px 16px">Print</button></body></html>`);
-        w.document.close();
+        const totalPkgs = details.length;
+
+        const D = {
+            expName: hd?.exporter_name || 'AUTOCRAT ENGINEERS',
+            expAddr: hd?.exporter_address || 'NO. 21 & 22, Export Promotion Industrial Park,\nPhase - I, Whitefield, Bangalore-560066,\nKARNATAKA - INDIA',
+            expPhone: hd?.exporter_phone || 'PH 91 80 43330127',
+            expEmail: hd?.exporter_email || 'dispatch@autocratengineers.in',
+            expGstin: hd?.exporter_gstin || '29ABLPK6831H1ZB',
+            expRef: hd?.exporter_ref || '-NIL-',
+            expIec: hd?.exporter_iec_code || '0702002747',
+            expAd: hd?.exporter_ad_code || '6361504-8400009',
+            vendorNo: hd?.vendor_number || '',
+            conName: hd?.consignee_name || 'Milano Millworks, LLC',
+            conAddr: hd?.consignee_address || '9223 Industrial Blvd NE Leland\nNC 28451 USA',
+            conPhone: hd?.consignee_phone || '(910) 443-3075',
+            buyName: hd?.buyer_name || 'Brown, Sherry',
+            buyPhone: hd?.buyer_phone || '919-209-2411',
+            buyEmail: hd?.buyer_email || 'sherry.brown@opwglobal.com',
+            billName: hd?.bill_to_name || 'OPW Fueling Components, LLC',
+            billAddr: hd?.bill_to_address || '3250 US Highway 70 Business West\nSmithfield, NC 27577\nUnited States',
+            preCarr: hd?.pre_carriage_by || 'Road',
+            receipt: hd?.place_of_receipt || 'BANGALORE',
+            origin: hd?.country_of_origin || 'INDIA',
+            dest: hd?.country_of_destination || 'UNITED STATES',
+            portLoad: hd?.port_of_loading || 'BANGALORE, ICD',
+            delivery: hd?.terms_of_delivery || 'DDP',
+            payment: hd?.payment_terms || 'Net-30',
+            portDisc: hd?.port_of_discharge || 'CHARLESTON',
+            finalDest: hd?.final_destination || 'UNITED STATES',
+            transport: hd?.mode_of_transport || 'OCEAN',
+            itemHdr: hd?.item_description_header || 'PRECISION MACHINED COMPONENTS',
+            itemSub: hd?.item_description_sub_header || '(OTHERS FUELING COMPONENTS)',
+        };
+
+        const itemRows = details.map((d: any) => {
+            const dim = d.pallet_length_cm && d.pallet_width_cm && d.pallet_height_cm
+                ? `${d.pallet_length_cm} X ${d.pallet_width_cm} X ${d.pallet_height_cm}` : '\u2014';
+            return `<tr>
+<td class="br c4">${d.pallet_number || ''}</td>
+<td class="br c4"><b>${d.master_serial_no || ''}</b><br/>${d.part_number || ''}<br/>${d.item_name || d.item_code || ''}${d.hts_code ? '<br/><span class="sm">HTS CODE: ' + d.hts_code + '</span>' : ''}</td>
+<td class="br c4 ctr">${d.num_pallets || 1}</td>
+<td class="br c4 ctr">${dim}</td>
+<td class="br c4 ctr">${d.part_revision || '\u2014'}</td>
+<td class="br c4 rgt mono">${(d.qty_per_pallet || 0).toLocaleString()}<br/><span class="sm">Nos</span></td>
+<td class="br c4 rgt mono">${Number(d.net_weight_kg || 0).toFixed(2)}</td>
+<td class="c4 rgt mono"><b>${Number(d.gross_weight_kg || 0).toFixed(2)}</b></td></tr>`;
+        }).join('');
+
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>PL-${mpl.mpl_number}</title>
+<style>
+@page{size:A4 portrait;margin:6mm}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{font-family:Calibri,'Segoe UI',Verdana,Geneva,sans-serif;color:#000;font-size:11px;line-height:1.25;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;height:100%}
+b{font-weight:700}
+table{border-collapse:collapse;width:100%}
+td,th{vertical-align:top}
+.outer{border:1.5px solid #000;display:flex;flex-direction:column;min-height:calc(100vh - 12mm)}
+.grow{flex:1}
+.bb{border-bottom:1px solid #000}
+.br{border-right:1px solid #000}
+.bt{border-top:1px solid #000}
+.c4{padding:3px 5px}
+.ctr{text-align:center}
+.rgt{text-align:right}
+.sm{font-size:7.5px;color:#555}
+.lbl{font-size:8px;font-weight:700}
+.mono{font-family:'Courier New',monospace}
+.wm{position:fixed;top:46%;left:50%;transform:translate(-50%,-50%) rotate(-35deg);font-size:56px;font-weight:900;color:rgba(0,0,0,.035);letter-spacing:10px;text-transform:uppercase;pointer-events:none;z-index:0;white-space:nowrap}
+@media print{.no-print{display:none!important}@page{size:A4 portrait;margin:6mm}}
+</style></head><body>
+<div class="wm">AUTOCRAT ENGINEERS</div>
+
+<table><tr>
+<td class="c4" style="font-size:9px">${nowStr}</td>
+<td class="c4 ctr" style="font-size:9px">PL-${mpl.mpl_number}</td>
+<td class="c4 rgt" style="font-size:9px"></td>
+</tr></table>
+
+<div class="outer">
+
+<table><tr style="position:relative"><td class="bb c4" style="padding:6px 8px;width:30%"><img src="/logo.png" alt="AUTOCRAT ENGINEERS" style="height:34px;object-fit:contain" onerror="this.outerHTML='<span style=font-size:11px;font-weight:800>AUTOCRAT<br>ENGINEERS</span>'" /></td><td class="bb c4" style="padding:8px;width:70%"><div style="position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;pointer-events:none"><span style="font-size:20px;font-weight:800;letter-spacing:5px;text-transform:uppercase;font-style:italic">PACKING LIST</span></div></td></tr></table>
+
+<table>
+<colgroup><col style="width:40%"/><col style="width:20%"/><col style="width:40%"/></colgroup>
+<tr>
+<td class="bb br c4" rowspan="5" style="vertical-align:top">
+<div style="padding:2px 5px;font-size:10px;font-weight:700">Exporter</div>
+<div style="padding:4px 5px;line-height:1.5;font-size:11px">
+<div style="font-size:12px;font-weight:800">${D.expName}</div>
+<div style="font-size:10px">${D.expAddr.replace(/\n/g, '<br/>')}</div>
+<div style="font-size:10px">${D.expPhone}</div>
+<div style="font-size:10px">E mail : ${D.expEmail}</div>
+<div style="font-size:10px">GSTIN : ${D.expGstin}</div>
+</div>
+</td>
+<td class="bb br c4 lbl">Invoice No. & Date</td>
+<td class="bb c4 mono" style="font-weight:700">${hd?.invoice_number || ''} ${invDate ? 'DT.' + invDate : ''}</td>
+</tr>
+<tr><td class="bb br c4 lbl">Purchase Order No. & Date :</td><td class="bb c4 mono" style="font-weight:700">${hd?.purchase_order_number || ''} ${poDate ? 'DT.' + poDate : ''}</td></tr>
+<tr><td class="bb br c4 lbl">Vendor No :</td><td class="bb c4" style="font-size:13px;font-weight:800">${D.vendorNo}</td></tr>
+<tr><td class="bb br c4 lbl">Ship Via :</td><td class="bb c4" style="font-weight:700">${hd?.ship_via || ''}</td></tr>
+<tr><td class="bb br c4 lbl">Others Reference(s) :</td><td class="bb c4"></td></tr>
+</table>
+
+<table>
+<colgroup><col style="width:40%"/><col style="width:20%"/><col style="width:40%"/></colgroup>
+<tr>
+<td class="bb br c4" rowspan="4" style="vertical-align:top">
+<div style="padding:2px 5px;font-size:8px;font-weight:700">Consignee</div>
+<div style="padding:4px 5px;line-height:1.5;font-size:9px">
+<div style="font-weight:700">${D.conName}</div>
+<div style="font-size:8px">${D.conAddr.replace(/\n/g, '<br/>')}</div>
+<div style="font-size:8px">Telephone: ${D.conPhone}</div>
+</div>
+</td>
+<td class="bb br c4 lbl">Buyer</td><td class="bb c4">: ${D.buyName}</td>
+</tr>
+<tr><td class="bb br c4 lbl">Phone No</td><td class="bb c4">${D.buyPhone}</td></tr>
+<tr><td class="bb br c4 lbl">E-Mail ID</td><td class="bb c4">${D.buyEmail}</td></tr>
+<tr><td class="bb br c4 lbl" style="vertical-align:top">Bill To :</td><td class="bb c4" style="font-size:8px;line-height:1.5">${D.billName}<br/>${D.billAddr.replace(/\n/g, '<br/>')}</td></tr>
+</table>
+
+<table>
+<colgroup><col style="width:25%"/><col style="width:25%"/><col style="width:25%"/><col style="width:25%"/></colgroup>
+<tr>
+<td class="bb br c4 lbl">Port of Loading<br/><span style="font-weight:700">${D.portLoad}</span></td>
+<td class="bb br c4 lbl">Terms of Delivery & Payment<br/><span style="font-weight:400">${D.delivery}</span></td>
+<td class="bb br c4" style="font-size:8px">${D.payment}<br/>Days from the date of Invoice</td>
+<td class="bb c4 lbl">AD Code No:<br/><span class="mono" style="font-weight:400">${D.expAd}</span></td>
+</tr>
+<tr>
+<td class="bb br c4 lbl">Port of Discharge<br/><span style="font-weight:700">${D.portDisc}</span></td>
+<td class="bb br c4 lbl">Final Destination<br/><span style="font-weight:700">${D.finalDest}</span></td>
+<td class="bb br c4 lbl">Mode of Transport<br/><span style="font-weight:400">${D.transport}</span></td>
+<td class="bb c4 lbl">IEC Code No :<br/><span class="mono" style="font-weight:400">${D.expIec}</span></td>
+</tr>
+</table>
+
+<table><tr><td class="bb c4 ctr" style="padding:5px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:1px">${D.itemHdr}<br/><span style="font-weight:700;font-size:9px">${D.itemSub}</span></td></tr></table>
+
+<table>
+<colgroup><col style="width:16%"/><col style="width:22%"/><col style="width:6%"/><col style="width:12%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
+<tr style="background:#f5f5f5">
+<th class="bb br c4 lbl" style="text-align:left">PW/Pallet No. & Batch No.</th>
+<th class="bb br c4 lbl" style="text-align:left">Part No. & Description with P.O No.</th>
+<th class="bb br c4 lbl ctr">No. of Pallet</th>
+<th class="bb br c4 lbl ctr">Pallet Size in CMs.</th>
+<th class="bb br c4 lbl ctr">Part Rev</th>
+<th class="bb br c4 lbl rgt">Qty Per Pallet</th>
+<th class="bb br c4 lbl rgt">Net Wt in KGs</th>
+<th class="bb c4 lbl rgt">Gross Wt in KGs</th>
+</tr>
+${itemRows}
+</table>
+<table style="flex:1">
+<colgroup><col style="width:16%"/><col style="width:22%"/><col style="width:6%"/><col style="width:12%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
+<tr><td class="br" style="height:100%"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td></td></tr>
+</table>
+
+<table>
+<colgroup><col style="width:16%"/><col style="width:22%"/><col style="width:6%"/><col style="width:12%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
+<tr style="background:#f5f5f5">
+<td class="bt br c4" colspan="2"></td>
+<td class="bt br c4 ctr lbl">Total<br/>Total<br/>Gross</td>
+<td class="bt br c4 ctr mono" style="font-weight:800">${String(totalPkgs).padStart(2, '0')}</td>
+<td class="bt br c4"></td>
+<td class="bt br c4 rgt mono" style="font-weight:800">${totalQty.toLocaleString()}</td>
+<td class="bt br c4 rgt mono" style="font-weight:800">${totalNet.toFixed(2)}<br/><span class="sm">Kgs</span></td>
+<td class="bt c4 rgt mono" style="font-weight:800">${totalGross.toFixed(2)}<br/><span class="sm">Kgs</span></td>
+</tr>
+</table>
+
+<table style="border-top:1.5px solid #000">
+<colgroup><col style="width:50%"/><col style="width:50%"/></colgroup>
+<tr>
+<td class="bb c4" style="font-size:9px;font-weight:700;padding:4px 5px;vertical-align:top">ITC HS CODE: <span class="mono">84139190</span></td>
+<td class="bb c4 rgt" style="vertical-align:top;padding:4px 5px">
+<div style="font-size:9px;font-weight:700">for AUTOCRAT ENGINEERS</div>
+<div style="margin-top:20px;font-size:8px;font-style:italic">Authorised Signatory</div>
+</td>
+</tr>
+<tr>
+<td class="c4 ctr" colspan="2" style="padding:6px 5px">
+<div style="font-size:8px;text-align:center;color:#c00;font-weight:700;margin-top:2px">The Supply is under EPCG License No: 0731011353 Date 24/05/2024</div>
+<div style="font-size:8px;text-align:center;font-weight:700;margin-top:3px">SUPPLYMEANT FOR EXPORT UNDER LETTER OF UNDERTAKING WITHOUT PAYMENT OF INTEGRATED TAX(IGST) LUT</div>
+<div style="font-size:8px;text-align:center;margin-top:2px">No.AD2903251644306 Dated 29/03/2025</div>
+</td>
+</tr>
+</table>
+
+</div>
+
+<table style="margin-top:3px"><tr>
+<td class="c4" style="font-size:8px;color:#666;width:33%">MPL#: ${mpl.mpl_number}</td>
+<td class="c4 ctr" style="font-size:8px;color:#666;width:34%">Printed: ${ts}</td>
+<td class="c4 rgt" style="font-size:8px;color:#666;width:33%">System-generated packing list \u2014 dispatch audit record</td>
+</tr></table>
+
+<script>window.onload=function(){window.print();}<\/script></body></html>`;
+
+        // ── Generate barcodes for each pallet ──
+        const containerTrace = bt.containerTrace || [];
+        const barcodeMap: Record<string, string> = {};
+        for (const d of details) {
+            const palletId = d.pallet_id || d.id || '';
+            // Short barcode: MPL number | item code | qty
+            const barcodeData = `${mpl.mpl_number}|${d.item_code || ''}|${d.qty_per_pallet || 0}`;
+            try {
+                const canvas = document.createElement('canvas');
+                JsBarcode(canvas, barcodeData, {
+                    format: 'CODE128',
+                    width: 2,
+                    height: 80,
+                    displayValue: true,
+                    fontSize: 14,
+                    font: 'Calibri',
+                    margin: 8,
+                    background: '#ffffff',
+                    lineColor: '#000000',
+                });
+                barcodeMap[palletId] = canvas.toDataURL('image/png');
+            } catch { barcodeMap[palletId] = ''; }
+        }
+
+        // ── Build pallet slip pages ──
+        const palletSlips = details.map((d: any, idx: number) => {
+            const palletId = d.pallet_id || d.id || '';
+            const barcodeImg = barcodeMap[palletId] || '';
+            const dim = d.pallet_length_cm && d.pallet_width_cm && d.pallet_height_cm
+                ? `${d.pallet_length_cm} X ${d.pallet_width_cm} X ${d.pallet_height_cm}` : '';
+            const palletNum = d.pallet_number || '';
+            return `
+<div style="page-break-before:always;padding:28px 32px;font-family:Calibri,'Segoe UI',Arial,sans-serif;font-size:12px;color:#000;min-height:calc(100vh - 12mm);display:flex;flex-direction:column;box-sizing:border-box">
+
+<div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:16px;position:relative">
+<img src="/logo.png" alt="AE" style="height:40px" onerror="this.style.display='none'" />
+<div style="position:absolute;left:0;right:0;text-align:center;pointer-events:none">
+<span style="font-size:24px;font-weight:900;letter-spacing:3px;color:#000">PALLET SLIP</span>
+</div>
+<div style="font-weight:700;font-size:12px;color:#555;text-transform:uppercase">WWW.AUTOCRATENGINEERS.IN</div>
+</div>
+
+<div style="display:flex;padding:12px 0;border-top:1px solid #ddd;border-bottom:1px solid #ddd;margin-bottom:16px">
+<div style="flex:1;padding-right:24px">
+<div style="font-weight:800;font-size:10px;text-transform:uppercase;color:#888;margin-bottom:4px">FROM</div>
+<div style="font-weight:800;font-size:12px">${D.expName}</div>
+<div style="font-size:11px;line-height:1.5;color:#333">${D.expAddr.replace(/\\n/g, '<br/>')}</div>
+<div style="font-size:11px;color:#333">${D.expPhone}</div>
+</div>
+<div style="flex:1;padding-left:24px">
+<div style="font-weight:800;font-size:10px;text-transform:uppercase;color:#888;margin-bottom:4px">TO</div>
+<div style="font-weight:800;font-size:12px">${D.billName}</div>
+<div style="font-size:11px;line-height:1.5;color:#333">${D.conName}<br/>${D.conAddr.replace(/\\n/g, '<br/>')}</div>
+<div style="font-size:11px;color:#333">${D.conPhone}</div>
+</div>
+</div>
+
+<div style="text-align:center;padding:14px 0 10px;border-bottom:1px solid #ddd;margin-bottom:16px">
+<div style="font-size:22px;font-weight:900;letter-spacing:0.5px">${d.part_number || ''} ${d.part_revision ? '(Rev-' + d.part_revision + ')' : ''}</div>
+<div style="font-size:13px;color:#555;margin-top:4px">${d.item_name || d.item_code || ''}</div>
+</div>
+
+<div style="background:#f2f2f2;border:1px solid #ddd;padding:18px 20px;margin-bottom:16px">
+<div style="display:flex;margin-bottom:16px">
+<div style="flex:1;padding-right:16px">
+<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">INVOICE & DATE</div>
+<div style="font-size:16px;font-weight:900;margin-top:2px">${hd?.invoice_number || ''} <span style="font-weight:500;color:#555;font-size:12px">${invDate || ''}</span></div>
+</div>
+<div style="flex:1;padding-left:16px">
+<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">PO & DATE</div>
+<div style="font-size:16px;font-weight:900;margin-top:2px">${hd?.purchase_order_number || ''} <span style="font-weight:500;color:#555;font-size:12px">${poDate || ''}</span></div>
+</div>
+</div>
+<div style="display:flex;margin-bottom:16px">
+<div style="flex:1;padding-right:16px">
+<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">MASTER SERIAL NO</div>
+<div style="font-size:16px;font-weight:800;margin-top:2px">${d.master_serial_no || ''}</div>
+</div>
+<div style="flex:1;padding-left:16px">
+<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">COUNT</div>
+<div style="font-size:28px;font-weight:900;margin-top:2px">${(d.qty_per_pallet || 0).toLocaleString()}</div>
+</div>
+</div>
+<div style="display:flex;margin-bottom:14px">
+<div style="flex:1;padding-right:16px">
+<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">NET WEIGHT</div>
+<div style="font-size:16px;font-weight:800;margin-top:2px">${Number(d.net_weight_kg || 0).toFixed(2)} Kgs</div>
+</div>
+<div style="flex:1;padding-left:16px">
+<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">GROSS WEIGHT</div>
+<div style="font-size:16px;font-weight:800;margin-top:2px">${Number(d.gross_weight_kg || 0).toFixed(2)} Kgs</div>
+</div>
+</div>
+<div style="display:flex;padding-top:12px;border-top:1px solid #ddd">
+<div style="flex:1">
+<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">ORIGIN</div>
+<div style="font-size:13px;font-weight:800;margin-top:2px">${D.origin}</div>
+</div>
+<div style="flex:1">
+<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">HTS CODE</div>
+<div style="font-size:13px;font-weight:800;margin-top:2px">${d.hts_code || '84139190'}</div>
+</div>
+<div style="flex:1">
+<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">LOGISTICS</div>
+<div style="font-size:13px;font-weight:800;margin-top:2px">${hd?.ship_via || 'SEAHORSE BY OCEAN'}</div>
+</div>
+</div>
+</div>
+
+<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 0">
+${barcodeImg ? '<img src="' + barcodeImg + '" style="width:100%;max-width:480px;height:auto" />' : ''}
+</div>
+
+<div style="text-align:center;font-size:9px;color:#aaa;padding-top:4px;border-top:1px solid #eee">${palletNum} &middot; Slip ${idx + 1} of ${details.length}</div>
+
+</div>`;
+        }).join('');
+
+        // ── Combine: Packing List + Pallet Slips ──
+        const fullHtml = html.replace('</body></html>', palletSlips + '<script>window.onload=function(){window.print();}<\\/script></body></html>');
+        // Remove the first script tag (already in packing list html)
+        const cleanHtml = fullHtml.replace(/<script>window\.onload=function\(\)\{window\.print\(\);\}<\\\/script>/, '');
+
+        const w = window.open('', '_blank', 'width=900,height=1100');
+        if (w) { w.document.write(cleanHtml); w.document.close(); }
     };
+
 
     // View Detail
     const handleViewDetail = async (mpl: MasterPackingList) => {
@@ -190,7 +565,9 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
 
     const handleCancelConfirm = async () => {
         if (!cancelTarget) return;
-        try { setCancelling(true); await cancelMpl(cancelTarget.id, cancelReason || undefined); setCancelTarget(null); setCancelReason(''); setSuccessMsg(`${cancelTarget.mpl_number} cancelled`); loadMpls(); loadSummary(); setTimeout(() => setSuccessMsg(null), 4000); } catch (err: any) { setError(err.message); } finally { setCancelling(false); }
+        if (cancelConfirmInput.trim() !== cancelTarget.mpl_number) return;
+        if (!cancelReason.trim()) return;
+        try { setCancelling(true); await cancelMpl(cancelTarget.id, cancelReason || undefined); setCancelTarget(null); setCancelReason(''); setCancelConfirmInput(''); showToast('success', 'Packing List Cancelled', `${cancelTarget.mpl_number} has been cancelled successfully`); loadMpls(); loadSummary(); } catch (err: any) { showToast('error', 'Cancel Failed', err.message); } finally { setCancelling(false); }
     };
 
     const isMplReady = (mpl: MasterPackingList) => !!(mpl.invoice_number && mpl.po_number);
@@ -199,101 +576,309 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
     const StatusBadge = ({ status }: { status: string }) => {
         const s: Record<string, { bg: string; color: string; label: string }> = { DRAFT: { bg: '#fef3c7', color: '#92400e', label: 'PENDING' }, CONFIRMED: { bg: '#dbeafe', color: '#1d4ed8', label: 'CONFIRMED' }, PRINTED: { bg: '#d1fae5', color: '#059669', label: 'PRINTED' }, DISPATCHED: { bg: '#ede9fe', color: '#7c3aed', label: 'DISPATCHED' }, CANCELLED: { bg: '#fee2e2', color: '#dc2626', label: 'CANCELLED' } };
         const st = s[status] || s.DRAFT;
-        return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, backgroundColor: st.bg, color: st.color }}>{st.label}</span>;
+        return <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4, padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, backgroundColor: st.bg, color: st.color, minWidth: 90, textAlign: 'center', whiteSpace: 'nowrap', letterSpacing: '0.3px' }}>{st.label}</span>;
     };
 
-    const thS: React.CSSProperties = { padding: '10px 12px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#374151', textTransform: 'uppercase', borderBottom: '2px solid #e5e7eb', whiteSpace: 'nowrap' };
-    const tdS: React.CSSProperties = { padding: '8px 12px', fontSize: 13, borderBottom: '1px solid #f3f4f6' };
+    const thS: React.CSSProperties = { padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 600, color: 'var(--enterprise-gray-700)', textTransform: 'uppercase', letterSpacing: '0.5px', whiteSpace: 'nowrap' };
+    const tdS: React.CSSProperties = { padding: '12px 16px', fontSize: 13, color: 'var(--enterprise-gray-800)' };
     const inp: React.CSSProperties = { width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13, outline: 'none' };
     const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 };
+
+    // Expanded pallets in wizard review (collapsible like pallet dashboard)
+    const [expandedWizardPallets, setExpandedWizardPallets] = useState<Set<string>>(new Set());
+    const toggleWizardPallet = (id: string) => setExpandedWizardPallets(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
 
     // ═══════════════════════════════════════════════════════════════
     // RENDER — INLINE WIZARD (takes over when wizardMpl is set)
     // ═══════════════════════════════════════════════════════════════
     if (wizardMpl) {
-        return (
-            <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-                    <button onClick={() => setWizardMpl(null)} style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}><ChevronLeft size={16} /> Back to Dashboard</button>
-                    <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: '#1e3a8a' }}>{wizardMpl.mpl_number}</h2>
-                    <StatusBadge status={wizardMpl.status} />
-                </div>
-                {error && <div style={{ padding: '12px 16px', marginBottom: 16, borderRadius: 8, backgroundColor: '#fee2e2', color: '#dc2626', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><AlertCircle size={16} />{error}<button onClick={() => setError(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }}><XCircle size={16} /></button></div>}
+        const steps: { key: WizardStep; label: string }[] = [
+            { key: 'REVIEW', label: 'Review Pallets' },
+            { key: 'WEIGHTS', label: 'Gross Weights' },
+            { key: 'DISPATCH', label: 'Invoice & PO' },
+        ];
+        const currentStepIdx = steps.findIndex(s => s.key === wizardStep);
 
-                {/* Step tabs */}
-                <div style={{ display: 'flex', gap: 4, backgroundColor: '#f3f4f6', borderRadius: 8, padding: 3, marginBottom: 20, width: 'fit-content' }}>
-                    {([['REVIEW', 'Review Pallets'], ['WEIGHTS', 'Gross Weights'], ['DISPATCH', 'Invoice & PO']] as [WizardStep, string][]).map(([key, label]) => (
-                        <button key={key} onClick={() => setWizardStep(key)} style={{ padding: '8px 20px', borderRadius: 6, border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer', backgroundColor: wizardStep === key ? '#fff' : 'transparent', color: wizardStep === key ? '#1e3a8a' : '#6b7280', boxShadow: wizardStep === key ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}>{label}</button>
+        return (
+            <div style={{ padding: '24px 28px', maxWidth: 1200, margin: '0 auto' }}>
+                {/* Header */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 28 }}>
+                    <button onClick={() => setWizardMpl(null)} style={{ padding: '8px 16px', borderRadius: 10, border: '1px solid #e5e7eb', background: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, color: '#374151', transition: 'all 0.15s ease', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = '#fff'}><ChevronLeft size={16} /> Back to Packing List</button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#1e3a8a', fontFamily: 'monospace' }}>{wizardMpl.mpl_number}</h2>
+                        <StatusBadge status={wizardMpl.status} />
+                    </div>
+                </div>
+
+                {error && <div style={{ padding: '12px 16px', marginBottom: 16, borderRadius: 10, backgroundColor: '#fee2e2', color: '#dc2626', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, border: '1px solid #fecaca' }}><AlertCircle size={16} />{error}<button onClick={() => setError(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }}><X size={16} /></button></div>}
+
+                {/* Step Progress Bar */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 0, marginBottom: 28, background: '#f8fafc', borderRadius: 14, padding: '12px 20px', border: '1px solid #e5e7eb' }}>
+                    {steps.map((step, idx) => (
+                        <React.Fragment key={step.key}>
+                            <button onClick={() => setWizardStep(step.key)} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderRadius: 10, border: 'none', cursor: 'pointer', background: idx === currentStepIdx ? 'linear-gradient(135deg, var(--enterprise-primary), #2563eb)' : idx < currentStepIdx ? '#e0f2fe' : 'transparent', color: idx === currentStepIdx ? '#fff' : idx < currentStepIdx ? '#1e3a8a' : '#9ca3af', fontWeight: 600, fontSize: 13, transition: 'all 0.2s ease', whiteSpace: 'nowrap' }}>
+                                <span style={{ width: 22, height: 22, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 800, flexShrink: 0, background: idx === currentStepIdx ? 'rgba(255,255,255,0.25)' : idx < currentStepIdx ? '#1e3a8a' : '#d1d5db', color: idx === currentStepIdx ? '#fff' : idx < currentStepIdx ? '#fff' : '#6b7280' }}>{idx < currentStepIdx ? '✓' : idx + 1}</span>
+                                {step.label}
+                            </button>
+                            {idx < steps.length - 1 && <div style={{ flex: 1, height: 2, background: idx < currentStepIdx ? '#1e3a8a' : '#d1d5db', margin: '0 8px', borderRadius: 1, minWidth: 20 }} />}
+                        </React.Fragment>
                     ))}
                 </div>
 
-                {wizardLoading ? <div style={{ padding: 48, textAlign: 'center', color: '#9ca3af' }}><Loader2 size={24} style={{ animation: 'spin 1s linear infinite' }} /> Loading...</div> : <>
-                    {/* REVIEW */}
-                    {wizardStep === 'REVIEW' && (
-                        <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', padding: 20 }}>
-                            <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 12, color: '#111827' }}>Pallet & Packing Box Breakdown</h3>
-                            {enrichedPallets.map(p => (
-                                <div key={p.id} style={{ marginBottom: 12, border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 14px', background: '#f0f9ff', borderBottom: '1px solid #e5e7eb' }}>
-                                        <div><span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1e3a8a', fontSize: 13 }}>{p.pallet_number}</span><span style={{ fontSize: 11, color: '#6b7280', marginLeft: 8 }}>{p.current_qty.toLocaleString()} PCS · {p.container_count} boxes</span></div>
-                                        <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 10, fontWeight: 700, background: p.state === 'READY' ? '#f0fdf4' : '#fffbeb', color: p.state === 'READY' ? '#16a34a' : '#d97706' }}>{p.state}</span>
-                                    </div>
-                                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                                        <thead><tr><th style={{ ...thS, width: 40 }}>#</th><th style={thS}>Packing Box ID</th><th style={thS}>Type</th><th style={{ ...thS, textAlign: 'right' }}>Qty</th><th style={thS}>Adj?</th><th style={thS}>Packed By</th></tr></thead>
-                                        <tbody>{p.containers.map((c, i) => (
-                                            <tr key={i}><td style={{ ...tdS, textAlign: 'center' }}>{i + 1}</td><td style={{ ...tdS, fontFamily: 'monospace', fontWeight: 700, color: '#7c3aed' }}>{c.packing_id}</td><td style={tdS}>{c.container_type}</td><td style={{ ...tdS, textAlign: 'right', fontFamily: 'monospace', fontWeight: 600 }}>{c.quantity.toLocaleString()}</td><td style={tdS}>{c.is_adjustment ? <span style={{ color: '#d97706', fontWeight: 600 }}>ADJ</span> : ''}</td><td style={tdS}>{c.operator}</td></tr>
-                                        ))}</tbody>
-                                    </table>
+                {wizardLoading ? <div style={{ padding: 64, textAlign: 'center', display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 14, background: '#fff', borderRadius: 16, border: '1px solid #e5e7eb' }}><Loader2 size={32} style={{ animation: 'spin 1s linear infinite', color: '#1e3a8a' }} /><p style={{ fontWeight: 700, fontSize: 15, margin: 0, color: '#1e3a8a' }}>Loading pallet data...</p><p style={{ fontSize: 13, margin: 0, color: '#9ca3af' }}>Fetching pallets, containers, and weights</p></div> : <>
+                    {/* ═══════ STEP 1: REVIEW PALLETS ═══════ */}
+                    {wizardStep === 'REVIEW' && (() => {
+                        const refPallet = enrichedPallets[0];
+                        const allContainers = enrichedPallets.flatMap(p => p.containers);
+                        const totalStdBoxes = allContainers.filter(c => !c.is_adjustment).length;
+                        const totalAdjBoxes = allContainers.filter(c => c.is_adjustment).length;
+                        const totalAdjQty = allContainers.filter(c => c.is_adjustment).reduce((s, c) => s + c.quantity, 0);
+                        const totalBoxes = allContainers.length;
+                        const detailLabelStyle: React.CSSProperties = { fontSize: 10, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: 3 };
+                        const detailValueStyle: React.CSSProperties = { fontSize: 13, fontWeight: 600, color: '#111827', fontFamily: 'monospace' };
+                        return (<div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                            {/* ── SECTION 1: Item Details ── */}
+                            <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #e5e7eb', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+                                <div style={{ padding: '14px 24px', borderBottom: '1px solid #e5e7eb', background: '#f8fafc', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <Info size={16} style={{ color: '#1e3a8a' }} />
+                                    <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: '#111827' }}>Item Details</h3>
                                 </div>
-                            ))}
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}><button onClick={() => setWizardStep('WEIGHTS')} style={{ padding: '10px 24px', borderRadius: 8, background: '#1e3a8a', color: 'white', border: 'none', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>Next: Gross Weights <ChevronRight size={16} /></button></div>
-                        </div>
-                    )}
+                                {refPallet && (
+                                    <div style={{ padding: '16px 24px' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 16 }}>
+                                            <div><div style={detailLabelStyle}>MSN</div><div style={detailValueStyle}>{refPallet.master_serial_no || '—'}</div></div>
+                                            <div><div style={detailLabelStyle}>Part Number</div><div style={detailValueStyle}>{refPallet.part_number || '—'}</div></div>
+                                            <div><div style={detailLabelStyle}>Item Code</div><div style={detailValueStyle}>{refPallet.item_code}</div></div>
+                                            <div><div style={detailLabelStyle}>Revision</div><div style={detailValueStyle}>{refPallet.revision || '—'}</div></div>
+                                            <div><div style={detailLabelStyle}>Description</div><div style={{ ...detailValueStyle, fontFamily: 'inherit', fontSize: 12 }}>{refPallet.item_name || '—'}</div></div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
 
-                    {/* WEIGHTS */}
+                            {/* ── SECTION 2: Packing Details ── */}
+                            <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #e5e7eb', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+                                <div style={{ padding: '14px 24px', borderBottom: '1px solid #e5e7eb', background: '#f8fafc', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <Package size={16} style={{ color: '#7c3aed' }} />
+                                    <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: '#111827' }}>Packing Details</h3>
+                                </div>
+                                {refPallet && (
+                                    <div style={{ padding: '16px 24px' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+                                            {/* Inner Box */}
+                                            <div style={{ padding: '12px 14px', borderRadius: 12, background: '#f5f3ff', border: '1px solid #ede9fe' }}>
+                                                <div style={{ fontSize: 10, fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', marginBottom: 4 }}>Inner Box Size</div>
+                                                <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#111827' }}>{refPallet.spec ? `${refPallet.spec.inner_box_length_mm}×${refPallet.spec.inner_box_width_mm}×${refPallet.spec.inner_box_height_mm}` : '—'}</div>
+                                                <div style={{ fontSize: 10, color: '#6b7280', marginTop: 2 }}>mm (L×W×H)</div>
+                                            </div>
+                                            <div style={{ padding: '12px 14px', borderRadius: 12, background: '#f5f3ff', border: '1px solid #ede9fe' }}>
+                                                <div style={{ fontSize: 10, fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', marginBottom: 4 }}>Inner Box Qty</div>
+                                                <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color: '#7c3aed' }}>{refPallet.spec?.inner_box_quantity ?? '—'}</div>
+                                                <div style={{ fontSize: 10, color: '#6b7280', marginTop: 2 }}>PCS per box</div>
+                                            </div>
+                                            {/* Outer Box */}
+                                            <div style={{ padding: '12px 14px', borderRadius: 12, background: '#eff6ff', border: '1px solid #dbeafe' }}>
+                                                <div style={{ fontSize: 10, fontWeight: 700, color: '#1e3a8a', textTransform: 'uppercase', marginBottom: 4 }}>Outer Box Size</div>
+                                                <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#111827' }}>{refPallet.spec ? `${refPallet.spec.outer_box_length_mm}×${refPallet.spec.outer_box_width_mm}×${refPallet.spec.outer_box_height_mm}` : '—'}</div>
+                                                <div style={{ fontSize: 10, color: '#6b7280', marginTop: 2 }}>mm (L×W×H)</div>
+                                            </div>
+                                            <div style={{ padding: '12px 14px', borderRadius: 12, background: '#eff6ff', border: '1px solid #dbeafe' }}>
+                                                <div style={{ fontSize: 10, fontWeight: 700, color: '#1e3a8a', textTransform: 'uppercase', marginBottom: 4 }}>Outer Box Qty</div>
+                                                <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color: '#1e3a8a' }}>{refPallet.spec?.outer_box_quantity ?? '—'}</div>
+                                                <div style={{ fontSize: 10, color: '#6b7280', marginTop: 2 }}>inner boxes per outer</div>
+                                            </div>
+                                            {/* Top-off / Adjustment */}
+                                            {totalAdjBoxes > 0 && (
+                                                <div style={{ padding: '12px 14px', borderRadius: 12, background: '#fffbeb', border: '1px solid #fef3c7' }}>
+                                                    <div style={{ fontSize: 10, fontWeight: 700, color: '#d97706', textTransform: 'uppercase', marginBottom: 4 }}>Top-off Boxes</div>
+                                                    <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color: '#d97706' }}>{totalAdjBoxes} <span style={{ fontSize: 11, fontWeight: 400, color: '#92400e' }}>box{totalAdjBoxes !== 1 ? 'es' : ''}</span></div>
+                                                    <div style={{ fontSize: 10, color: '#6b7280', marginTop: 2 }}>{totalAdjQty.toLocaleString()} PCS total</div>
+                                                </div>
+                                            )}
+                                            {/* Actual Box Count */}
+                                            <div style={{ padding: '12px 14px', borderRadius: 12, background: '#f0fdf4', border: '1px solid #dcfce7' }}>
+                                                <div style={{ fontSize: 10, fontWeight: 700, color: '#16a34a', textTransform: 'uppercase', marginBottom: 4 }}>Actual Box Count</div>
+                                                <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color: '#16a34a' }}>{totalBoxes}</div>
+                                                <div style={{ fontSize: 10, color: '#6b7280', marginTop: 2 }}>{totalStdBoxes} std{totalAdjBoxes > 0 ? ` + ${totalAdjBoxes} adj` : ''}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* ── SECTION 3: Pallets ── */}
+                            <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #e5e7eb', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+                                <div style={{ padding: '14px 24px', borderBottom: '1px solid #e5e7eb', background: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <Box size={16} style={{ color: '#1e3a8a' }} />
+                                        <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: '#111827' }}>Pallets</h3>
+                                    </div>
+                                    <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>{enrichedPallets.length} pallet{enrichedPallets.length !== 1 ? 's' : ''} · Click to expand boxes</span>
+                                </div>
+                                <div style={{ padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                    {enrichedPallets.map(p => {
+                                        const isExpanded = expandedWizardPallets.has(p.id);
+                                        return (
+                                            <div key={p.id} style={{ border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden', transition: 'box-shadow 0.2s', boxShadow: isExpanded ? '0 2px 8px rgba(0,0,0,0.06)' : 'none' }}>
+                                                <button onClick={() => toggleWizardPallet(p.id)} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: isExpanded ? 'linear-gradient(135deg, #f0f9ff, #e0f2fe)' : '#fafbfc', border: 'none', cursor: 'pointer', transition: 'all 0.15s ease' }} onMouseEnter={e => { if (!isExpanded) e.currentTarget.style.background = '#f0f9ff'; }} onMouseLeave={e => { if (!isExpanded) e.currentTarget.style.background = isExpanded ? 'linear-gradient(135deg, #f0f9ff, #e0f2fe)' : '#fafbfc'; }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                                        <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #1e3a8a, #2563eb)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Box size={16} style={{ color: '#fff' }} /></div>
+                                                        <div style={{ textAlign: 'left' }}>
+                                                            <div style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1e3a8a', fontSize: 13 }}>{p.pallet_number}</div>
+                                                            <div style={{ fontSize: 11, color: '#6b7280' }}>{p.item_name || p.item_code}</div>
+                                                        </div>
+                                                    </div>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                                                        <div style={{ textAlign: 'right' }}>
+                                                            <div style={{ fontSize: 13, fontWeight: 700, color: '#111827', fontFamily: 'monospace' }}>{p.current_qty.toLocaleString()} <span style={{ fontWeight: 400, fontSize: 11, color: '#6b7280' }}>PCS</span></div>
+                                                            <div style={{ fontSize: 11, color: '#6b7280' }}>{p.container_count} boxes</div>
+                                                        </div>
+                                                        <span style={{ padding: '3px 10px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: p.state === 'READY' ? '#dcfce7' : '#fef3c7', color: p.state === 'READY' ? '#16a34a' : '#d97706', border: `1px solid ${p.state === 'READY' ? '#bbf7d0' : '#fde68a'}` }}>{p.state}</span>
+                                                        <ChevronDown size={16} style={{ color: '#9ca3af', transition: 'transform 0.2s', transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }} />
+                                                    </div>
+                                                </button>
+                                                {isExpanded && (
+                                                    <div style={{ borderTop: '1px solid #e5e7eb' }}>
+                                                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                                            <thead><tr style={{ background: '#f8fafc' }}>
+                                                                <th style={{ ...thS, width: 40, padding: '8px 12px', fontSize: 11 }}>#</th>
+                                                                <th style={{ ...thS, padding: '8px 12px', fontSize: 11 }}>Packing Box ID</th>
+                                                                <th style={{ ...thS, padding: '8px 12px', fontSize: 11 }}>Type</th>
+                                                                <th style={{ ...thS, padding: '8px 12px', fontSize: 11, textAlign: 'right' }}>Qty</th>
+                                                                <th style={{ ...thS, padding: '8px 12px', fontSize: 11, textAlign: 'center' }}>Adj?</th>
+                                                                <th style={{ ...thS, padding: '8px 12px', fontSize: 11 }}>Packed By</th>
+                                                            </tr></thead>
+                                                            <tbody>{p.containers.map((c, i) => (
+                                                                <tr key={i} style={{ borderTop: '1px solid #f3f4f6', background: i % 2 === 0 ? '#fff' : '#fafbfc' }}>
+                                                                    <td style={{ ...tdS, textAlign: 'center', padding: '8px 12px', fontSize: 12 }}>{i + 1}</td>
+                                                                    <td style={{ ...tdS, fontFamily: 'monospace', fontWeight: 600, color: '#7c3aed', padding: '8px 12px', fontSize: 12 }}>{c.packing_id}</td>
+                                                                    <td style={{ ...tdS, padding: '8px 12px', fontSize: 12 }}><span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 10, fontWeight: 600, background: c.container_type === 'INNER_BOX' ? '#ede9fe' : '#fef3c7', color: c.container_type === 'INNER_BOX' ? '#7c3aed' : '#92400e' }}>{c.container_type.replace('_', ' ')}</span></td>
+                                                                    <td style={{ ...tdS, textAlign: 'right', fontFamily: 'monospace', fontWeight: 600, padding: '8px 12px', fontSize: 12 }}>{c.quantity.toLocaleString()}</td>
+                                                                    <td style={{ ...tdS, textAlign: 'center', padding: '8px 12px', fontSize: 12 }}>{c.is_adjustment ? <span style={{ padding: '2px 6px', borderRadius: 4, fontSize: 9, fontWeight: 700, background: '#fef3c7', color: '#d97706' }}>ADJ</span> : <span style={{ color: '#d1d5db' }}>—</span>}</td>
+                                                                    <td style={{ ...tdS, padding: '8px 12px', fontSize: 12, color: '#6b7280' }}>{c.operator}</td>
+                                                                </tr>
+                                                            ))}</tbody>
+                                                        </table>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                                <div style={{ padding: '16px 24px', borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'flex-end' }}>
+                                    <button onClick={() => setWizardStep('WEIGHTS')} style={{ padding: '10px 24px', borderRadius: 10, background: 'linear-gradient(135deg, var(--enterprise-primary), #2563eb)', color: 'white', border: 'none', fontWeight: 700, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 2px 8px rgba(30,58,138,0.2)', transition: 'all 0.15s ease' }}>Next: Gross Weights <ChevronRight size={16} /></button>
+                                </div>
+                            </div>
+                        </div>);
+                    })()}
+
+                    {/* ═══════ STEP 2: GROSS WEIGHTS ═══════ */}
                     {wizardStep === 'WEIGHTS' && (
-                        <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', padding: 20 }}>
-                            <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 12, color: '#111827' }}>Enter Gross Weight per Pallet (KGs)</h3>
-                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                                <thead><tr><th style={thS}>Pallet</th><th style={thS}>Item</th><th style={{ ...thS, textAlign: 'right' }}>Qty</th><th style={{ ...thS, textAlign: 'right' }}>Boxes</th><th style={{ ...thS, textAlign: 'right' }}>Net Wt</th><th style={{ ...thS, textAlign: 'right', background: '#fffbeb' }}>Gross Wt *</th></tr></thead>
-                                <tbody>{enrichedPallets.map(p => {
+                        <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #e5e7eb', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+                            <div style={{ padding: '18px 24px', borderBottom: '1px solid #e5e7eb', background: '#f8fafc', display: 'flex', alignItems: 'center', gap: 10 }}>
+                                <Scale size={18} style={{ color: '#1e3a8a' }} />
+                                <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: '#111827' }}>Enter Gross Weight per Pallet</h3>
+                                <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 400 }}>(KGs)</span>
+                            </div>
+                            <div style={{ padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                {enrichedPallets.map(p => {
                                     const detail = palletDetails.find((d: any) => d.pallet_id === p.id);
-                                    return (<tr key={p.id}><td style={{ ...tdS, fontFamily: 'monospace', fontWeight: 700, color: '#1e3a8a' }}>{p.pallet_number}</td><td style={tdS}><div style={{ fontWeight: 600 }}>{p.item_name}</div><div style={{ fontSize: 11, color: '#6b7280' }}>{p.item_code}</div></td><td style={{ ...tdS, textAlign: 'right', fontFamily: 'monospace', fontWeight: 600 }}>{p.current_qty.toLocaleString()}</td><td style={{ ...tdS, textAlign: 'right' }}>{p.container_count}</td><td style={{ ...tdS, textAlign: 'right', fontFamily: 'monospace' }}>{Number(detail?.net_weight_kg || 0).toFixed(2)}</td><td style={{ ...tdS, textAlign: 'right', background: '#fffbeb' }}><input type="number" step="0.01" value={p.gross_weight_kg || ''} onChange={e => handleWeightChange(p.id, parseFloat(e.target.value) || 0)} style={{ ...inp, width: 120, textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, padding: '6px 10px' }} placeholder="0.00" /></td></tr>);
-                                })}</tbody>
-                            </table>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
-                                <button onClick={() => setWizardStep('REVIEW')} style={{ padding: '10px 24px', borderRadius: 8, background: 'white', color: '#374151', border: '1px solid #d1d5db', fontWeight: 600, fontSize: 14, cursor: 'pointer' }}><ChevronLeft size={16} /> Back</button>
-                                <button onClick={() => setWizardStep('DISPATCH')} style={{ padding: '10px 24px', borderRadius: 8, background: '#1e3a8a', color: 'white', border: 'none', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>Next: Invoice & PO <ChevronRight size={16} /></button>
+                                    return (
+                                        <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto auto', gap: 16, alignItems: 'center', padding: '14px 16px', borderRadius: 12, border: '1px solid #e5e7eb', background: '#fafbfc', transition: 'all 0.15s ease' }} onMouseEnter={e => e.currentTarget.style.background = '#f0f9ff'} onMouseLeave={e => e.currentTarget.style.background = '#fafbfc'}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                                <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg, #1e3a8a, #2563eb)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Box size={17} style={{ color: '#fff' }} /></div>
+                                                <div>
+                                                    <div style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1e3a8a', fontSize: 13 }}>{p.pallet_number}</div>
+                                                    <div style={{ fontSize: 11, color: '#6b7280' }}>{p.master_serial_no || p.item_name} · <span style={{ color: '#9ca3af' }}>{p.item_code}</span></div>
+                                                </div>
+                                            </div>
+                                            <div style={{ textAlign: 'center', padding: '0 8px' }}>
+                                                <div style={{ fontSize: 10, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', marginBottom: 2 }}>Qty</div>
+                                                <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#111827' }}>{p.current_qty.toLocaleString()}</div>
+                                            </div>
+                                            <div style={{ textAlign: 'center', padding: '0 8px' }}>
+                                                <div style={{ fontSize: 10, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', marginBottom: 2 }}>Boxes</div>
+                                                <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#111827' }}>{p.container_count}</div>
+                                            </div>
+                                            <div style={{ textAlign: 'center', padding: '0 8px' }}>
+                                                <div style={{ fontSize: 10, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', marginBottom: 2 }}>Net Wt</div>
+                                                <div style={{ fontSize: 14, fontWeight: 600, fontFamily: 'monospace', color: '#6b7280' }}>{Number(detail?.net_weight_kg || 0).toFixed(2)}</div>
+                                            </div>
+                                            <div>
+                                                <div style={{ fontSize: 10, fontWeight: 600, color: '#d97706', textTransform: 'uppercase', marginBottom: 2 }}>Gross Wt *</div>
+                                                <input type="number" step="0.01" value={p.gross_weight_kg || ''} onChange={e => handleWeightChange(p.id, parseFloat(e.target.value) || 0)} style={{ width: 110, padding: '8px 12px', border: '2px solid #fbbf24', borderRadius: 10, fontSize: 14, fontFamily: 'monospace', fontWeight: 700, outline: 'none', textAlign: 'right', background: '#fffbeb', transition: 'border-color 0.15s', boxSizing: 'border-box' }} placeholder="0.00" onFocus={e => e.currentTarget.style.borderColor = '#1e3a8a'} onBlur={e => e.currentTarget.style.borderColor = '#fbbf24'} />
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                            <div style={{ padding: '16px 24px', borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between' }}>
+                                <button onClick={() => setWizardStep('REVIEW')} style={{ padding: '10px 24px', borderRadius: 10, background: 'white', color: '#374151', border: '1px solid #d1d5db', fontWeight: 600, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, transition: 'all 0.15s ease' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = '#fff'}><ChevronLeft size={16} /> Back</button>
+                                <button onClick={() => setWizardStep('DISPATCH')} style={{ padding: '10px 24px', borderRadius: 10, background: 'linear-gradient(135deg, var(--enterprise-primary), #2563eb)', color: 'white', border: 'none', fontWeight: 700, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 2px 8px rgba(30,58,138,0.2)', transition: 'all 0.15s ease' }}>Next: Invoice & PO <ChevronRight size={16} /></button>
                             </div>
                         </div>
                     )}
 
-                    {/* DISPATCH — Invoice & PO */}
+                    {/* ═══════ STEP 3: INVOICE & PO ═══════ */}
                     {wizardStep === 'DISPATCH' && (
-                        <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', padding: 20 }}>
-                            <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 12, color: '#111827' }}>Invoice & PO Details (SAP References)</h3>
-                            <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>Enter the SAP references. Both Invoice Number and PO Number are required to enable Print.</p>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-                                <div><label style={lbl}>Invoice Number (SAP) *</label><input value={dispatchForm.invoice_number} onChange={e => setDispatchForm({ ...dispatchForm, invoice_number: e.target.value })} style={{ ...inp, borderColor: !dispatchForm.invoice_number ? '#fca5a5' : '#d1d5db' }} placeholder="INV/E/ 252602774" /></div>
-                                <div><label style={lbl}>Invoice Date</label><input type="date" value={dispatchForm.invoice_date} onChange={e => setDispatchForm({ ...dispatchForm, invoice_date: e.target.value })} style={inp} /></div>
+                        <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #e5e7eb', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+                            <div style={{ padding: '18px 24px', borderBottom: '1px solid #e5e7eb', background: '#f8fafc', display: 'flex', alignItems: 'center', gap: 10 }}>
+                                <FileText size={18} style={{ color: '#1e3a8a' }} />
+                                <div>
+                                    <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: '#111827' }}>Invoice & PO Details</h3>
+                                    <p style={{ fontSize: 12, color: '#6b7280', margin: 0 }}>Enter the SAP references. Both Invoice # and PO # are required to enable Print.</p>
+                                </div>
                             </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-                                <div><label style={lbl}>Purchase Order Number (SAP) *</label><input value={dispatchForm.purchase_order_number} onChange={e => setDispatchForm({ ...dispatchForm, purchase_order_number: e.target.value })} style={{ ...inp, borderColor: !dispatchForm.purchase_order_number ? '#fca5a5' : '#d1d5db' }} placeholder="260067798" /></div>
-                                <div><label style={lbl}>PO Date</label><input type="date" value={dispatchForm.purchase_order_date} onChange={e => setDispatchForm({ ...dispatchForm, purchase_order_date: e.target.value })} style={inp} /></div>
+                            <div style={{ padding: '20px 24px' }}>
+                                {/* Invoice Section */}
+                                <div style={{ marginBottom: 20 }}>
+                                    <div style={{ fontSize: 11, fontWeight: 700, color: '#1e3a8a', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}><Hash size={12} /> Invoice Details</div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                                        <div>
+                                            <label style={{ ...lbl, color: '#374151' }}>Invoice Number (SAP) <span style={{ color: '#ef4444' }}>*</span></label>
+                                            <input value={dispatchForm.invoice_number} onChange={e => setDispatchForm({ ...dispatchForm, invoice_number: e.target.value })} style={{ ...inp, borderColor: !dispatchForm.invoice_number ? '#fca5a5' : '#d1d5db', borderRadius: 10, padding: '10px 14px', borderWidth: 2, transition: 'border-color 0.15s' }} placeholder="INV/E/ 252602774" onFocus={e => e.currentTarget.style.borderColor = '#1e3a8a'} onBlur={e => e.currentTarget.style.borderColor = !dispatchForm.invoice_number ? '#fca5a5' : '#d1d5db'} />
+                                        </div>
+                                        <div>
+                                            <label style={{ ...lbl, color: '#374151' }}>Invoice Date</label>
+                                            <input type="date" value={dispatchForm.invoice_date} onChange={e => setDispatchForm({ ...dispatchForm, invoice_date: e.target.value })} style={{ ...inp, borderRadius: 10, padding: '10px 14px', borderWidth: 2 }} />
+                                        </div>
+                                    </div>
+                                </div>
+                                {/* PO Section */}
+                                <div style={{ marginBottom: 20 }}>
+                                    <div style={{ fontSize: 11, fontWeight: 700, color: '#1e3a8a', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}><FileText size={12} /> Purchase Order Details</div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                                        <div>
+                                            <label style={{ ...lbl, color: '#374151' }}>PO Number (SAP) <span style={{ color: '#ef4444' }}>*</span></label>
+                                            <input value={dispatchForm.purchase_order_number} onChange={e => setDispatchForm({ ...dispatchForm, purchase_order_number: e.target.value })} style={{ ...inp, borderColor: !dispatchForm.purchase_order_number ? '#fca5a5' : '#d1d5db', borderRadius: 10, padding: '10px 14px', borderWidth: 2, transition: 'border-color 0.15s' }} placeholder="260067798" onFocus={e => e.currentTarget.style.borderColor = '#1e3a8a'} onBlur={e => e.currentTarget.style.borderColor = !dispatchForm.purchase_order_number ? '#fca5a5' : '#d1d5db'} />
+                                        </div>
+                                        <div>
+                                            <label style={{ ...lbl, color: '#374151' }}>PO Date</label>
+                                            <input type="date" value={dispatchForm.purchase_order_date} onChange={e => setDispatchForm({ ...dispatchForm, purchase_order_date: e.target.value })} style={{ ...inp, borderRadius: 10, padding: '10px 14px', borderWidth: 2 }} />
+                                        </div>
+                                    </div>
+                                </div>
+                                {/* Shipping */}
+                                <div style={{ marginBottom: 20 }}>
+                                    <div style={{ fontSize: 11, fontWeight: 700, color: '#1e3a8a', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}><Truck size={12} /> Shipping Details</div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                                        <div><label style={{ ...lbl, color: '#374151' }}>Ship Via</label><input value={dispatchForm.ship_via} onChange={e => setDispatchForm({ ...dispatchForm, ship_via: e.target.value })} style={{ ...inp, borderRadius: 10, padding: '10px 14px', borderWidth: 2 }} placeholder="SEAHORSE" /></div>
+                                        <div><label style={{ ...lbl, color: '#374151' }}>Vendor Number</label><input value={dispatchForm.vendor_number} onChange={e => setDispatchForm({ ...dispatchForm, vendor_number: e.target.value })} style={{ ...inp, borderRadius: 10, padding: '10px 14px', borderWidth: 2 }} placeholder="114395" /></div>
+                                    </div>
+                                </div>
+                                {/* Summary Cards */}
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, padding: 16, background: '#f8fafc', borderRadius: 12, border: '1px solid #e5e7eb' }}>
+                                    {[{ label: 'Pallets', value: String(enrichedPallets.length), color: '#1e3a8a' }, { label: 'Total Qty', value: enrichedPallets.reduce((s, p) => s + p.current_qty, 0).toLocaleString() + ' PCS', color: '#059669' }, { label: 'Total Gross Wt', value: enrichedPallets.reduce((s, p) => s + p.gross_weight_kg, 0).toFixed(2) + ' Kg', color: '#d97706' }, { label: 'Boxes', value: String(enrichedPallets.reduce((s, p) => s + p.container_count, 0)), color: '#7c3aed' }].map((c, i) => (
+                                        <div key={i} style={{ padding: '12px 14px', borderRadius: 10, background: '#fff', border: '1px solid #e5e7eb' }}>
+                                            <div style={{ fontSize: 10, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', marginBottom: 4 }}>{c.label}</div>
+                                            <div style={{ fontSize: 16, fontWeight: 800, color: c.color, fontFamily: 'monospace' }}>{c.value}</div>
+                                        </div>
+                                    ))}
+                                </div>
                             </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-                                <div><label style={lbl}>Ship Via</label><input value={dispatchForm.ship_via} onChange={e => setDispatchForm({ ...dispatchForm, ship_via: e.target.value })} style={inp} placeholder="SEAHORSE" /></div>
-                                <div><label style={lbl}>Vendor Number</label><input value={dispatchForm.vendor_number} onChange={e => setDispatchForm({ ...dispatchForm, vendor_number: e.target.value })} style={inp} placeholder="114395" /></div>
-                            </div>
-                            {/* Summary */}
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 16 }}>
-                                {[{ label: 'Pallets', value: enrichedPallets.length, color: '#1e3a8a' }, { label: 'Total Qty', value: enrichedPallets.reduce((s, p) => s + p.current_qty, 0).toLocaleString() + ' PCS', color: '#059669' }, { label: 'Total Gross Wt', value: enrichedPallets.reduce((s, p) => s + p.gross_weight_kg, 0).toFixed(2) + ' Kg', color: '#d97706' }, { label: 'Boxes', value: enrichedPallets.reduce((s, p) => s + p.container_count, 0), color: '#7c3aed' }].map((c, i) => (
-                                    <div key={i} style={{ padding: '10px 12px', borderRadius: 8, background: '#f8fafc', border: '1px solid #e5e7eb' }}><div style={{ fontSize: 10, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', marginBottom: 2 }}>{c.label}</div><div style={{ fontSize: 15, fontWeight: 700, color: c.color, fontFamily: 'monospace' }}>{c.value}</div></div>
-                                ))}
-                            </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                <button onClick={() => setWizardStep('WEIGHTS')} style={{ padding: '10px 24px', borderRadius: 8, background: 'white', color: '#374151', border: '1px solid #d1d5db', fontWeight: 600, fontSize: 14, cursor: 'pointer' }}><ChevronLeft size={16} /> Back</button>
-                                <button onClick={handleSaveAndConfirm} disabled={saving || !dispatchForm.invoice_number || !dispatchForm.purchase_order_number} style={{ padding: '10px 24px', borderRadius: 8, border: 'none', background: (saving || !dispatchForm.invoice_number || !dispatchForm.purchase_order_number) ? '#9ca3af' : '#16a34a', color: 'white', fontWeight: 700, fontSize: 14, cursor: saving ? 'wait' : 'pointer' }}>
+                            <div style={{ padding: '16px 24px', borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between' }}>
+                                <button onClick={() => setWizardStep('WEIGHTS')} style={{ padding: '10px 24px', borderRadius: 10, background: 'white', color: '#374151', border: '1px solid #d1d5db', fontWeight: 600, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, transition: 'all 0.15s ease' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = '#fff'}><ChevronLeft size={16} /> Back</button>
+                                <button onClick={handleSaveAndConfirm} disabled={saving || !dispatchForm.invoice_number || !dispatchForm.purchase_order_number} style={{ padding: '10px 24px', borderRadius: 10, border: 'none', background: (saving || !dispatchForm.invoice_number || !dispatchForm.purchase_order_number) ? '#d1d5db' : 'linear-gradient(135deg, #16a34a, #15803d)', color: 'white', fontWeight: 700, fontSize: 14, cursor: saving ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: (saving || !dispatchForm.invoice_number || !dispatchForm.purchase_order_number) ? 'none' : '0 2px 8px rgba(22,163,74,0.25)', transition: 'all 0.15s ease', opacity: (saving || !dispatchForm.invoice_number || !dispatchForm.purchase_order_number) ? 0.7 : 1 }}>
                                     {saving ? <><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Saving...</> : <><CheckCircle2 size={16} /> Save & Confirm</>}
                                 </button>
                             </div>
@@ -308,102 +893,237 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
     // ═══════════════════════════════════════════════════════════════
     // RENDER — DASHBOARD
     // ═══════════════════════════════════════════════════════════════
+    if (loading) return <ModuleLoader moduleName="Packing List" icon={<Package size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
+
     return (
-        <div style={{ padding: 24, maxWidth: 1400, margin: '0 auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-                <div><h1 style={{ fontSize: 24, fontWeight: 800, color: '#111827', margin: '0 0 4px' }}>MPL Home</h1><p style={{ fontSize: 14, color: '#6b7280', margin: 0 }}>Master Packing List — View, manage, print, and track all dispatch packing lists</p></div>
-            </div>
-
-            {successMsg && <div style={{ padding: '12px 16px', marginBottom: 16, borderRadius: 8, backgroundColor: '#d1fae5', color: '#065f46', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, fontWeight: 600 }}><CheckCircle2 size={16} />{successMsg}</div>}
-            {error && !wizardMpl && <div style={{ padding: '12px 16px', marginBottom: 16, borderRadius: 8, backgroundColor: '#fee2e2', color: '#dc2626', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><AlertCircle size={16} />{error}<button onClick={() => setError(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }}><XCircle size={16} /></button></div>}
-
-            {/* Summary Cards */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 16, marginBottom: 24 }}>
-                {[{ label: 'Total MPLs', value: summary.total, icon: FileText, color: '#3b82f6', bg: '#dbeafe' }, { label: 'Pending', value: summary.pending, icon: Clock, color: '#f59e0b', bg: '#fef3c7' }, { label: 'Printed', value: summary.printed, icon: Printer, color: '#10b981', bg: '#d1fae5' }, { label: 'Dispatched', value: summary.dispatched, icon: Truck, color: '#8b5cf6', bg: '#ede9fe' }].map(card => {
-                    const CI = card.icon;
-                    return (<div key={card.label} style={{ padding: 20, borderRadius: 12, backgroundColor: '#fff', border: '1px solid #e5e7eb', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', gap: 16 }}><div style={{ width: 44, height: 44, borderRadius: 10, backgroundColor: card.bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><CI size={22} style={{ color: card.color }} /></div><div><p style={{ fontSize: 26, fontWeight: 800, color: '#111827', margin: 0 }}>{card.value}</p><p style={{ fontSize: 12, color: '#6b7280', margin: 0 }}>{card.label}</p></div></div>);
-                })}
-            </div>
-
-            {/* Search + Filters */}
-            <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-                <div style={{ position: 'relative', flex: 1, minWidth: 280 }}><Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} /><input type="text" value={search} onChange={e => { setSearch(e.target.value); setPage(0); }} placeholder="Search MPL #, PO, Invoice, Item Code..." style={{ width: '100%', padding: '10px 12px 10px 36px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 14, outline: 'none' }} /></div>
-                <div style={{ display: 'flex', gap: 4, backgroundColor: '#f3f4f6', borderRadius: 8, padding: 3 }}>
-                    {[{ key: 'ALL', label: 'All' }, { key: 'DRAFT', label: 'Pending' }, { key: 'CONFIRMED', label: 'Confirmed' }, { key: 'PRINTED', label: 'Printed' }, { key: 'DISPATCHED', label: 'Dispatched' }].map(s => (
-                        <button key={s.key} onClick={() => { setStatusFilter(s.key as any); setPage(0); }} style={{ padding: '6px 14px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer', backgroundColor: statusFilter === s.key ? '#fff' : 'transparent', color: statusFilter === s.key ? '#1e3a8a' : '#6b7280', boxShadow: statusFilter === s.key ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}>{s.label}</button>
-                    ))}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            {error && (
+                <div style={{ backgroundColor: 'var(--enterprise-error-bg)', border: '1px solid var(--enterprise-error)', borderRadius: 'var(--border-radius-md)', padding: '12px' }}>
+                    <p style={{ color: 'var(--enterprise-error)', fontSize: 'var(--font-size-sm)' }}>{error}</p>
                 </div>
-                <button onClick={() => { loadMpls(); loadSummary(); }} style={{ padding: 10, borderRadius: 8, border: '1px solid #d1d5db', backgroundColor: '#fff', cursor: 'pointer' }} title="Refresh"><RefreshCw size={16} style={{ color: '#6b7280' }} /></button>
-            </div>
+            )}
 
-            {/* Data Table */}
-            <div style={{ backgroundColor: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-                {loading ? <div style={{ padding: 48, textAlign: 'center', color: '#9ca3af' }}><RefreshCw size={24} style={{ animation: 'spin 1s linear infinite' }} /><p>Loading...</p></div> :
-                    mpls.length === 0 ? <div style={{ padding: 48, textAlign: 'center', color: '#9ca3af' }}><Package size={32} style={{ marginBottom: 8, opacity: 0.5 }} /><p style={{ fontWeight: 600 }}>No Master Packing Lists</p><p style={{ fontSize: 13 }}>Generate packing lists from Dispatch Selection first.</p></div> :
-                        <div style={{ overflowX: 'auto' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                                <thead><tr style={{ backgroundColor: '#f9fafb', borderBottom: '2px solid #e5e7eb' }}>
-                                    {['MPL #', 'Item Code', 'PO Number', 'Invoice #', 'Pallets', 'Qty', 'Status', 'Created', 'Actions'].map(h => (<th key={h} style={thS}>{h}</th>))}
-                                </tr></thead>
+            {/* ═══════════════ FLOATING TOAST NOTIFICATION ═══════════════ */}
+            {toast && (
+                <div style={{
+                    position: 'fixed', top: 24, right: 24, zIndex: 10000,
+                    minWidth: 360, maxWidth: 440,
+                    padding: '16px 20px', borderRadius: 14,
+                    background: toast.type === 'success' ? 'linear-gradient(135deg, #f0fdf4, #dcfce7)'
+                        : toast.type === 'error' ? 'linear-gradient(135deg, #fef2f2, #fee2e2)'
+                            : toast.type === 'warning' ? 'linear-gradient(135deg, #fffbeb, #fef3c7)'
+                                : 'linear-gradient(135deg, #eff6ff, #dbeafe)',
+                    border: `1.5px solid ${toast.type === 'success' ? '#86efac' : toast.type === 'error' ? '#fca5a5' : toast.type === 'warning' ? '#fcd34d' : '#93c5fd'}`,
+                    boxShadow: '0 10px 40px rgba(0,0,0,0.12), 0 4px 12px rgba(0,0,0,0.06)',
+                    display: 'flex', alignItems: 'flex-start', gap: 12,
+                    animation: 'slideInDown 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+                }}>
+                    <div style={{
+                        width: 36, height: 36, borderRadius: 10, flexShrink: 0,
+                        background: toast.type === 'success' ? 'linear-gradient(135deg, #16a34a, #15803d)' : toast.type === 'error' ? 'linear-gradient(135deg, #dc2626, #b91c1c)' : toast.type === 'warning' ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        boxShadow: `0 2px 8px ${toast.type === 'success' ? 'rgba(22,163,74,0.3)' : toast.type === 'error' ? 'rgba(220,38,38,0.3)' : toast.type === 'warning' ? 'rgba(245,158,11,0.3)' : 'rgba(37,99,235,0.3)'}`,
+                    }}>
+                        {toast.type === 'success' && <CheckCircle2 size={18} style={{ color: '#fff' }} />}
+                        {toast.type === 'error' && <XCircle size={18} style={{ color: '#fff' }} />}
+                        {toast.type === 'warning' && <AlertTriangle size={18} style={{ color: '#fff' }} />}
+                        {toast.type === 'info' && <Info size={18} style={{ color: '#fff' }} />}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 800, color: toast.type === 'success' ? '#14532d' : toast.type === 'error' ? '#7f1d1d' : toast.type === 'warning' ? '#78350f' : '#1e3a5f', marginBottom: 2, letterSpacing: '-0.2px' }}>{toast.title}</div>
+                        <div style={{ fontSize: 12, fontWeight: 500, lineHeight: 1.5, color: toast.type === 'success' ? '#166534' : toast.type === 'error' ? '#991b1b' : toast.type === 'warning' ? '#92400e' : '#1e40af' }}>{toast.text}</div>
+                    </div>
+                    <button onClick={() => { if (toastTimer.current) clearTimeout(toastTimer.current); setToast(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: toast.type === 'success' ? '#16a34a' : toast.type === 'error' ? '#dc2626' : toast.type === 'warning' ? '#d97706' : '#2563eb', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><X size={16} /></button>
+                </div>
+            )}
+
+            {/* Summary Cards — Click-to-filter (same as Item Master) */}
+            <SummaryCardsGrid>
+                <SummaryCard label="Total Packing Lists" value={summary.total} icon={<FileText size={22} style={{ color: 'var(--enterprise-primary)' }} />} color="var(--enterprise-primary)" bgColor="rgba(30, 58, 138, 0.1)" isActive={cardFilter === 'ALL'} onClick={() => { const next = cardFilter === 'ALL' ? 'ALL' : 'ALL'; setCardFilter(next); setStatusFilter(next); setPage(0); }} />
+                <SummaryCard label="Pending" value={summary.pending} icon={<Clock size={22} style={{ color: '#f59e0b' }} />} color="#f59e0b" bgColor="rgba(245, 158, 11, 0.1)" isActive={cardFilter === 'DRAFT'} onClick={() => { const next = cardFilter === 'DRAFT' ? 'ALL' : 'DRAFT'; setCardFilter(next); setStatusFilter(next); setPage(0); }} />
+                <SummaryCard label="Printed" value={summary.printed} icon={<Printer size={22} style={{ color: 'var(--enterprise-success)' }} />} color="var(--enterprise-success)" bgColor="rgba(34, 197, 94, 0.1)" isActive={cardFilter === 'PRINTED'} onClick={() => { const next = cardFilter === 'PRINTED' ? 'ALL' : 'PRINTED'; setCardFilter(next); setStatusFilter(next); setPage(0); }} />
+                <SummaryCard label="Dispatched" value={summary.dispatched} icon={<Truck size={22} style={{ color: '#8b5cf6' }} />} color="#8b5cf6" bgColor="rgba(139, 92, 246, 0.1)" isActive={cardFilter === 'DISPATCHED'} onClick={() => { const next = cardFilter === 'DISPATCHED' ? 'ALL' : 'DISPATCHED'; setCardFilter(next); setStatusFilter(next); setPage(0); }} />
+            </SummaryCardsGrid>
+
+            {/* Filter Bar — StatusFilter dropdown + DateRangeFilter + RefreshButton */}
+            <SharedFilterBar>
+                <SearchBox value={search} onChange={(v) => { setSearch(v); setPage(0); }} placeholder="Search MPL #, PO, Invoice, MSN..." />
+                <StatusFilter
+                    value={statusFilter}
+                    onChange={v => { const val = v as MplStatus | 'ALL'; setStatusFilter(val); setCardFilter(val); setPage(0); }}
+                    options={[
+                        { value: 'ALL', label: 'All Statuses' },
+                        { value: 'DRAFT', label: 'Pending' },
+                        { value: 'CONFIRMED', label: 'Confirmed' },
+                        { value: 'PRINTED', label: 'Printed' },
+                        { value: 'DISPATCHED', label: 'Dispatched' },
+                        { value: 'CANCELLED', label: 'Cancelled' },
+                    ]}
+                />
+                <DateRangeFilter
+                    dateFrom={dateFrom}
+                    dateTo={dateTo}
+                    onDateFromChange={setDateFrom}
+                    onDateToChange={setDateTo}
+                />
+                <ActionBar>
+                    <RefreshButton onClick={handleRefresh} loading={refreshing} />
+                </ActionBar>
+            </SharedFilterBar>
+
+            {/* Data Table — Wrapped in Card like Item Master */}
+            <Card style={{ padding: 0 }}>
+                {mpls.length === 0 ? (
+                    <EmptyState icon={<Package size={48} />} title="No Packing Lists" description="Generate packing lists from Dispatch Selection first." />
+                ) : (
+                    <>
+                        <div style={{ overflowX: 'auto', opacity: refreshing ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: refreshing ? 'none' : 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                <thead>
+                                    <tr style={{ backgroundColor: 'var(--table-header-bg)', borderBottom: '2px solid var(--table-border)' }}>
+                                        <th style={{ ...thS, minWidth: 120 }}>MPL #</th>
+                                        <th style={{ ...thS, minWidth: 100 }}>MSN</th>
+                                        <th style={{ ...thS, minWidth: 100 }}>PO Number</th>
+                                        <th style={{ ...thS, minWidth: 100 }}>Invoice #</th>
+                                        <th style={{ ...thS, textAlign: 'center', minWidth: 70 }}>Pallets</th>
+                                        <th style={{ ...thS, textAlign: 'center', minWidth: 70 }}>Qty</th>
+                                        <th style={{ ...thS, textAlign: 'center', minWidth: 90 }}>Status</th>
+                                        <th style={{ ...thS, minWidth: 90 }}>Created</th>
+                                        <th style={{ ...thS, textAlign: 'center', minWidth: 150 }}>Actions</th>
+                                    </tr>
+                                </thead>
                                 <tbody>{mpls.map((mpl, idx) => (
-                                    <tr key={mpl.id} style={{ borderBottom: '1px solid #f3f4f6', backgroundColor: idx % 2 === 0 ? '#fff' : '#fafbfc', cursor: 'pointer', transition: 'background 150ms' }} onClick={() => handleViewDetail(mpl)} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#eff6ff'} onMouseLeave={e => e.currentTarget.style.backgroundColor = idx % 2 === 0 ? '#fff' : '#fafbfc'}>
-                                        <td style={{ padding: '10px 16px', fontWeight: 700, color: '#1e3a8a', fontFamily: 'monospace' }}>{mpl.mpl_number}</td>
-                                        <td style={{ padding: '10px 16px', fontFamily: 'monospace', fontSize: 12 }}>{mpl.item_code}</td>
-                                        <td style={{ padding: '10px 16px', color: '#4b5563' }}>{mpl.po_number || <span style={{ color: '#d1d5db' }}>—</span>}</td>
-                                        <td style={{ padding: '10px 16px', color: '#4b5563' }}>{mpl.invoice_number || <span style={{ color: '#d1d5db' }}>—</span>}</td>
-                                        <td style={{ padding: '10px 16px', fontWeight: 600, textAlign: 'center' }}>{mpl.total_pallets}</td>
-                                        <td style={{ padding: '10px 16px', fontWeight: 600, textAlign: 'center' }}>{mpl.total_quantity.toLocaleString()}</td>
-                                        <td style={{ padding: '10px 16px' }}><StatusBadge status={mpl.status} /></td>
-                                        <td style={{ padding: '10px 16px', color: '#6b7280', fontSize: 12, whiteSpace: 'nowrap' }}>{new Date(mpl.created_at).toLocaleDateString()}</td>
-                                        <td style={{ padding: '10px 16px' }} onClick={e => e.stopPropagation()}>
-                                            <div style={{ display: 'flex', gap: 4 }}>
-                                                {mpl.status === 'DRAFT' && canEdit && <button onClick={() => handleOpenWizard(mpl)} title="Enter Details (Review, Weights, Invoice)" style={{ padding: '6px 12px', borderRadius: 6, border: 'none', backgroundColor: '#1e3a8a', color: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}><Edit3 size={13} />Enter Details</button>}
-                                                <button onClick={() => handleViewDetail(mpl)} title="View" style={{ padding: 6, borderRadius: 6, border: '1px solid #e5e7eb', backgroundColor: '#fff', cursor: 'pointer' }}><Eye size={14} style={{ color: '#3b82f6' }} /></button>
-                                                {isMplReady(mpl) && mpl.status !== 'CANCELLED' && <button onClick={() => handlePrintMpl(mpl)} title="Print Master Packing List" style={{ padding: 6, borderRadius: 6, border: '1px solid #e5e7eb', backgroundColor: '#fff', cursor: 'pointer' }}><Printer size={14} style={{ color: '#059669' }} /></button>}
-                                                {!isMplReady(mpl) && mpl.status !== 'CANCELLED' && mpl.status !== 'DISPATCHED' && <button disabled title="Fill Invoice & PO first to enable print" style={{ padding: 6, borderRadius: 6, border: '1px solid #f3f4f6', backgroundColor: '#f9fafb', cursor: 'not-allowed', opacity: 0.4 }}><Printer size={14} style={{ color: '#9ca3af' }} /></button>}
-                                                {mpl.status !== 'DISPATCHED' && mpl.status !== 'CANCELLED' && canDelete && <button onClick={() => setCancelTarget(mpl)} title="Cancel" style={{ padding: 6, borderRadius: 6, border: '1px solid #fecaca', backgroundColor: '#fff', cursor: 'pointer' }}><XCircle size={14} style={{ color: '#dc2626' }} /></button>}
+                                    <tr key={mpl.id} style={{ backgroundColor: idx % 2 === 0 ? 'white' : 'var(--table-stripe)', borderBottom: '1px solid var(--table-border)', transition: 'background-color var(--transition-fast)' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = 'var(--table-hover)'} onMouseLeave={e => e.currentTarget.style.backgroundColor = idx % 2 === 0 ? 'white' : 'var(--table-stripe)'}>
+                                        <td style={{ ...tdS, fontWeight: 600, color: 'var(--enterprise-primary)', fontFamily: 'monospace' }}>{mpl.mpl_number}</td>
+                                        <td style={{ ...tdS, fontFamily: 'monospace', fontSize: '0.85em', color: 'var(--enterprise-gray-600)' }}>{(mpl as any).master_serial_no || <span style={{ color: 'var(--enterprise-gray-300)' }}>—</span>}</td>
+                                        <td style={{ ...tdS, color: 'var(--enterprise-gray-700)' }}>{mpl.po_number || <span style={{ color: 'var(--enterprise-gray-300)' }}>—</span>}</td>
+                                        <td style={{ ...tdS, color: 'var(--enterprise-gray-700)' }}>{mpl.invoice_number || <span style={{ color: 'var(--enterprise-gray-300)' }}>—</span>}</td>
+                                        <td style={{ ...tdS, textAlign: 'center', fontWeight: 600 }}>{mpl.total_pallets}</td>
+                                        <td style={{ ...tdS, textAlign: 'center', fontWeight: 600 }}>{mpl.total_quantity.toLocaleString()}</td>
+                                        <td style={{ ...tdS, textAlign: 'center' }}><StatusBadge status={mpl.status} /></td>
+                                        <td style={{ ...tdS, color: 'var(--enterprise-gray-600)', fontSize: 12, whiteSpace: 'nowrap' }}>{new Date(mpl.created_at).toLocaleDateString()}</td>
+                                        {/* Single Actions column: Primary button + dropdown */}
+                                        <td style={{ ...tdS, textAlign: 'center', padding: '8px 12px', position: 'relative' }}>
+                                            <div ref={activeDropdown === mpl.id ? dropdownRef : null} style={{ display: 'inline-flex', alignItems: 'center', gap: 0, position: 'relative' }}>
+                                                {/* Primary action: Continue (DRAFT) or View */}
+                                                {mpl.status === 'DRAFT' && canEdit ? (
+                                                    <button onClick={(e) => { e.stopPropagation(); handleOpenWizard(mpl); }} style={{ height: 34, padding: '0 14px', border: 'none', borderRadius: '8px 0 0 8px', background: 'linear-gradient(135deg, var(--enterprise-primary), #2563eb)', color: '#fff', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, boxShadow: '0 2px 8px rgba(30,58,138,0.18)', transition: 'all 0.15s ease', whiteSpace: 'nowrap', boxSizing: 'border-box' }}>
+                                                        <ChevronRight size={15} /> Continue
+                                                    </button>
+                                                ) : (
+                                                    <button onClick={() => handleViewDetail(mpl)} style={{ height: 34, padding: '0 14px', borderRadius: '8px 0 0 8px', border: '1px solid #e5e7eb', borderRight: 'none', backgroundColor: 'white', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 500, color: '#374151', transition: 'all 0.15s ease', whiteSpace: 'nowrap', boxSizing: 'border-box' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'white'}>
+                                                        <Eye size={15} /> View
+                                                    </button>
+                                                )}
+                                                {/* Dropdown trigger */}
+                                                <button onClick={(e) => { e.stopPropagation(); if (activeDropdown === mpl.id) { setActiveDropdown(null); } else { const rect = e.currentTarget.getBoundingClientRect(); setDropdownDirection(window.innerHeight - rect.bottom < 200 ? 'up' : 'down'); setActiveDropdown(mpl.id); } }} style={{ height: 34, padding: '0 8px', border: mpl.status === 'DRAFT' && canEdit ? 'none' : '1px solid #e5e7eb', borderLeft: mpl.status === 'DRAFT' && canEdit ? '1px solid rgba(255,255,255,0.3)' : '1px solid #e5e7eb', borderRadius: '0 8px 8px 0', backgroundColor: mpl.status === 'DRAFT' && canEdit ? '#1e40af' : 'white', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: mpl.status === 'DRAFT' && canEdit ? '#fff' : '#374151', transition: 'all 0.15s ease', boxSizing: 'border-box' }} onMouseEnter={e => { if (!(mpl.status === 'DRAFT' && canEdit)) e.currentTarget.style.backgroundColor = '#f8fafc'; }} onMouseLeave={e => { if (!(mpl.status === 'DRAFT' && canEdit)) e.currentTarget.style.backgroundColor = 'white'; }}>
+                                                    <ChevronDown size={14} style={{ transition: 'transform 0.2s', transform: activeDropdown === mpl.id ? 'rotate(180deg)' : 'rotate(0deg)' }} />
+                                                </button>
+                                                {/* Dropdown menu */}
+                                                {activeDropdown === mpl.id && (
+                                                    <div style={{ position: 'absolute', ...(dropdownDirection === 'up' ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), right: 0, zIndex: 9999, width: 200, backgroundColor: 'white', borderRadius: 12, boxShadow: dropdownDirection === 'up' ? '0 -10px 40px rgba(0,0,0,0.15)' : '0 10px 40px rgba(0,0,0,0.15)', border: '1px solid #e5e7eb', overflow: 'hidden' }}>
+                                                        {/* View Details */}
+                                                        <button onClick={() => { handleViewDetail(mpl); setActiveDropdown(null); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: 14, textAlign: 'left', color: '#374151' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                                                            <Eye size={16} /> View Details
+                                                        </button>
+                                                        {/* Print */}
+                                                        {isMplReady(mpl) && mpl.status !== 'CANCELLED' && (
+                                                            <><div style={{ borderTop: '1px solid #f3f4f6' }} /><button onClick={() => { handlePrintMpl(mpl); setActiveDropdown(null); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: 14, textAlign: 'left', color: '#059669' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f0fdf4'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                                                                <Printer size={16} /> Print
+                                                            </button></>
+                                                        )}
+                                                        {!isMplReady(mpl) && mpl.status !== 'CANCELLED' && mpl.status !== 'DISPATCHED' && (
+                                                            <><div style={{ borderTop: '1px solid #f3f4f6' }} /><button disabled style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, border: 'none', backgroundColor: 'transparent', cursor: 'not-allowed', fontSize: 14, textAlign: 'left', color: '#9ca3af', opacity: 0.6 }}>
+                                                                <Printer size={16} /> Print (fill PO/INV)
+                                                            </button></>
+                                                        )}
+                                                        {/* Cancel */}
+                                                        {mpl.status !== 'DISPATCHED' && mpl.status !== 'CANCELLED' && canDelete && (
+                                                            <><div style={{ borderTop: '1px solid #f3f4f6' }} /><button onClick={() => { setCancelTarget(mpl); setCancelConfirmInput(''); setCancelReason(''); setActiveDropdown(null); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: 14, textAlign: 'left', color: '#ef4444' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#fef2f2'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                                                                <XCircle size={16} /> Cancel
+                                                            </button></>
+                                                        )}
+                                                    </div>
+                                                )}
                                             </div>
                                         </td>
                                     </tr>
                                 ))}</tbody>
                             </table>
-                        </div>}
-                {totalPages > 1 && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderTop: '1px solid #e5e7eb', fontSize: 13, color: '#6b7280' }}><span>Showing {page * pageSize + 1}–{Math.min((page + 1) * pageSize, totalCount)} of {totalCount}</span><div style={{ display: 'flex', gap: 4 }}><button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #d1d5db', backgroundColor: page === 0 ? '#f9fafb' : '#fff', cursor: page === 0 ? 'default' : 'pointer', opacity: page === 0 ? 0.5 : 1 }}><ChevronLeft size={14} /></button><span style={{ padding: '6px 12px', fontWeight: 600 }}>{page + 1} / {totalPages}</span><button onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #d1d5db', backgroundColor: page >= totalPages - 1 ? '#f9fafb' : '#fff', cursor: page >= totalPages - 1 ? 'default' : 'pointer', opacity: page >= totalPages - 1 ? 0.5 : 1 }}><ChevronRight size={14} /></button></div></div>}
-            </div>
+                        </div>
+                        {totalPages > 1 && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderTop: '1px solid var(--table-border)', fontSize: 13, color: 'var(--enterprise-gray-600)' }}><span>Showing {page * pageSize + 1}–{Math.min((page + 1) * pageSize, totalCount)} of {totalCount}</span><div style={{ display: 'flex', gap: 4 }}><button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #d1d5db', backgroundColor: page === 0 ? '#f9fafb' : '#fff', cursor: page === 0 ? 'default' : 'pointer', opacity: page === 0 ? 0.5 : 1 }}><ChevronLeft size={14} /></button><span style={{ padding: '6px 12px', fontWeight: 600 }}>{page + 1} / {totalPages}</span><button onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #d1d5db', backgroundColor: page >= totalPages - 1 ? '#f9fafb' : '#fff', cursor: page >= totalPages - 1 ? 'default' : 'pointer', opacity: page >= totalPages - 1 ? 0.5 : 1 }}><ChevronRight size={14} /></button></div></div>}
+                    </>
+                )
+                }
+            </Card >
 
-            {/* Cancel Modal */}
-            {cancelTarget && <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}><div style={{ backgroundColor: '#fff', borderRadius: 16, padding: 24, width: 450, maxWidth: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
-                <h3 style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 700 }}>Cancel {cancelTarget.mpl_number}?</h3>
-                <p style={{ margin: '0 0 16px', fontSize: 14, color: '#6b7280' }}>This will release {cancelTarget.total_pallets} pallet(s) back to READY state.</p>
-                <textarea value={cancelReason} onChange={e => setCancelReason(e.target.value)} placeholder="Reason (optional)..." rows={3} style={{ width: '100%', padding: 10, border: '1px solid #d1d5db', borderRadius: 8, fontSize: 14, resize: 'vertical', outline: 'none', boxSizing: 'border-box', marginBottom: 16 }} />
-                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}><button onClick={() => { setCancelTarget(null); setCancelReason(''); }} style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid #d1d5db', backgroundColor: '#fff', cursor: 'pointer', fontWeight: 500, fontSize: 14 }}>Keep</button><button onClick={handleCancelConfirm} disabled={cancelling} style={{ padding: '8px 16px', borderRadius: 8, border: 'none', backgroundColor: '#dc2626', color: '#fff', cursor: cancelling ? 'wait' : 'pointer', fontWeight: 600, fontSize: 14, opacity: cancelling ? 0.7 : 1 }}>{cancelling ? 'Cancelling...' : 'Cancel MPL'}</button></div>
-            </div></div>}
+            {/* Cancel Modal — Type-to-confirm (matches delete pattern) */}
+            {
+                cancelTarget && <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}><div style={{ backgroundColor: '#fff', borderRadius: 16, padding: 28, width: 500, maxWidth: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }} onCopy={e => e.preventDefault()}>
+                    {/* Warning Banner */}
+                    <div style={{ background: 'linear-gradient(135deg, rgba(220,38,38,0.05) 0%, rgba(220,38,38,0.1) 100%)', border: '1px solid rgba(220,38,38,0.2)', borderRadius: 10, padding: 16, display: 'flex', gap: 12, alignItems: 'flex-start', marginBottom: 20 }}>
+                        <AlertTriangle size={24} style={{ color: '#dc2626', flexShrink: 0, marginTop: 2 }} />
+                        <div>
+                            <p style={{ fontWeight: 700, color: '#dc2626', margin: '0 0 4px', fontSize: 15 }}>Cancel Packing List</p>
+                            <p style={{ fontSize: 13, color: '#6b7280', margin: 0 }}>This will cancel <strong>{cancelTarget.mpl_number}</strong> and release <strong>{cancelTarget.total_pallets} pallet(s)</strong> back to READY state. This action cannot be undone.</p>
+                        </div>
+                    </div>
+                    {/* MPL Info */}
+                    <div style={{ background: '#f9fafb', borderRadius: 8, padding: 14, marginBottom: 16, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: 13 }}>
+                        <div><span style={{ color: '#6b7280', fontSize: 11, textTransform: 'uppercase', fontWeight: 700 }}>MPL Number</span><div style={{ fontWeight: 700, color: '#1e3a8a', fontFamily: 'monospace' }}>{cancelTarget.mpl_number}</div></div>
+                        <div><span style={{ color: '#6b7280', fontSize: 11, textTransform: 'uppercase', fontWeight: 700 }}>Status</span><div><StatusBadge status={cancelTarget.status} /></div></div>
+                        <div><span style={{ color: '#6b7280', fontSize: 11, textTransform: 'uppercase', fontWeight: 700 }}>Pallets</span><div style={{ fontWeight: 600 }}>{cancelTarget.total_pallets}</div></div>
+                        <div><span style={{ color: '#6b7280', fontSize: 11, textTransform: 'uppercase', fontWeight: 700 }}>Total Qty</span><div style={{ fontWeight: 600 }}>{cancelTarget.total_quantity.toLocaleString()} PCS</div></div>
+                    </div>
+                    {/* Type MPL Number to confirm */}
+                    <div style={{ marginBottom: 14 }}>
+                        <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 6 }}>Type MPL Number to confirm <span style={{ color: '#dc2626' }}>*</span></label>
+                        <input type="text" value={cancelConfirmInput} onChange={e => setCancelConfirmInput(e.target.value)} onPaste={e => e.preventDefault()} onCopy={e => e.preventDefault()} onCut={e => e.preventDefault()} onDrop={e => e.preventDefault()} onContextMenu={e => e.preventDefault()} autoComplete="off" placeholder={`Enter "${cancelTarget.mpl_number}" to confirm`} style={{ width: '100%', padding: '10px 14px', border: `1px solid ${cancelConfirmInput.trim() === cancelTarget.mpl_number ? '#16a34a' : '#d1d5db'}`, borderRadius: 8, fontSize: 14, fontFamily: 'monospace', fontWeight: 600, outline: 'none', boxSizing: 'border-box', transition: 'border-color 200ms' }} />
+                        <p style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>Must match exactly: <strong style={{ color: '#374151' }}>{cancelTarget.mpl_number}</strong></p>
+                    </div>
+                    {/* Reason */}
+                    <div style={{ marginBottom: 20 }}>
+                        <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 6 }}>Reason for cancellation <span style={{ color: '#dc2626' }}>*</span></label>
+                        <textarea value={cancelReason} onChange={e => setCancelReason(e.target.value)} placeholder="Please provide the reason for cancelling this packing list..." rows={3} style={{ width: '100%', padding: '10px 14px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13, resize: 'vertical', outline: 'none', boxSizing: 'border-box' }} />
+                    </div>
+                    {/* Actions */}
+                    <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                        <button onClick={() => { setCancelTarget(null); setCancelReason(''); setCancelConfirmInput(''); }} style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid #d1d5db', backgroundColor: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Keep</button>
+                        <button onClick={handleCancelConfirm} disabled={cancelling || cancelConfirmInput.trim() !== cancelTarget.mpl_number || !cancelReason.trim()} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', backgroundColor: (cancelling || cancelConfirmInput.trim() !== cancelTarget.mpl_number || !cancelReason.trim()) ? '#e5e7eb' : '#dc2626', color: (cancelling || cancelConfirmInput.trim() !== cancelTarget.mpl_number || !cancelReason.trim()) ? '#9ca3af' : '#fff', cursor: (cancelling || cancelConfirmInput.trim() !== cancelTarget.mpl_number || !cancelReason.trim()) ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', gap: 6, transition: 'all 200ms' }}>{cancelling ? <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Cancelling...</> : <><XCircle size={14} /> Cancel Packing List</>}</button>
+                    </div>
+                </div></div>
+            }
 
             {/* Detail Slideout */}
-            {showDetail && selectedMpl && <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', justifyContent: 'flex-end', zIndex: 999 }} onClick={e => { if (e.target === e.currentTarget) setShowDetail(false); }}><div style={{ width: 600, maxWidth: '90vw', backgroundColor: '#fff', height: '100vh', overflowY: 'auto', padding: 24, boxShadow: '-4px 0 20px rgba(0,0,0,0.15)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}><div><h2 style={{ fontSize: 20, fontWeight: 800, color: '#111827', margin: '0 0 6px' }}>{selectedMpl.mpl_number}</h2><StatusBadge status={selectedMpl.status} /></div><button onClick={() => setShowDetail(false)} style={{ padding: 8, borderRadius: 8, border: '1px solid #e5e7eb', backgroundColor: '#fff', cursor: 'pointer' }}><XCircle size={18} style={{ color: '#6b7280' }} /></button></div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, padding: 16, backgroundColor: '#f9fafb', borderRadius: 10, marginBottom: 20, fontSize: 13 }}>
-                    <div><span style={{ color: '#6b7280' }}>Item Code:</span> <strong>{selectedMpl.item_code}</strong></div>
-                    <div><span style={{ color: '#6b7280' }}>PO #:</span> <strong>{selectedMpl.po_number || '—'}</strong></div>
-                    <div><span style={{ color: '#6b7280' }}>Invoice #:</span> <strong>{selectedMpl.invoice_number || '—'}</strong></div>
-                    <div><span style={{ color: '#6b7280' }}>Pallets:</span> <strong>{selectedMpl.total_pallets}</strong></div>
-                    <div><span style={{ color: '#6b7280' }}>Qty:</span> <strong>{selectedMpl.total_quantity.toLocaleString()}</strong></div>
-                    <div><span style={{ color: '#6b7280' }}>Gross Wt:</span> <strong>{Number(selectedMpl.total_gross_weight_kg).toFixed(2)} kg</strong></div>
-                </div>
-                <h3 style={{ fontSize: 15, fontWeight: 700, color: '#111827', marginBottom: 10 }}>Pallet Breakdown</h3>
-                {detailLoading ? <div style={{ padding: 24, textAlign: 'center', color: '#9ca3af' }}>Loading...</div> : selectedPallets.map(p => (
-                    <div key={p.id} style={{ border: '1px solid #e5e7eb', borderRadius: 8, marginBottom: 12, overflow: 'hidden' }}>
-                        <div style={{ padding: '10px 14px', backgroundColor: '#f0f4ff', display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 600 }}><span style={{ color: '#1e3a8a' }}>{p.pallet_number}</span><span style={{ color: '#4b5563' }}>{p.container_count} boxes · {p.quantity.toLocaleString()} PCS</span></div>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}><thead><tr style={{ backgroundColor: '#fafbfc' }}><th style={{ padding: '6px 10px', textAlign: 'left', color: '#6b7280' }}>Packing Box ID</th><th style={{ padding: '6px 10px', textAlign: 'right', color: '#6b7280' }}>Qty</th><th style={{ padding: '6px 10px', textAlign: 'left', color: '#6b7280' }}>Type</th><th style={{ padding: '6px 10px', textAlign: 'left', color: '#6b7280' }}>Operator</th></tr></thead>
-                            <tbody>{(p.inner_box_details || []).map((box: any, bi: number) => (
-                                <tr key={bi} style={{ borderTop: '1px solid #f3f4f6' }}><td style={{ padding: '5px 10px', fontFamily: 'monospace', fontWeight: 700, color: '#7c3aed' }}>{box.packing_id || '—'}</td><td style={{ padding: '5px 10px', textAlign: 'right', fontWeight: 600 }}>{box.quantity.toLocaleString()}</td><td style={{ padding: '5px 10px' }}><span style={{ padding: '1px 6px', borderRadius: 8, fontSize: 10, fontWeight: 600, backgroundColor: box.is_adjustment ? '#fef3c7' : '#d1fae5', color: box.is_adjustment ? '#92400e' : '#065f46' }}>{box.is_adjustment ? 'ADJ' : 'STD'}</span></td><td style={{ padding: '5px 10px', color: '#6b7280' }}>{box.operator}</td></tr>
-                            ))}</tbody></table>
+            {
+                showDetail && selectedMpl && <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', justifyContent: 'flex-end', zIndex: 999 }} onClick={e => { if (e.target === e.currentTarget) setShowDetail(false); }}><div style={{ width: 640, maxWidth: '90vw', backgroundColor: '#fff', height: '100vh', overflowY: 'auto', padding: 28, boxShadow: '-8px 0 30px rgba(0,0,0,0.15)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}><div><h2 style={{ fontSize: 22, fontWeight: 800, color: '#111827', margin: '0 0 8px' }}>{selectedMpl.mpl_number}</h2><StatusBadge status={selectedMpl.status} /></div><button onClick={() => setShowDetail(false)} style={{ padding: 8, borderRadius: 8, border: '1px solid #e5e7eb', backgroundColor: '#fff', cursor: 'pointer' }}><XCircle size={18} style={{ color: '#6b7280' }} /></button></div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, padding: 16, backgroundColor: '#f9fafb', borderRadius: 12, marginBottom: 24, fontSize: 13 }}>
+                        <div><span style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.3px' }}>MSN</span><div style={{ fontWeight: 600, marginTop: 2 }}>{selectedMpl.item_code}</div></div>
+                        <div><span style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.3px' }}>PO #</span><div style={{ fontWeight: 600, marginTop: 2 }}>{selectedMpl.po_number || '—'}</div></div>
+                        <div><span style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.3px' }}>Invoice #</span><div style={{ fontWeight: 600, marginTop: 2 }}>{selectedMpl.invoice_number || '—'}</div></div>
+                        <div><span style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.3px' }}>Pallets</span><div style={{ fontWeight: 700, marginTop: 2, color: '#1e3a8a' }}>{selectedMpl.total_pallets}</div></div>
+                        <div><span style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.3px' }}>Qty</span><div style={{ fontWeight: 700, marginTop: 2, fontFamily: 'monospace' }}>{selectedMpl.total_quantity.toLocaleString()}</div></div>
+                        <div><span style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.3px' }}>Gross Wt</span><div style={{ fontWeight: 700, marginTop: 2, fontFamily: 'monospace' }}>{Number(selectedMpl.total_gross_weight_kg).toFixed(2)} kg</div></div>
                     </div>
-                ))}
-                {auditLog.length > 0 && <><h3 style={{ fontSize: 15, fontWeight: 700, color: '#111827', margin: '20px 0 10px' }}>Audit Trail</h3><div style={{ fontSize: 12 }}>{auditLog.map(a => (<div key={a.id} style={{ display: 'flex', gap: 12, padding: '8px 0', borderBottom: '1px solid #f3f4f6', alignItems: 'center' }}><span style={{ color: '#9ca3af', minWidth: 100, whiteSpace: 'nowrap', fontSize: 11 }}>{new Date(a.performed_at).toLocaleString()}</span><span style={{ fontWeight: 600, color: '#374151' }}>{a.action}</span>{a.from_status && a.to_status && <span style={{ color: '#6b7280' }}>{a.from_status} → {a.to_status}</span>}<span style={{ color: '#9ca3af', marginLeft: 'auto' }}>{a.performer_name}</span></div>))}</div></>}
-            </div></div>}
+                    <h3 style={{ fontSize: 15, fontWeight: 700, color: '#111827', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}><Package size={16} style={{ color: '#1e3a8a' }} />Pallet Breakdown</h3>
+                    {detailLoading ? <div style={{ padding: 32, textAlign: 'center', color: '#9ca3af', display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 8 }}><Loader2 size={22} style={{ animation: 'spin 1s linear infinite', color: '#1e3a8a' }} /><span style={{ fontSize: 13 }}>Loading pallets...</span></div> : selectedPallets.map(p => (
+                        <div key={p.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, marginBottom: 12, overflow: 'hidden' }}>
+                            <div style={{ padding: '10px 16px', background: 'linear-gradient(135deg, #eff6ff, #f0f4ff)', display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 600, borderBottom: '1px solid #e5e7eb' }}><span style={{ color: '#1e3a8a', fontFamily: 'monospace' }}>{p.pallet_number}</span><span style={{ color: '#4b5563' }}>{p.container_count} boxes · {p.quantity.toLocaleString()} PCS</span></div>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}><thead><tr style={{ backgroundColor: '#fafbfc' }}><th style={{ padding: '8px 12px', textAlign: 'left', color: '#6b7280', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.3px' }}>Packing Box ID</th><th style={{ padding: '8px 12px', textAlign: 'right', color: '#6b7280', fontWeight: 700, fontSize: 10, textTransform: 'uppercase' }}>Qty</th><th style={{ padding: '8px 12px', textAlign: 'left', color: '#6b7280', fontWeight: 700, fontSize: 10, textTransform: 'uppercase' }}>Type</th><th style={{ padding: '8px 12px', textAlign: 'left', color: '#6b7280', fontWeight: 700, fontSize: 10, textTransform: 'uppercase' }}>Operator</th></tr></thead>
+                                <tbody>{(p.inner_box_details || []).map((box: any, bi: number) => (
+                                    <tr key={bi} style={{ borderTop: '1px solid #f3f4f6' }}><td style={{ padding: '6px 12px', fontFamily: 'monospace', fontWeight: 700, color: '#7c3aed' }}>{box.packing_id || '—'}</td><td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600, fontFamily: 'monospace' }}>{box.quantity.toLocaleString()}</td><td style={{ padding: '6px 12px' }}><span style={{ padding: '2px 8px', borderRadius: 8, fontSize: 10, fontWeight: 700, backgroundColor: box.is_adjustment ? '#fef3c7' : '#d1fae5', color: box.is_adjustment ? '#92400e' : '#065f46' }}>{box.is_adjustment ? 'ADJ' : 'STD'}</span></td><td style={{ padding: '6px 12px', color: '#6b7280' }}>{box.operator}</td></tr>
+                                ))}</tbody></table>
+                        </div>
+                    ))}
+                    {auditLog.length > 0 && <><h3 style={{ fontSize: 15, fontWeight: 700, color: '#111827', margin: '24px 0 12px', display: 'flex', alignItems: 'center', gap: 8 }}><Clock size={16} style={{ color: '#1e3a8a' }} />Audit Trail</h3><div style={{ fontSize: 12 }}>{auditLog.map(a => (<div key={a.id} style={{ display: 'flex', gap: 12, padding: '10px 0', borderBottom: '1px solid #f3f4f6', alignItems: 'center' }}><span style={{ color: '#9ca3af', minWidth: 110, whiteSpace: 'nowrap', fontSize: 11, fontFamily: 'monospace' }}>{new Date(a.performed_at).toLocaleString()}</span><span style={{ fontWeight: 700, color: '#374151' }}>{a.action}</span>{a.from_status && a.to_status && <span style={{ color: '#6b7280', display: 'flex', alignItems: 'center', gap: 4 }}>{a.from_status} <ChevronRight size={12} /> {a.to_status}</span>}<span style={{ color: '#9ca3af', marginLeft: 'auto', fontSize: 11 }}>{a.performer_name}</span></div>))}</div></>}
+                </div></div>
+            }
 
-            <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-        </div>
+            <style>{`
+                @keyframes spin{to{transform:rotate(360deg)}}
+                @keyframes slideInDown{from{opacity:0;transform:translateY(-16px)}to{opacity:1;transform:translateY(0)}}
+            `}</style>
+        </div >
     );
 }

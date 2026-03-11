@@ -1402,7 +1402,50 @@ export async function fetchAllPackingListData(): Promise<(PackingListData & { pa
 }
 
 /**
- * Create or update packing list data header
+ * Default values for packing list data — pre-filled from company template.
+ * Only Invoice No/Date, PO No/Date, Ship Via, Vendor No, and packing details
+ * are entered by the user. Everything else uses these defaults.
+ */
+export const PACKING_LIST_DEFAULTS: Partial<Omit<PackingListData, 'id' | 'packing_list_id' | 'created_by' | 'created_at' | 'updated_at'>> = {
+    // Exporter
+    exporter_name: 'AUTOCRAT ENGINEERS',
+    exporter_address: 'NO. 21 & 22, Export Promotion Industrial Park, Phase - I, Whitefield, Bangalore-560066, KARNATAKA - INDIA',
+    exporter_phone: 'PH 91 80 43330127',
+    exporter_email: 'dispatch@autocratengineers.in',
+    exporter_gstin: '29ABLPK6831H1ZB',
+    exporter_ref: '-NIL-',
+    exporter_iec_code: '0702002747',
+    exporter_ad_code: '6361504-8400009',
+    // Consignee
+    consignee_name: 'Milano Millworks, LLC',
+    consignee_address: '8223 Industrial Blvd NE Leland, NC 28451 USA',
+    consignee_phone: '(910) 443-3075',
+    // Buyer
+    buyer_name: 'Brown, Sherry',
+    buyer_phone: '919-209-2411',
+    buyer_email: 'sherry.brown@opwglobal.com',
+    // Bill To
+    bill_to_name: 'OPW Fueling Components, LLC',
+    bill_to_address: '3250 US Highway 70 Business West, Smithfield, NC 27577, United States',
+    // Shipping
+    pre_carriage_by: 'Road',
+    place_of_receipt: 'BANGALORE',
+    country_of_origin: 'INDIA',
+    country_of_destination: 'UNITED STATES',
+    port_of_loading: 'BANGALORE, ICD',
+    terms_of_delivery: 'DDP',
+    payment_terms: 'Net-30',
+    final_destination: 'CHARLESTON',
+    mode_of_transport: 'Sea',
+    // Item description
+    item_description_header: 'PRECISION MACHINED COMPONENTS',
+    item_description_sub_header: '(OTHERS FUELING COMPONENTS)',
+};
+
+/**
+ * Create or update packing list data header.
+ * On CREATE, merges PACKING_LIST_DEFAULTS with provided data
+ * so all static fields are pre-filled.
  */
 export async function upsertPackingListData(
     packingListId: string,
@@ -1429,11 +1472,13 @@ export async function upsertPackingListData(
         return updated;
     }
 
+    // New record: merge defaults with provided data (user data overrides defaults)
     const { data: created, error } = await supabase
         .from('pack_packing_list_data')
         .insert({
-            packing_list_id: packingListId,
+            ...PACKING_LIST_DEFAULTS,
             ...data,
+            packing_list_id: packingListId,
             created_by: userId,
             updated_by: userId,
         })
@@ -1484,7 +1529,7 @@ export async function autoPopulatePalletDetails(
         .from('pack_pallets')
         .select(`
                 *,
-                items!pack_pallets_item_id_fkey (item_name, master_serial_no, part_number)
+                items!pack_pallets_item_id_fkey (item_name, master_serial_no, part_number, revision)
             `)
         .in('id', palletIds);
 
@@ -1525,6 +1570,7 @@ export async function autoPopulatePalletDetails(
             net_weight_kg: netWt,
             gross_weight_kg: grossWt,
             line_number: idx + 1,
+            part_revision: p.items?.revision || null,
         };
     });
 
@@ -1610,6 +1656,24 @@ export async function getPackingListFullBacktrack(packingListId: string): Promis
         palletDetails = await fetchPackingListPalletDetails(headerData.id);
     }
 
+    // 3.5 Enrich missing part_revision from items table
+    const needsRevision = palletDetails.filter(d => !d.part_revision && d.item_code);
+    if (needsRevision.length > 0) {
+        const itemCodes = [...new Set(needsRevision.map(d => d.item_code))];
+        const { data: items } = await supabase
+            .from('items')
+            .select('item_code, revision')
+            .in('item_code', itemCodes);
+        if (items && items.length > 0) {
+            const revMap: Record<string, string> = {};
+            for (const it of items) { if (it.revision) revMap[it.item_code] = it.revision; }
+            palletDetails = palletDetails.map(d => ({
+                ...d,
+                part_revision: d.part_revision || revMap[d.item_code] || null,
+            }));
+        }
+    }
+
     // 4. Fetch all containers in this PL's pallets
     const { data: plItems } = await supabase
         .from('pack_packing_list_items')
@@ -1628,7 +1692,8 @@ export async function getPackingListFullBacktrack(packingListId: string): Promis
                         container_number, container_type, quantity, is_adjustment,
                         movement_number, packing_box_id,
                         reference_doc_type, reference_doc_number, created_at,
-                        profiles!pack_containers_created_by_fkey (full_name)
+                        profiles!pack_containers_created_by_fkey (full_name),
+                        packing_boxes:packing_box_id (packing_id)
                     )
                 `)
             .in('pallet_id', palletIds)
@@ -1643,6 +1708,7 @@ export async function getPackingListFullBacktrack(packingListId: string): Promis
             movement_number: row.pack_containers?.movement_number,
             operator_name: row.pack_containers?.profiles?.full_name || '—',
             packing_box_id: row.pack_containers?.packing_box_id,
+            packing_id: row.pack_containers?.packing_boxes?.packing_id || null,
             reference_doc_type: row.pack_containers?.reference_doc_type,
             reference_doc_number: row.pack_containers?.reference_doc_number,
             created_at: row.pack_containers?.created_at,
