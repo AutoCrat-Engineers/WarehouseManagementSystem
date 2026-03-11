@@ -17,7 +17,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
           cache: npm
 
       - name: Install dependencies
@@ -28,6 +28,7 @@ jobs:
 
       - name: Build app
         run: npm run build
+
 
   deploy:
     needs: build-test
@@ -42,14 +43,13 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker pull node:18-alpine || true
           docker build --pull -t shravanaweb/wms:latest -f devops/docker/Dockerfile .
 
       - name: Push Docker image
         run: docker push shravanaweb/wms:latest
 
       - name: Deploy on EC2 (clean replace strategy)
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
