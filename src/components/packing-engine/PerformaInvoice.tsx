@@ -9,11 +9,15 @@
  *   5. Review full PI details
  *   6. Approve → Enter email addresses → Send approval notification → Stock movement FG→Transit
  */
-import React, { useState, useEffect, useCallback } from 'react';
-import { Search, Truck, CheckCircle2, Package, Plus, Loader2, XCircle, Eye, AlertCircle, RefreshCw, ChevronLeft, ChevronRight, Hash, ArrowRight, Mail, Send, FileText, ShieldCheck, Anchor, Printer } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Search, Truck, CheckCircle2, Package, Plus, Loader2, XCircle, Eye, AlertCircle, RefreshCw, ChevronLeft, ChevronRight, Hash, ArrowRight, Mail, Send, FileText, ShieldCheck, Anchor, Printer, ChevronDown, X, Settings } from 'lucide-react';
 import { getSupabaseClient } from '../../utils/supabase/client';
 import { fetchMasterPackingLists, createPerformaInvoice, approvePerformaInvoice } from './mplService';
 import type { MasterPackingList } from './mplService';
+import {
+    SummaryCardsGrid, SummaryCard, FilterBar, SearchBox, ActionBar, AddButton,
+    sharedThStyle, sharedTdStyle,
+} from '../ui/SharedComponents';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 interface Props { accessToken?: string; userRole?: UserRole; userPerms?: Record<string, boolean>; onNavigate?: (view: string) => void; }
@@ -33,6 +37,55 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+    // List search & filter
+    const [searchTerm, setSearchTerm] = useState('');
+    type StatusFilter = 'ALL' | 'DRAFT' | 'CONFIRMED' | 'STOCK_MOVED';
+    const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
+
+    // Toast notification
+    const [toast, setToast] = useState<{ type: 'success' | 'error'; title: string; text: string } | null>(null);
+    const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const showToast = useCallback((type: 'success' | 'error', title: string, text: string) => {
+        if (toastTimer.current) clearTimeout(toastTimer.current);
+        setToast({ type, title, text });
+        toastTimer.current = setTimeout(() => setToast(null), 5000);
+    }, []);
+
+    // Actions dropdown
+    const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+    const [dropdownDirection, setDropdownDirection] = useState<'up' | 'down'>('down');
+    const dropdownRef = useRef<HTMLDivElement | null>(null);
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (activeDropdown && dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) setActiveDropdown(null);
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [activeDropdown]);
+
+    // Stats
+    const stats = useMemo(() => ({
+        total: pis.length,
+        draft: pis.filter(p => p.status === 'DRAFT').length,
+        confirmed: pis.filter(p => p.status === 'CONFIRMED').length,
+        dispatched: pis.filter(p => p.status === 'STOCK_MOVED').length,
+    }), [pis]);
+
+    // Filtered PIs
+    const filteredPIs = useMemo(() => {
+        let result = pis;
+        if (statusFilter !== 'ALL') result = result.filter(p => p.status === statusFilter);
+        if (searchTerm.trim()) {
+            const s = searchTerm.toLowerCase();
+            result = result.filter(p =>
+                p.proforma_number.toLowerCase().includes(s) ||
+                (p.shipment_number || '').toLowerCase().includes(s) ||
+                (p.customer_name || '').toLowerCase().includes(s)
+            );
+        }
+        return result;
+    }, [pis, statusFilter, searchTerm]);
 
     // Create flow
     const [shipmentNumber, setShipmentNumber] = useState('');
@@ -398,49 +451,134 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
         const s = styles[status] || styles.DRAFT;
         return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, backgroundColor: s.bg, color: s.color }}>{s.label}</span>;
     };
-    const th: React.CSSProperties = { padding: '12px 16px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#374151', textTransform: 'uppercase', borderBottom: '2px solid #e5e7eb', whiteSpace: 'nowrap' };
-    const td: React.CSSProperties = { padding: '10px 16px', fontSize: 13, borderBottom: '1px solid #f3f4f6' };
+
+    const th = sharedThStyle;
+    const td = sharedTdStyle;
+
+    if (loading && step === 'LIST') return (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '80px 24px', gap: 16 }}>
+            <Loader2 size={32} style={{ color: 'var(--enterprise-primary)', animation: 'spin 0.8s linear infinite' }} />
+            <p style={{ color: 'var(--enterprise-gray-600)', fontWeight: 500 }}>Loading Performa Invoices…</p>
+        </div>
+    );
 
     return (
-        <div style={{ padding: 24, maxWidth: 1400, margin: '0 auto' }}>
-            {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-                <div><h1 style={{ fontSize: 24, fontWeight: 800, color: '#111827', margin: '0 0 4px' }}>Performa Invoice</h1><p style={{ fontSize: 14, color: '#6b7280', margin: 0 }}>Create shipment-based Performa Invoices and dispatch stock</p></div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            {/* ═══ FLOATING TOAST ═══ */}
+            {toast && (
+                <div style={{
+                    position: 'fixed', top: 24, right: 24, zIndex: 10000, minWidth: 360, maxWidth: 440,
+                    padding: '16px 20px', borderRadius: 14,
+                    background: toast.type === 'success' ? 'linear-gradient(135deg, #f0fdf4, #dcfce7)' : 'linear-gradient(135deg, #fef2f2, #fee2e2)',
+                    border: `1.5px solid ${toast.type === 'success' ? '#86efac' : '#fca5a5'}`,
+                    boxShadow: '0 10px 40px rgba(0,0,0,0.12)', display: 'flex', alignItems: 'flex-start', gap: 12,
+                }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 10, flexShrink: 0, background: toast.type === 'success' ? 'linear-gradient(135deg, #16a34a, #15803d)' : 'linear-gradient(135deg, #dc2626, #b91c1c)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {toast.type === 'success' ? <CheckCircle2 size={18} style={{ color: '#fff' }} /> : <XCircle size={18} style={{ color: '#fff' }} />}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 800, color: toast.type === 'success' ? '#14532d' : '#7f1d1d', marginBottom: 2 }}>{toast.title}</div>
+                        <div style={{ fontSize: 12, fontWeight: 500, color: toast.type === 'success' ? '#166534' : '#991b1b' }}>{toast.text}</div>
+                    </div>
+                    <button onClick={() => { if (toastTimer.current) clearTimeout(toastTimer.current); setToast(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, color: toast.type === 'success' ? '#16a34a' : '#dc2626' }}><X size={16} /></button>
+                </div>
+            )}
+
+            {error && <div style={{ padding: '12px 16px', borderRadius: 'var(--border-radius-md)', backgroundColor: 'var(--enterprise-error-bg, #fee2e2)', border: '1px solid var(--enterprise-error, #dc2626)', color: 'var(--enterprise-error, #dc2626)', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><AlertCircle size={16} /> {error}<button onClick={() => setError(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}><XCircle size={16} /></button></div>}
+
+            {/* Back button for non-LIST steps */}
+            {step !== 'LIST' && (
                 <div style={{ display: 'flex', gap: 8 }}>
-                    {step !== 'LIST' && <button onClick={() => setStep('LIST')} style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid #d1d5db', backgroundColor: '#fff', fontWeight: 600, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}><ChevronLeft size={16} /> Back</button>}
-                    {step === 'LIST' && canCreate && <button onClick={handleStartCreate} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg, #1e3a8a, #3b82f6)', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 2px 8px rgba(30,58,138,0.25)' }}><Plus size={16} /> New Performa Invoice</button>}
+                    <button onClick={() => setStep('LIST')} style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid #d1d5db', backgroundColor: '#fff', fontWeight: 600, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, transition: 'all 0.15s ease' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = '#fff'}><ChevronLeft size={16} /> Back to List</button>
                 </div>
-            </div>
+            )}
 
-            {successMsg && <div style={{ padding: '12px 16px', marginBottom: 16, borderRadius: 8, backgroundColor: '#d1fae5', color: '#065f46', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, fontWeight: 600 }}><CheckCircle2 size={16} /> {successMsg}</div>}
-            {error && <div style={{ padding: '12px 16px', marginBottom: 16, borderRadius: 8, backgroundColor: '#fee2e2', color: '#dc2626', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><AlertCircle size={16} /> {error}<button onClick={() => setError(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }}><XCircle size={16} /></button></div>}
-
-            {/* ═══ LIST ═══ */}
+            {/* ═══ SUMMARY CARDS ═══ */}
             {step === 'LIST' && (
-                <div style={{ backgroundColor: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
-                    {loading ? <div style={{ padding: 48, textAlign: 'center', color: '#9ca3af' }}><Loader2 size={24} style={{ animation: 'spin 1s linear infinite' }} /><p>Loading...</p></div> :
-                        pis.length === 0 ? <div style={{ padding: 48, textAlign: 'center', color: '#9ca3af' }}><Truck size={32} style={{ marginBottom: 8, opacity: 0.5 }} /><p style={{ fontWeight: 600 }}>No Performa Invoices yet</p></div> :
-                            <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                                <thead><tr style={{ backgroundColor: '#f9fafb' }}><th style={th}>PI Number</th><th style={th}>Shipment #</th><th style={{ ...th, textAlign: 'center' }}>MPLs</th><th style={{ ...th, textAlign: 'center' }}>Pallets</th><th style={{ ...th, textAlign: 'right' }}>Quantity</th><th style={th}>Status</th><th style={th}>Created</th><th style={th}>Actions</th></tr></thead>
-                                <tbody>{pis.map((pi, idx) => (
-                                    <tr key={pi.id} style={{ borderBottom: '1px solid #f3f4f6', backgroundColor: idx % 2 === 0 ? '#fff' : '#fafbfc', cursor: 'pointer', transition: 'background 150ms' }} onClick={() => handleViewDetail(pi)} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#eff6ff'} onMouseLeave={e => e.currentTarget.style.backgroundColor = idx % 2 === 0 ? '#fff' : '#fafbfc'}>
-                                        <td style={{ ...td, fontFamily: 'monospace', fontWeight: 700, color: '#1e3a8a' }}>{pi.proforma_number}</td>
-                                        <td style={{ ...td, fontWeight: 600 }}>{pi.shipment_number || '—'}</td>
-                                        <td style={{ ...td, textAlign: 'center', fontWeight: 600 }}>{pi.total_invoices}</td>
-                                        <td style={{ ...td, textAlign: 'center', fontWeight: 600 }}>{pi.total_pallets}</td>
-                                        <td style={{ ...td, textAlign: 'right', fontFamily: 'monospace', fontWeight: 600 }}>{pi.total_quantity.toLocaleString()}</td>
-                                        <td style={td}><StatusBadge status={pi.status} /></td>
-                                        <td style={{ ...td, fontSize: 12, color: '#6b7280' }}>{new Date(pi.created_at).toLocaleDateString()}</td>
-                                        <td style={td} onClick={e => e.stopPropagation()}><div style={{ display: 'flex', gap: 4 }}>
-                                            <button onClick={() => handleViewDetail(pi)} title="View" style={{ padding: 6, borderRadius: 6, border: '1px solid #e5e7eb', backgroundColor: '#fff', cursor: 'pointer' }}><Eye size={14} style={{ color: '#3b82f6' }} /></button>
-                                            <button onClick={() => handlePrintPI(pi)} title="Print Proforma Invoice" style={{ padding: 6, borderRadius: 6, border: '1px solid #e5e7eb', backgroundColor: '#fff', cursor: 'pointer' }}><Printer size={14} style={{ color: '#059669' }} /></button>
-                                            {pi.status === 'DRAFT' && canCreate && <button onClick={() => handleConfirmPI(pi)} style={{ padding: '6px 10px', borderRadius: 6, border: 'none', backgroundColor: '#1e3a8a', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>Confirm</button>}
-                                            {pi.status === 'CONFIRMED' && canApprove && <button onClick={() => handleOpenApprove(pi)} style={{ padding: '6px 10px', borderRadius: 6, border: 'none', backgroundColor: '#059669', color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>Approve</button>}
-                                        </div></td>
-                                    </tr>
-                                ))}</tbody>
-                            </table></div>}
-                </div>
+                <>
+                    <SummaryCardsGrid>
+                        <SummaryCard label="Total Invoices" value={stats.total} icon={<FileText size={22} style={{ color: 'var(--enterprise-primary)' }} />} color="var(--enterprise-primary)" bgColor="rgba(30,58,138,0.1)" isActive={statusFilter === 'ALL'} onClick={() => setStatusFilter('ALL')} />
+                        <SummaryCard label="Draft" value={stats.draft} icon={<Hash size={22} style={{ color: '#d97706' }} />} color="#d97706" bgColor="rgba(217,119,6,0.1)" isActive={statusFilter === 'DRAFT'} onClick={() => setStatusFilter(statusFilter === 'DRAFT' ? 'ALL' : 'DRAFT')} />
+                        <SummaryCard label="Confirmed" value={stats.confirmed} icon={<CheckCircle2 size={22} style={{ color: '#1d4ed8' }} />} color="#1d4ed8" bgColor="rgba(29,78,216,0.1)" isActive={statusFilter === 'CONFIRMED'} onClick={() => setStatusFilter(statusFilter === 'CONFIRMED' ? 'ALL' : 'CONFIRMED')} />
+                        <SummaryCard label="Dispatched" value={stats.dispatched} icon={<Truck size={22} style={{ color: '#059669' }} />} color="#059669" bgColor="rgba(5,150,105,0.1)" isActive={statusFilter === 'STOCK_MOVED'} onClick={() => setStatusFilter(statusFilter === 'STOCK_MOVED' ? 'ALL' : 'STOCK_MOVED')} />
+                    </SummaryCardsGrid>
+
+                    {/* ═══ FILTER BAR ═══ */}
+                    <FilterBar>
+                        <SearchBox value={searchTerm} onChange={setSearchTerm} placeholder="Search by PI number, shipment, customer…" />
+                        <ActionBar>
+                            {step === 'LIST' && canCreate && <AddButton label="New PI" onClick={handleStartCreate} />}
+                        </ActionBar>
+                    </FilterBar>
+
+                    {/* ═══ TABLE ═══ */}
+                    <div style={{ backgroundColor: 'var(--card-background, #fff)', borderRadius: 'var(--border-radius-lg, 12px)', border: '1px solid var(--border-color, #e5e7eb)', overflow: 'hidden', boxShadow: 'var(--shadow-sm)' }}>
+                        {filteredPIs.length === 0 ? (
+                            <div style={{ padding: '60px 24px', textAlign: 'center' }}>
+                                <FileText size={48} style={{ color: 'var(--enterprise-gray-300)', marginBottom: 12 }} />
+                                <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--enterprise-gray-600)', marginBottom: 4 }}>{searchTerm || statusFilter !== 'ALL' ? 'No Matching Invoices' : 'No Performa Invoices'}</h3>
+                                <p style={{ fontSize: 13, color: 'var(--enterprise-gray-500)' }}>{searchTerm || statusFilter !== 'ALL' ? 'Try adjusting your search or filter' : 'Create your first Performa Invoice to get started'}</p>
+                            </div>
+                        ) : (
+                            <div style={{ overflowX: 'auto' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                    <thead>
+                                        <tr style={{ backgroundColor: 'var(--table-header-bg, #f9fafb)', borderBottom: '2px solid var(--table-border, #e5e7eb)' }}>
+                                            <th style={th}>PI Number</th>
+                                            <th style={th}>Shipment #</th>
+                                            <th style={{ ...th, textAlign: 'center' }}>MPLs</th>
+                                            <th style={{ ...th, textAlign: 'center' }}>Pallets</th>
+                                            <th style={{ ...th, textAlign: 'right' }}>Quantity</th>
+                                            <th style={{ ...th, textAlign: 'center' }}>Status</th>
+                                            <th style={th}>Created</th>
+                                            <th style={{ ...th, textAlign: 'center' }}>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>{filteredPIs.map((pi, idx) => (
+                                        <tr key={pi.id}
+                                            style={{ backgroundColor: idx % 2 === 0 ? 'white' : 'var(--table-stripe, #fafbfc)', borderBottom: '1px solid var(--table-border, #f3f4f6)', transition: 'background-color var(--transition-fast, 150ms)', cursor: 'pointer' }}
+                                            onClick={() => handleViewDetail(pi)}
+                                            onMouseEnter={e => e.currentTarget.style.backgroundColor = 'var(--table-hover, #eff6ff)'}
+                                            onMouseLeave={e => e.currentTarget.style.backgroundColor = idx % 2 === 0 ? 'white' : 'var(--table-stripe, #fafbfc)'}
+                                        >
+                                            <td style={{ ...td, fontFamily: 'monospace', fontWeight: 600, color: 'var(--enterprise-primary)' }}>{pi.proforma_number}</td>
+                                            <td style={{ ...td, fontWeight: 600, color: 'var(--enterprise-gray-700)' }}>{pi.shipment_number || <span style={{ color: 'var(--enterprise-gray-300)' }}>—</span>}</td>
+                                            <td style={{ ...td, textAlign: 'center', fontWeight: 600 }}>{pi.total_invoices}</td>
+                                            <td style={{ ...td, textAlign: 'center', fontWeight: 600 }}>{pi.total_pallets}</td>
+                                            <td style={{ ...td, textAlign: 'right', fontFamily: 'monospace', fontWeight: 600 }}>{pi.total_quantity.toLocaleString()}</td>
+                                            <td style={{ ...td, textAlign: 'center' }}><StatusBadge status={pi.status} /></td>
+                                            <td style={{ ...td, fontSize: 12, color: 'var(--enterprise-gray-600)', whiteSpace: 'nowrap' }}>{new Date(pi.created_at).toLocaleDateString()}</td>
+                                            {/* Actions dropdown */}
+                                            <td style={{ ...td, textAlign: 'center', padding: '8px 12px', position: 'relative' }} onClick={e => e.stopPropagation()}>
+                                                <div ref={activeDropdown === pi.id ? dropdownRef : null} style={{ display: 'inline-flex', alignItems: 'center', gap: 0, position: 'relative' }}>
+                                                    <button onClick={() => handleViewDetail(pi)} style={{ height: 34, minWidth: 80, padding: '0 14px', borderRadius: '8px 0 0 8px', border: '1px solid #e5e7eb', borderRight: 'none', backgroundColor: 'white', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 13, fontWeight: 500, color: '#374151', transition: 'all 0.15s ease', whiteSpace: 'nowrap' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'white'}>
+                                                        <Eye size={15} /> View
+                                                    </button>
+                                                    <button onClick={(e) => { e.stopPropagation(); if (activeDropdown === pi.id) { setActiveDropdown(null); } else { const rect = e.currentTarget.getBoundingClientRect(); setDropdownDirection(window.innerHeight - rect.bottom < 200 ? 'up' : 'down'); setActiveDropdown(pi.id); } }} style={{ height: 34, padding: '0 8px', border: '1px solid #e5e7eb', borderRadius: '0 8px 8px 0', backgroundColor: 'white', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: '#374151', transition: 'all 0.15s ease' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'white'}>
+                                                        <ChevronDown size={14} style={{ transition: 'transform 0.2s', transform: activeDropdown === pi.id ? 'rotate(180deg)' : 'rotate(0deg)' }} />
+                                                    </button>
+                                                    {activeDropdown === pi.id && (
+                                                        <div style={{ position: 'absolute', ...(dropdownDirection === 'up' ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), right: 0, zIndex: 9999, width: 200, backgroundColor: 'white', borderRadius: 12, boxShadow: '0 10px 40px rgba(0,0,0,0.15)', border: '1px solid #e5e7eb', overflow: 'hidden' }}>
+                                                            <button onClick={() => { handlePrintPI(pi); setActiveDropdown(null); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: 14, textAlign: 'left', color: '#059669' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f0fdf4'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                                                                <Printer size={16} /> Print
+                                                            </button>
+                                                            {pi.status === 'DRAFT' && canCreate && (<><div style={{ borderTop: '1px solid #f3f4f6' }} /><button onClick={() => { handleConfirmPI(pi); setActiveDropdown(null); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: 14, textAlign: 'left', color: '#1e3a8a' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#eff6ff'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                                                                <CheckCircle2 size={16} /> Confirm
+                                                            </button></>)}
+                                                            {pi.status === 'CONFIRMED' && canApprove && (<><div style={{ borderTop: '1px solid #f3f4f6' }} /><button onClick={() => { handleOpenApprove(pi); setActiveDropdown(null); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: 14, textAlign: 'left', color: '#059669' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f0fdf4'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                                                                <ShieldCheck size={16} /> Approve & Dispatch
+                                                            </button></>)}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}</tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+                </>
             )}
 
             {/* ═══ STEP 1: SHIPMENT NUMBER ═══ */}

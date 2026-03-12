@@ -1435,8 +1435,8 @@ export const PACKING_LIST_DEFAULTS: Partial<Omit<PackingListData, 'id' | 'packin
     port_of_loading: 'BANGALORE, ICD',
     terms_of_delivery: 'DDP',
     payment_terms: 'Net-30',
-    final_destination: 'CHARLESTON',
-    mode_of_transport: 'Sea',
+    final_destination: 'UNITED STATES',
+    mode_of_transport: 'OCEAN',
     // Item description
     item_description_header: 'PRECISION MACHINED COMPONENTS',
     item_description_sub_header: '(OTHERS FUELING COMPONENTS)',

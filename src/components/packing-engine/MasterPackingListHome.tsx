@@ -12,7 +12,7 @@ import { fetchMasterPackingLists, confirmMpl, markMplPrinted, cancelMpl, fetchMp
 import type { MasterPackingList, MplPallet, MplStatus, DispatchAuditEntry } from './mplService';
 import { getSupabaseClient } from '../../utils/supabase/client';
 import * as svc from './packingEngineService';
-import JsBarcode from 'jsbarcode';
+import QRCode from 'qrcode';
 import type { PackingSpec } from './packingEngineService';
 import { Card, Button, Badge, EmptyState, ModuleLoader } from '../ui/EnterpriseUI';
 import {
@@ -230,7 +230,7 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
 
         const D = {
             expName: hd?.exporter_name || 'AUTOCRAT ENGINEERS',
-            expAddr: hd?.exporter_address || 'NO. 21 & 22, Export Promotion Industrial Park,\nPhase - I, Whitefield, Bangalore-560066,\nKARNATAKA - INDIA',
+            expAddr: hd?.exporter_address || 'NO. 21 & 22, Export Promotion Industrial Park,\nPhase - I,\nWhitefield, Bangalore-560066,\nKARNATAKA - INDIA',
             expPhone: hd?.exporter_phone || 'PH 91 80 43330127',
             expEmail: hd?.exporter_email || 'dispatch@autocratengineers.in',
             expGstin: hd?.exporter_gstin || '29ABLPK6831H1ZB',
@@ -254,7 +254,7 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
             delivery: hd?.terms_of_delivery || 'DDP',
             payment: hd?.payment_terms || 'Net-30',
             portDisc: hd?.port_of_discharge || 'CHARLESTON',
-            finalDest: hd?.final_destination || 'UNITED STATES',
+            finalDest: (hd?.final_destination && hd.final_destination !== 'CHARLESTON') ? hd.final_destination : 'UNITED STATES',
             transport: hd?.mode_of_transport || 'OCEAN',
             itemHdr: hd?.item_description_header || 'PRECISION MACHINED COMPONENTS',
             itemSub: hd?.item_description_sub_header || '(OTHERS FUELING COMPONENTS)',
@@ -265,8 +265,8 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
                 ? `${d.pallet_length_cm} X ${d.pallet_width_cm} X ${d.pallet_height_cm}` : '\u2014';
             return `<tr>
 <td class="br c4">${d.pallet_number || ''}</td>
-<td class="br c4"><b>${d.master_serial_no || ''}</b><br/>${d.part_number || ''}<br/>${d.item_name || d.item_code || ''}${d.hts_code ? '<br/><span class="sm">HTS CODE: ' + d.hts_code + '</span>' : ''}</td>
-<td class="br c4 ctr">${d.num_pallets || 1}</td>
+<td class="br c4"><div style="font-size:14px;font-weight:800">${d.part_number || ''}</div><div style="font-size:12px">${d.item_name || d.item_code || ''}${d.master_serial_no ? ' (' + d.master_serial_no + ')' : ''}</div></td>
+
 <td class="br c4 ctr">${dim}</td>
 <td class="br c4 ctr">${d.part_revision || '\u2014'}</td>
 <td class="br c4 rgt mono">${(d.qty_per_pallet || 0).toLocaleString()}<br/><span class="sm">Nos</span></td>
@@ -278,11 +278,11 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
 <style>
 @page{size:A4 portrait;margin:6mm}
 *{margin:0;padding:0;box-sizing:border-box}
-html,body{font-family:Calibri,'Segoe UI',Verdana,Geneva,sans-serif;color:#000;font-size:11px;line-height:1.25;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;height:100%}
+html,body{font-family:Calibri,'Segoe UI',Verdana,Geneva,sans-serif;color:#000;font-size:11px;line-height:1.2;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;height:100%}
 b{font-weight:700}
 table{border-collapse:collapse;width:100%}
 td,th{vertical-align:top}
-.outer{border:1.5px solid #000;display:flex;flex-direction:column;min-height:calc(100vh - 12mm)}
+.outer{border:1.5px solid #000;display:flex;flex-direction:column;height:calc(100vh - 10mm)}
 .grow{flex:1}
 .bb{border-bottom:1px solid #000}
 .br{border-right:1px solid #000}
@@ -290,8 +290,8 @@ td,th{vertical-align:top}
 .c4{padding:3px 5px}
 .ctr{text-align:center}
 .rgt{text-align:right}
-.sm{font-size:7.5px;color:#555}
-.lbl{font-size:8px;font-weight:700}
+.sm{font-size:9px;color:#555}
+.lbl{font-size:11px;font-weight:700}
 .mono{font-family:'Courier New',monospace}
 .wm{position:fixed;top:46%;left:50%;transform:translate(-50%,-50%) rotate(-35deg);font-size:56px;font-weight:900;color:rgba(0,0,0,.035);letter-spacing:10px;text-transform:uppercase;pointer-events:none;z-index:0;white-space:nowrap}
 @media print{.no-print{display:none!important}@page{size:A4 portrait;margin:6mm}}
@@ -311,67 +311,74 @@ td,th{vertical-align:top}
 <table>
 <colgroup><col style="width:40%"/><col style="width:20%"/><col style="width:40%"/></colgroup>
 <tr>
-<td class="bb br c4" rowspan="5" style="vertical-align:top">
-<div style="padding:2px 5px;font-size:10px;font-weight:700">Exporter</div>
-<div style="padding:4px 5px;line-height:1.5;font-size:11px">
-<div style="font-size:12px;font-weight:800">${D.expName}</div>
-<div style="font-size:10px">${D.expAddr.replace(/\n/g, '<br/>')}</div>
-<div style="font-size:10px">${D.expPhone}</div>
-<div style="font-size:10px">E mail : ${D.expEmail}</div>
-<div style="font-size:10px">GSTIN : ${D.expGstin}</div>
+<td class="bb br c4" rowspan="4" style="vertical-align:top;padding:4px 6px">
+<div style="display:flex;justify-content:space-between;align-items:baseline;padding:2px 0">
+<span style="font-size:12px;font-weight:700">Exporter</span>
+<span style="font-size:11px;font-weight:700;color:#555">Vendor No : <span style="font-size:12px;font-weight:400;color:#000">${D.vendorNo}</span></span>
+</div>
+<div style="padding:3px 0;line-height:1.5">
+<div style="font-size:13px;font-weight:800">${D.expName}</div>
+<div style="font-size:12px">NO. 21 & 22, Export Promotion Industrial Park, Phase - I,</div>
+<div style="font-size:12px">Whitefield, Bangalore-560066,</div>
+<div style="font-size:12px">KARNATAKA - INDIA</div>
+<div style="font-size:12px">GSTIN : ${D.expGstin}</div>
 </div>
 </td>
-<td class="bb br c4 lbl">Invoice No. & Date</td>
-<td class="bb c4 mono" style="font-weight:700">${hd?.invoice_number || ''} ${invDate ? 'DT.' + invDate : ''}</td>
+<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">PO Number :</td>
+<td class="bb c4" style="padding:4px 6px"><div style="font-size:13px;font-weight:700">${hd?.purchase_order_number || ''}</div><div style="font-size:12px;color:#333;margin-top:1px">${poDate || ''}</div></td>
 </tr>
-<tr><td class="bb br c4 lbl">Purchase Order No. & Date :</td><td class="bb c4 mono" style="font-weight:700">${hd?.purchase_order_number || ''} ${poDate ? 'DT.' + poDate : ''}</td></tr>
-<tr><td class="bb br c4 lbl">Vendor No :</td><td class="bb c4" style="font-size:13px;font-weight:800">${D.vendorNo}</td></tr>
-<tr><td class="bb br c4 lbl">Ship Via :</td><td class="bb c4" style="font-weight:700">${hd?.ship_via || ''}</td></tr>
-<tr><td class="bb br c4 lbl">Others Reference(s) :</td><td class="bb c4"></td></tr>
-</table>
-
-<table>
-<colgroup><col style="width:40%"/><col style="width:20%"/><col style="width:40%"/></colgroup>
 <tr>
-<td class="bb br c4" rowspan="4" style="vertical-align:top">
-<div style="padding:2px 5px;font-size:8px;font-weight:700">Consignee</div>
-<div style="padding:4px 5px;line-height:1.5;font-size:9px">
-<div style="font-weight:700">${D.conName}</div>
-<div style="font-size:8px">${D.conAddr.replace(/\n/g, '<br/>')}</div>
-<div style="font-size:8px">Telephone: ${D.conPhone}</div>
+<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Invoice No. :</td>
+<td class="bb c4" style="padding:4px 6px"><div style="font-size:13px;font-weight:700">${hd?.invoice_number || ''}</div><div style="font-size:12px;color:#333;margin-top:1px">${invDate || ''}</div></td>
+</tr>
+<tr>
+<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Terms of Delivery & Payment :</td>
+<td class="bb c4" style="font-size:13px;padding:4px 6px">${D.delivery}</td>
+</tr>
+<tr>
+<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">AD Code No :</td>
+<td class="bb c4" style="font-size:13px;padding:4px 6px;font-family:'Courier New',monospace">${D.expAd}</td>
+</tr>
+<tr>
+<td class="bb br c4" rowspan="3" style="vertical-align:top;padding:4px 6px">
+<div style="font-size:12px;font-weight:700;padding:2px 0">Consignee</div>
+<div style="padding:3px 0;line-height:1.5">
+<div style="font-size:13px;font-weight:700">${D.conName}</div>
+<div style="font-size:11px">${D.conAddr.replace(/\n/g, '<br/>')}</div>
+<div style="font-size:11px">Telephone: +1 ${D.conPhone}</div>
 </div>
 </td>
-<td class="bb br c4 lbl">Buyer</td><td class="bb c4">: ${D.buyName}</td>
+<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">IEC Code No :</td>
+<td class="bb c4" style="font-size:13px;padding:4px 6px;font-family:'Courier New',monospace">${D.expIec}</td>
 </tr>
-<tr><td class="bb br c4 lbl">Phone No</td><td class="bb c4">${D.buyPhone}</td></tr>
-<tr><td class="bb br c4 lbl">E-Mail ID</td><td class="bb c4">${D.buyEmail}</td></tr>
-<tr><td class="bb br c4 lbl" style="vertical-align:top">Bill To :</td><td class="bb c4" style="font-size:8px;line-height:1.5">${D.billName}<br/>${D.billAddr.replace(/\n/g, '<br/>')}</td></tr>
+<tr>
+<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Buyer :</td>
+<td class="bb c4" style="font-size:13px;padding:4px 6px">${D.buyName}</td>
+</tr>
+<tr>
+<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Contact :</td>
+<td class="bb c4" style="font-size:13px;padding:4px 6px">+1 ${D.buyPhone} | ${D.buyEmail}</td>
+</tr>
 </table>
 
 <table>
 <colgroup><col style="width:25%"/><col style="width:25%"/><col style="width:25%"/><col style="width:25%"/></colgroup>
 <tr>
-<td class="bb br c4 lbl">Port of Loading<br/><span style="font-weight:700">${D.portLoad}</span></td>
-<td class="bb br c4 lbl">Terms of Delivery & Payment<br/><span style="font-weight:400">${D.delivery}</span></td>
-<td class="bb br c4" style="font-size:8px">${D.payment}<br/>Days from the date of Invoice</td>
-<td class="bb c4 lbl">AD Code No:<br/><span class="mono" style="font-weight:400">${D.expAd}</span></td>
-</tr>
-<tr>
-<td class="bb br c4 lbl">Port of Discharge<br/><span style="font-weight:700">${D.portDisc}</span></td>
-<td class="bb br c4 lbl">Final Destination<br/><span style="font-weight:700">${D.finalDest}</span></td>
-<td class="bb br c4 lbl">Mode of Transport<br/><span style="font-weight:400">${D.transport}</span></td>
-<td class="bb c4 lbl">IEC Code No :<br/><span class="mono" style="font-weight:400">${D.expIec}</span></td>
+<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Ship Mode</span><br/><span style="font-size:13px;font-weight:700">${D.transport}</span></td>
+<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Port of Loading</span><br/><span style="font-size:13px;font-weight:700">${D.portLoad}</span></td>
+<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Port of Discharge</span><br/><span style="font-size:13px;font-weight:700">${D.portDisc}</span></td>
+<td class="bb c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Final Destination</span><br/><span style="font-size:13px;font-weight:700">${D.finalDest}</span></td>
 </tr>
 </table>
 
 <table><tr><td class="bb c4 ctr" style="padding:5px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:1px">${D.itemHdr}<br/><span style="font-weight:700;font-size:9px">${D.itemSub}</span></td></tr></table>
 
 <table>
-<colgroup><col style="width:16%"/><col style="width:22%"/><col style="width:6%"/><col style="width:12%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
+<colgroup><col style="width:18%"/><col style="width:24%"/><col style="width:14%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
 <tr style="background:#f5f5f5">
 <th class="bb br c4 lbl" style="text-align:left">PW/Pallet No. & Batch No.</th>
 <th class="bb br c4 lbl" style="text-align:left">Part No. & Description with P.O No.</th>
-<th class="bb br c4 lbl ctr">No. of Pallet</th>
+
 <th class="bb br c4 lbl ctr">Pallet Size in CMs.</th>
 <th class="bb br c4 lbl ctr">Part Rev</th>
 <th class="bb br c4 lbl rgt">Qty Per Pallet</th>
@@ -381,15 +388,14 @@ td,th{vertical-align:top}
 ${itemRows}
 </table>
 <table style="flex:1">
-<colgroup><col style="width:16%"/><col style="width:22%"/><col style="width:6%"/><col style="width:12%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
-<tr><td class="br" style="height:100%"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td></td></tr>
+<colgroup><col style="width:18%"/><col style="width:24%"/><col style="width:14%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
+<tr><td class="br" style="height:100%"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td></td></tr>
 </table>
 
 <table>
-<colgroup><col style="width:16%"/><col style="width:22%"/><col style="width:6%"/><col style="width:12%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
+<colgroup><col style="width:18%"/><col style="width:24%"/><col style="width:14%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
 <tr style="background:#f5f5f5">
-<td class="bt br c4" colspan="2"></td>
-<td class="bt br c4 ctr lbl">Total<br/>Total<br/>Gross</td>
+<td class="bt br c4" colspan="2" style="font-weight:800;font-size:12px">Total</td>
 <td class="bt br c4 ctr mono" style="font-weight:800">${String(totalPkgs).padStart(2, '0')}</td>
 <td class="bt br c4"></td>
 <td class="bt br c4 rgt mono" style="font-weight:800">${totalQty.toLocaleString()}</td>
@@ -401,52 +407,44 @@ ${itemRows}
 <table style="border-top:1.5px solid #000">
 <colgroup><col style="width:50%"/><col style="width:50%"/></colgroup>
 <tr>
-<td class="bb c4" style="font-size:9px;font-weight:700;padding:4px 5px;vertical-align:top">ITC HS CODE: <span class="mono">84139190</span></td>
+<td class="bb c4" style="font-size:11px;font-weight:700;padding:5px 6px;vertical-align:top">ITC HS CODE: <span class="mono" style="font-weight:800">84139190</span><br/>US HTS Code: <span class="mono" style="font-weight:800">8413.91.9000</span></td>
 <td class="bb c4 rgt" style="vertical-align:top;padding:4px 5px">
-<div style="font-size:9px;font-weight:700">for AUTOCRAT ENGINEERS</div>
-<div style="margin-top:20px;font-size:8px;font-style:italic">Authorised Signatory</div>
+<div style="font-size:10px;font-weight:700">for AUTOCRAT ENGINEERS</div>
+<div style="margin-top:12px;font-size:9px;font-style:italic">Authorised Signatory</div>
 </td>
 </tr>
 <tr>
 <td class="c4 ctr" colspan="2" style="padding:6px 5px">
-<div style="font-size:8px;text-align:center;color:#c00;font-weight:700;margin-top:2px">The Supply is under EPCG License No: 0731011353 Date 24/05/2024</div>
-<div style="font-size:8px;text-align:center;font-weight:700;margin-top:3px">SUPPLYMEANT FOR EXPORT UNDER LETTER OF UNDERTAKING WITHOUT PAYMENT OF INTEGRATED TAX(IGST) LUT</div>
-<div style="font-size:8px;text-align:center;margin-top:2px">No.AD2903251644306 Dated 29/03/2025</div>
+<div style="font-size:9px;text-align:center;color:#c00;font-weight:700;margin-top:2px">The Supply is under EPCG License No: 0731011353 Date 24/05/2024</div>
+<div style="font-size:9px;text-align:center;font-weight:700;margin-top:2px">SUPPLY MEANT FOR EXPORT UNDER LETTER OF UNDERTAKING WITHOUT PAYMENT OF INTEGRATED TAX(IGST) LUT</div>
+<div style="font-size:9px;text-align:center;margin-top:2px">No.AD2903251644306 Dated 29/03/2025</div>
 </td>
 </tr>
 </table>
 
 </div>
 
-<table style="margin-top:3px"><tr>
-<td class="c4" style="font-size:8px;color:#666;width:33%">MPL#: ${mpl.mpl_number}</td>
-<td class="c4 ctr" style="font-size:8px;color:#666;width:34%">Printed: ${ts}</td>
-<td class="c4 rgt" style="font-size:8px;color:#666;width:33%">System-generated packing list \u2014 dispatch audit record</td>
+<table style="margin-top:4px"><tr>
+<td class="c4" style="font-size:9px;color:#666;width:33%">MPL#: ${mpl.mpl_number}</td>
+<td class="c4 ctr" style="font-size:9px;color:#666;width:34%">Printed: ${ts}</td>
+<td class="c4 rgt" style="font-size:9px;color:#666;width:33%">System-generated packing list \u2014 dispatch audit record</td>
 </tr></table>
 
 <script>window.onload=function(){window.print();}<\/script></body></html>`;
 
-        // ── Generate barcodes for each pallet ──
+        // ── Generate QR codes for each pallet ──
         const containerTrace = bt.containerTrace || [];
         const barcodeMap: Record<string, string> = {};
         for (const d of details) {
             const palletId = d.pallet_id || d.id || '';
-            // Short barcode: MPL number | item code | qty
-            const barcodeData = `${mpl.mpl_number}|${d.item_code || ''}|${d.qty_per_pallet || 0}`;
+            const qrData = `${mpl.mpl_number}|${d.part_number || ''}|${d.item_name || d.item_code || ''}|${d.master_serial_no || ''}|${d.qty_per_pallet || 0}`;
             try {
-                const canvas = document.createElement('canvas');
-                JsBarcode(canvas, barcodeData, {
-                    format: 'CODE128',
-                    width: 2,
-                    height: 80,
-                    displayValue: true,
-                    fontSize: 14,
-                    font: 'Calibri',
-                    margin: 8,
-                    background: '#ffffff',
-                    lineColor: '#000000',
+                barcodeMap[palletId] = await QRCode.toDataURL(qrData, {
+                    width: 150,
+                    margin: 1,
+                    errorCorrectionLevel: 'M',
+                    color: { dark: '#000000', light: '#ffffff' },
                 });
-                barcodeMap[palletId] = canvas.toDataURL('image/png');
             } catch { barcodeMap[palletId] = ''; }
         }
 
@@ -458,88 +456,82 @@ ${itemRows}
                 ? `${d.pallet_length_cm} X ${d.pallet_width_cm} X ${d.pallet_height_cm}` : '';
             const palletNum = d.pallet_number || '';
             return `
-<div style="page-break-before:always;padding:28px 32px;font-family:Calibri,'Segoe UI',Arial,sans-serif;font-size:12px;color:#000;min-height:calc(100vh - 12mm);display:flex;flex-direction:column;box-sizing:border-box">
+<div style="page-break-before:always;padding:24px 28px;font-family:Calibri,'Segoe UI',Arial,sans-serif;font-size:18px;color:#000;height:calc(100vh - 10mm);display:flex;flex-direction:column;box-sizing:border-box">
 
-<div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:16px;position:relative">
-<img src="/logo.png" alt="AE" style="height:40px" onerror="this.style.display='none'" />
+<div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:14px;position:relative">
+<img src="/logo.png" alt="AE" style="height:50px" onerror="this.style.display='none'" />
 <div style="position:absolute;left:0;right:0;text-align:center;pointer-events:none">
-<span style="font-size:24px;font-weight:900;letter-spacing:3px;color:#000">PALLET SLIP</span>
+<span style="font-size:36px;font-weight:900;letter-spacing:4px;color:#000">PALLET SLIP</span>
 </div>
-<div style="font-weight:700;font-size:12px;color:#555;text-transform:uppercase">WWW.AUTOCRATENGINEERS.IN</div>
+<div style="font-weight:700;font-size:16px;color:#555;text-transform:uppercase">WWW.AUTOCRATENGINEERS.IN</div>
 </div>
 
-<div style="display:flex;padding:12px 0;border-top:1px solid #ddd;border-bottom:1px solid #ddd;margin-bottom:16px">
-<div style="flex:1;padding-right:24px">
-<div style="font-weight:800;font-size:10px;text-transform:uppercase;color:#888;margin-bottom:4px">FROM</div>
-<div style="font-weight:800;font-size:12px">${D.expName}</div>
-<div style="font-size:11px;line-height:1.5;color:#333">${D.expAddr.replace(/\\n/g, '<br/>')}</div>
-<div style="font-size:11px;color:#333">${D.expPhone}</div>
+<div style="display:flex;padding:10px 0;border-top:2px solid #ddd;border-bottom:2px solid #ddd;margin-bottom:14px">
+<div style="flex:1;padding-right:20px">
+<div style="font-weight:800;font-size:16px;text-transform:uppercase;color:#888;margin-bottom:4px">FROM</div>
+<div style="font-weight:800;font-size:18px">${D.expName}</div>
+<div style="font-size:15px;line-height:1.5;color:#333">${D.expAddr.replace(/\\n/g, '<br/>')}</div>
 </div>
-<div style="flex:1;padding-left:24px">
-<div style="font-weight:800;font-size:10px;text-transform:uppercase;color:#888;margin-bottom:4px">TO</div>
-<div style="font-weight:800;font-size:12px">${D.billName}</div>
-<div style="font-size:11px;line-height:1.5;color:#333">${D.conName}<br/>${D.conAddr.replace(/\\n/g, '<br/>')}</div>
-<div style="font-size:11px;color:#333">${D.conPhone}</div>
+<div style="flex:1;padding-left:20px">
+<div style="font-weight:800;font-size:16px;text-transform:uppercase;color:#888;margin-bottom:4px">TO</div>
+<div style="font-weight:800;font-size:18px">${D.billName}</div>
+<div style="font-size:15px;line-height:1.5;color:#333">${D.conName}<br/>${D.conAddr.replace(/\\n/g, '<br/>')}</div>
 </div>
 </div>
 
-<div style="text-align:center;padding:14px 0 10px;border-bottom:1px solid #ddd;margin-bottom:16px">
-<div style="font-size:22px;font-weight:900;letter-spacing:0.5px">${d.part_number || ''} ${d.part_revision ? '(Rev-' + d.part_revision + ')' : ''}</div>
-<div style="font-size:13px;color:#555;margin-top:4px">${d.item_name || d.item_code || ''}</div>
+<div style="text-align:center;padding:14px 0 10px;border-bottom:2px solid #ddd;margin-bottom:14px">
+<div style="font-size:56px;font-weight:900;letter-spacing:1px">${d.part_number || ''} ${d.part_revision ? '(Rev-' + d.part_revision + ')' : ''}</div>
+<div style="font-size:28px;color:#333;margin-top:4px">${d.item_name || d.item_code || ''} &middot; ${d.master_serial_no || ''}</div>
 </div>
 
-<div style="background:#f2f2f2;border:1px solid #ddd;padding:18px 20px;margin-bottom:16px">
+<div style="background:#f2f2f2;border:2px solid #ddd;padding:20px 22px;flex:1;display:flex;flex-direction:column;justify-content:space-between;margin-bottom:14px">
 <div style="display:flex;margin-bottom:16px">
-<div style="flex:1;padding-right:16px">
-<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">INVOICE & DATE</div>
-<div style="font-size:16px;font-weight:900;margin-top:2px">${hd?.invoice_number || ''} <span style="font-weight:500;color:#555;font-size:12px">${invDate || ''}</span></div>
+<div style="flex:1">
+<div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">INVOICE & DATE</div>
+<div style="font-size:40px;font-weight:900;margin-top:4px">${hd?.invoice_number || ''}</div>
+<div style="font-size:22px;font-weight:500;color:#555;margin-top:2px">${invDate || ''}</div>
 </div>
-<div style="flex:1;padding-left:16px">
-<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">PO & DATE</div>
-<div style="font-size:16px;font-weight:900;margin-top:2px">${hd?.purchase_order_number || ''} <span style="font-weight:500;color:#555;font-size:12px">${poDate || ''}</span></div>
+<div style="flex:1;text-align:right">
+<div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">PO & DATE</div>
+<div style="font-size:40px;font-weight:900;margin-top:4px">${hd?.purchase_order_number || ''}</div>
+<div style="font-size:22px;font-weight:500;color:#555;margin-top:2px">${poDate || ''}</div>
 </div>
 </div>
-<div style="display:flex;margin-bottom:16px">
-<div style="flex:1;padding-right:16px">
-<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">MASTER SERIAL NO</div>
-<div style="font-size:16px;font-weight:800;margin-top:2px">${d.master_serial_no || ''}</div>
-</div>
-<div style="flex:1;padding-left:16px">
-<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">COUNT</div>
-<div style="font-size:28px;font-weight:900;margin-top:2px">${(d.qty_per_pallet || 0).toLocaleString()}</div>
-</div>
+<div style="text-align:center;margin-bottom:16px">
+<div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">COUNT</div>
+<div style="font-size:80px;font-weight:900;margin-top:4px;line-height:1">${(d.qty_per_pallet || 0).toLocaleString()}</div>
 </div>
 <div style="display:flex;margin-bottom:14px">
-<div style="flex:1;padding-right:16px">
-<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">NET WEIGHT</div>
-<div style="font-size:16px;font-weight:800;margin-top:2px">${Number(d.net_weight_kg || 0).toFixed(2)} Kgs</div>
-</div>
-<div style="flex:1;padding-left:16px">
-<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">GROSS WEIGHT</div>
-<div style="font-size:16px;font-weight:800;margin-top:2px">${Number(d.gross_weight_kg || 0).toFixed(2)} Kgs</div>
-</div>
-</div>
-<div style="display:flex;padding-top:12px;border-top:1px solid #ddd">
 <div style="flex:1">
-<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">ORIGIN</div>
-<div style="font-size:13px;font-weight:800;margin-top:2px">${D.origin}</div>
+<div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">NET WEIGHT</div>
+<div style="font-size:36px;font-weight:800;margin-top:4px">${Number(d.net_weight_kg || 0).toFixed(2)} Kgs</div>
 </div>
+<div style="flex:1;text-align:right">
+<div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">GROSS WEIGHT</div>
+<div style="font-size:36px;font-weight:800;margin-top:4px">${Number(d.gross_weight_kg || 0).toFixed(2)} Kgs</div>
+</div>
+</div>
+<div style="display:flex;padding-top:12px;border-top:2px solid #ddd">
 <div style="flex:1">
-<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">HTS CODE</div>
-<div style="font-size:13px;font-weight:800;margin-top:2px">${d.hts_code || '84139190'}</div>
+<div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">ORIGIN</div>
+<div style="font-size:28px;font-weight:800;margin-top:3px">${D.origin}</div>
 </div>
 <div style="flex:1">
-<div style="font-weight:700;font-size:10px;text-transform:uppercase;color:#888">LOGISTICS</div>
-<div style="font-size:13px;font-weight:800;margin-top:2px">${hd?.ship_via || 'SEAHORSE BY OCEAN'}</div>
+<div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">HTS CODE</div>
+<div style="font-size:28px;font-weight:800;margin-top:3px">${d.hts_code || '84139190'}</div>
+</div>
+<div style="flex:1;text-align:right">
+<div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">LOGISTICS</div>
+<div style="font-size:28px;font-weight:800;margin-top:3px">${hd?.ship_via || 'SEAHORSE BY OCEAN'}</div>
 </div>
 </div>
 </div>
 
-<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 0">
-${barcodeImg ? '<img src="' + barcodeImg + '" style="width:100%;max-width:480px;height:auto" />' : ''}
+<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 0">
+${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" />' : ''}
 </div>
 
-<div style="text-align:center;font-size:9px;color:#aaa;padding-top:4px;border-top:1px solid #eee">${palletNum} &middot; Slip ${idx + 1} of ${details.length}</div>
+<div style="text-align:center;font-size:12px;color:#aaa;padding-top:4px;border-top:1px solid #eee">${palletNum} &middot; Slip ${idx + 1} of ${details.length}</div>
 
 </div>`;
         }).join('');
@@ -1007,25 +999,29 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:100%;max-width:480px;
                                             <div ref={activeDropdown === mpl.id ? dropdownRef : null} style={{ display: 'inline-flex', alignItems: 'center', gap: 0, position: 'relative' }}>
                                                 {/* Primary action: Continue (DRAFT) or View */}
                                                 {mpl.status === 'DRAFT' && canEdit ? (
-                                                    <button onClick={(e) => { e.stopPropagation(); handleOpenWizard(mpl); }} style={{ height: 34, padding: '0 14px', border: 'none', borderRadius: '8px 0 0 8px', background: 'linear-gradient(135deg, var(--enterprise-primary), #2563eb)', color: '#fff', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, boxShadow: '0 2px 8px rgba(30,58,138,0.18)', transition: 'all 0.15s ease', whiteSpace: 'nowrap', boxSizing: 'border-box' }}>
+                                                    <button onClick={(e) => { e.stopPropagation(); handleOpenWizard(mpl); }} style={{ height: 34, minWidth: 100, padding: '0 14px', border: 'none', borderRadius: '8px 0 0 8px', background: 'linear-gradient(135deg, var(--enterprise-primary), #2563eb)', color: '#fff', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 13, fontWeight: 600, boxShadow: '0 2px 8px rgba(30,58,138,0.18)', transition: 'all 0.15s ease', whiteSpace: 'nowrap', boxSizing: 'border-box' }}>
                                                         <ChevronRight size={15} /> Continue
                                                     </button>
                                                 ) : (
-                                                    <button onClick={() => handleViewDetail(mpl)} style={{ height: 34, padding: '0 14px', borderRadius: '8px 0 0 8px', border: '1px solid #e5e7eb', borderRight: 'none', backgroundColor: 'white', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 500, color: '#374151', transition: 'all 0.15s ease', whiteSpace: 'nowrap', boxSizing: 'border-box' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'white'}>
+                                                    <button onClick={() => handleViewDetail(mpl)} style={{ height: 34, minWidth: mpl.status === 'CANCELLED' ? 130 : 100, padding: '0 14px', borderRadius: mpl.status === 'CANCELLED' ? '8px' : '8px 0 0 8px', border: '1px solid #e5e7eb', borderRight: mpl.status === 'CANCELLED' ? '1px solid #e5e7eb' : 'none', backgroundColor: 'white', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 13, fontWeight: 500, color: '#374151', transition: 'all 0.15s ease', whiteSpace: 'nowrap', boxSizing: 'border-box' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'white'}>
                                                         <Eye size={15} /> View
                                                     </button>
                                                 )}
-                                                {/* Dropdown trigger */}
-                                                <button onClick={(e) => { e.stopPropagation(); if (activeDropdown === mpl.id) { setActiveDropdown(null); } else { const rect = e.currentTarget.getBoundingClientRect(); setDropdownDirection(window.innerHeight - rect.bottom < 200 ? 'up' : 'down'); setActiveDropdown(mpl.id); } }} style={{ height: 34, padding: '0 8px', border: mpl.status === 'DRAFT' && canEdit ? 'none' : '1px solid #e5e7eb', borderLeft: mpl.status === 'DRAFT' && canEdit ? '1px solid rgba(255,255,255,0.3)' : '1px solid #e5e7eb', borderRadius: '0 8px 8px 0', backgroundColor: mpl.status === 'DRAFT' && canEdit ? '#1e40af' : 'white', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: mpl.status === 'DRAFT' && canEdit ? '#fff' : '#374151', transition: 'all 0.15s ease', boxSizing: 'border-box' }} onMouseEnter={e => { if (!(mpl.status === 'DRAFT' && canEdit)) e.currentTarget.style.backgroundColor = '#f8fafc'; }} onMouseLeave={e => { if (!(mpl.status === 'DRAFT' && canEdit)) e.currentTarget.style.backgroundColor = 'white'; }}>
-                                                    <ChevronDown size={14} style={{ transition: 'transform 0.2s', transform: activeDropdown === mpl.id ? 'rotate(180deg)' : 'rotate(0deg)' }} />
-                                                </button>
+                                                {/* Dropdown trigger - hide for CANCELLED since no dropdown items exist */}
+                                                {mpl.status !== 'CANCELLED' && (
+                                                    <button onClick={(e) => { e.stopPropagation(); if (activeDropdown === mpl.id) { setActiveDropdown(null); } else { const rect = e.currentTarget.getBoundingClientRect(); setDropdownDirection(window.innerHeight - rect.bottom < 200 ? 'up' : 'down'); setActiveDropdown(mpl.id); } }} style={{ height: 34, padding: '0 8px', border: mpl.status === 'DRAFT' && canEdit ? 'none' : '1px solid #e5e7eb', borderLeft: mpl.status === 'DRAFT' && canEdit ? '1px solid rgba(255,255,255,0.3)' : '1px solid #e5e7eb', borderRadius: '0 8px 8px 0', backgroundColor: mpl.status === 'DRAFT' && canEdit ? '#1e40af' : 'white', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: mpl.status === 'DRAFT' && canEdit ? '#fff' : '#374151', transition: 'all 0.15s ease', boxSizing: 'border-box' }} onMouseEnter={e => { if (!(mpl.status === 'DRAFT' && canEdit)) e.currentTarget.style.backgroundColor = '#f8fafc'; }} onMouseLeave={e => { if (!(mpl.status === 'DRAFT' && canEdit)) e.currentTarget.style.backgroundColor = 'white'; }}>
+                                                        <ChevronDown size={14} style={{ transition: 'transform 0.2s', transform: activeDropdown === mpl.id ? 'rotate(180deg)' : 'rotate(0deg)' }} />
+                                                    </button>
+                                                )}
                                                 {/* Dropdown menu */}
                                                 {activeDropdown === mpl.id && (
                                                     <div style={{ position: 'absolute', ...(dropdownDirection === 'up' ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), right: 0, zIndex: 9999, width: 200, backgroundColor: 'white', borderRadius: 12, boxShadow: dropdownDirection === 'up' ? '0 -10px 40px rgba(0,0,0,0.15)' : '0 10px 40px rgba(0,0,0,0.15)', border: '1px solid #e5e7eb', overflow: 'hidden' }}>
-                                                        {/* View Details */}
-                                                        <button onClick={() => { handleViewDetail(mpl); setActiveDropdown(null); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: 14, textAlign: 'left', color: '#374151' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
-                                                            <Eye size={16} /> View Details
-                                                        </button>
+                                                        {/* View Details - only show in dropdown when main button is Continue */}
+                                                        {(mpl.status === 'DRAFT' && canEdit) && (
+                                                            <button onClick={() => { handleViewDetail(mpl); setActiveDropdown(null); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: 14, textAlign: 'left', color: '#374151' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                                                                <Eye size={16} /> View Details
+                                                            </button>
+                                                        )}
                                                         {/* Print */}
                                                         {isMplReady(mpl) && mpl.status !== 'CANCELLED' && (
                                                             <><div style={{ borderTop: '1px solid #f3f4f6' }} /><button onClick={() => { handlePrintMpl(mpl); setActiveDropdown(null); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: 14, textAlign: 'left', color: '#059669' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f0fdf4'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
