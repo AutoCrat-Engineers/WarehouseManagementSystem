@@ -48,6 +48,7 @@ import {
   Layers,
   Settings,
   Truck,
+  Plane,
   Receipt,
   Eye,
 } from 'lucide-react';
@@ -104,7 +105,7 @@ const menuItems: MenuItem[] = [
   { id: 'stock-movements', label: 'Stock Movements', icon: ArrowRightLeft, description: 'Audit Trail' },
   { id: 'rack-view', label: 'Rack View', icon: Grid3X3, description: 'US Warehouse Racks' },
   { id: 'packing', label: 'Packing', icon: PackageOpen, description: 'FG Packing Workflow', hasSubmenu: true },
-  { id: 'dispatch' as View, label: 'Dispatch', icon: Truck, description: 'Dispatch & Shipping', hasSubmenu: true },
+  { id: 'dispatch' as View, label: 'Dispatch', icon: Plane, description: 'Dispatch & Shipping', hasSubmenu: true },
   { id: 'orders', label: 'Blanket Orders', icon: FileText, description: 'Customer Orders' },
   { id: 'releases', label: 'Blanket Releases', icon: Calendar, description: 'Delivery Schedule' },
   { id: 'forecast', label: 'Forecasting', icon: TrendingUp, description: 'Demand Prediction' },
@@ -559,7 +560,7 @@ export default function App() {
   const currentMenuItem = packingMeta
     ? { id: currentView as View, label: packingMeta.label, icon: PackageOpen, description: packingMeta.description }
     : dispatchMeta
-      ? { id: currentView as View, label: dispatchMeta.label, icon: Truck, description: dispatchMeta.description }
+      ? { id: currentView as View, label: dispatchMeta.label, icon: Plane, description: dispatchMeta.description }
       : getMenuItems().find(item => item.id === currentView);
 
   return (
