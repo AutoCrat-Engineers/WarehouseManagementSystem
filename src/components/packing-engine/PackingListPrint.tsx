@@ -284,10 +284,11 @@ export function PackingListPrint({ accessToken, userRole, userPerms = {} }: Prop
         };
 
         /* ── item rows ── */
-        const itemRows = details.map(d => {
+        const itemRows = details.map((d, idx) => {
             const dim = d.pallet_length_cm && d.pallet_width_cm && d.pallet_height_cm
                 ? `${d.pallet_length_cm} X ${d.pallet_width_cm} X ${d.pallet_height_cm}` : '\u2014';
             return `<tr>
+<td class="bb br c4 ctr">${idx + 1}</td>
 <td class="bb br c4">${d.pallet_number || ''}</td>
 <td class="bb br c4"><b>${d.master_serial_no || ''}</b><br/>${d.part_number || ''}<br/>${d.item_name || d.item_code || ''}${d.hts_code ? '<br/><span class="sm">HTS CODE: ' + d.hts_code + '</span>' : ''}</td>
 <td class="bb br c4 ctr">${d.num_pallets || 1}</td>
@@ -333,9 +334,7 @@ td,th{vertical-align:top}
 <div class="outer">
 
 <!-- ═══ HEADER: PACKING LIST ═══ -->
-<table><tr>
-<td class="bb c4 ctr" style="padding:8px"><span style="font-size:20px;font-weight:800;letter-spacing:5px;text-transform:uppercase;font-style:italic">PACKING LIST</span></td>
-</tr></table>
+<table><tr style="position:relative"><td class="bb c4" style="padding:6px 8px;width:30%"><img src="/logo.png" alt="AUTOCRAT ENGINEERS" style="height:34px;object-fit:contain" onerror="this.outerHTML='<span style=font-size:11px;font-weight:800>AUTOCRAT<br>ENGINEERS</span>'" /></td><td class="bb c4" style="padding:8px;width:70%"><div style="position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;pointer-events:none"><span style="font-size:20px;font-weight:800;letter-spacing:5px;text-transform:uppercase;font-style:italic">PACKING LIST</span></div></td></tr></table>
 
 <!-- ═══ EXPORTER + INVOICE/PO/SHIP + REF ═══ -->
 <table>
@@ -398,17 +397,12 @@ td,th{vertical-align:top}
 <td class="bb c4" colspan="2" style="font-size:8px">Days from the date of Invoice</td>
 </tr>
 <tr>
-<td class="bb br c4 lbl">Port of Discharge</td>
-<td class="bb br c4 lbl">Final Destination</td>
 <td class="bb br c4 lbl">Mode of Transport<br/><span style="font-weight:400">${D.transport}</span></td>
-<td class="bb br c4"></td>
+<td class="bb br c4 lbl">Freight Forwarder<br/><span style="font-weight:700">WEISS ROHLING INDIA</span></td>
+<td class="bb br c4 lbl">Port of Discharge<br/><span style="font-weight:700">${D.portDisc}</span></td>
+<td class="bb br c4 lbl">Final Destination<br/><span style="font-weight:700">${D.finalDest}</span></td>
 <td class="bb br c4 lbl">IEC Code No :<br/><span class="mono" style="font-weight:400">${D.expIec}</span></td>
 <td class="bb c4 lbl">AD Code No:<br/><span class="mono" style="font-weight:400">${D.expAd}</span></td>
-</tr>
-<tr>
-<td class="bb br c4" style="font-weight:700">${D.portDisc}</td>
-<td class="bb br c4" style="font-weight:700">${D.finalDest}</td>
-<td class="bb c4" colspan="4"></td>
 </tr>
 </table>
 
@@ -417,8 +411,9 @@ td,th{vertical-align:top}
 
 <!-- ═══ ITEMS TABLE ═══ -->
 <table>
-<colgroup><col style="width:16%"/><col style="width:22%"/><col style="width:6%"/><col style="width:12%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
+<colgroup><col style="width:5%"/><col style="width:14%"/><col style="width:20%"/><col style="width:6%"/><col style="width:11%"/><col style="width:6%"/><col style="width:11%"/><col style="width:12%"/><col style="width:15%"/></colgroup>
 <tr style="background:#f5f5f5">
+<th class="bb br c4 lbl ctr">SL NO</th>
 <th class="bb br c4 lbl" style="text-align:left">PW/Pallet No. & Batch No.</th>
 <th class="bb br c4 lbl" style="text-align:left">Part No. & Description with P.O No.</th>
 <th class="bb br c4 lbl ctr">No. of Pallet</th>
@@ -436,8 +431,9 @@ ${itemRows}
 
 <!-- ═══ TOTALS ═══ -->
 <table>
-<colgroup><col style="width:16%"/><col style="width:22%"/><col style="width:6%"/><col style="width:12%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
+<colgroup><col style="width:5%"/><col style="width:14%"/><col style="width:20%"/><col style="width:6%"/><col style="width:11%"/><col style="width:6%"/><col style="width:11%"/><col style="width:12%"/><col style="width:15%"/></colgroup>
 <tr style="background:#f5f5f5">
+<td class="bt br c4"></td>
 <td class="bt br c4" colspan="2" style="font-weight:800;font-size:9px">Total No of Pkgs. ${String(totalPkgs).padStart(2, '0')}<br/>Net. Wt.in Kgs. ${totalNet.toFixed(2)}<br/>in kgs ${totalGross.toFixed(2)}</td>
 <td class="bt br c4 ctr lbl">Total<br/>Total<br/>Gross</td>
 <td class="bt br c4 ctr mono" style="font-weight:800">${String(totalPkgs).padStart(2, '0')}</td>
