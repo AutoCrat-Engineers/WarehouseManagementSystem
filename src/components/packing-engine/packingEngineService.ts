@@ -1418,7 +1418,7 @@ export const PACKING_LIST_DEFAULTS: Partial<Omit<PackingListData, 'id' | 'packin
     exporter_ad_code: '6361504-8400009',
     // Consignee
     consignee_name: 'Milano Millworks, LLC',
-    consignee_address: '8223 Industrial Blvd NE Leland, NC 28451 USA',
+    consignee_address: '9223 Industrial Blvd NE Leland, NC 28451 USA',
     consignee_phone: '(910) 443-3075',
     // Buyer
     buyer_name: 'Brown, Sherry',
@@ -1436,7 +1436,7 @@ export const PACKING_LIST_DEFAULTS: Partial<Omit<PackingListData, 'id' | 'packin
     terms_of_delivery: 'DDP',
     payment_terms: 'Net-30',
     final_destination: 'UNITED STATES',
-    mode_of_transport: 'OCEAN',
+    mode_of_transport: 'SEA',
     // Item description
     item_description_header: 'PRECISION MACHINED COMPONENTS',
     item_description_sub_header: '(OTHERS FUELING COMPONENTS)',

@@ -48,10 +48,34 @@ import {
   Layers,
   Settings,
   Truck,
-  Plane,
   Receipt,
   Eye,
+  Forklift,
+  Stamp,
 } from 'lucide-react';
+
+// Custom side-view cargo ship icon matching reference design
+const CargoShip = ({ size = 20, strokeWidth = 2, style = {} }: { size?: number; strokeWidth?: number; style?: React.CSSProperties }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" style={style}>
+    {/* Hull - wide tapered shape */}
+    <path d="M1 18 L3 21 L21 21 L23 18 L20 18 L4 18 Z" />
+    {/* Deck line */}
+    <line x1="4" y1="18" x2="20" y2="18" />
+    {/* Bridge / Cabin */}
+    <rect x="5" y="13" width="4" height="5" rx="0.5" />
+    {/* Bridge window */}
+    <rect x="6" y="14" width="2" height="1.5" rx="0.3" />
+    {/* Antenna mast */}
+    <line x1="7" y1="13" x2="7" y2="9" />
+    <circle cx="7" cy="9" r="0.5" />
+    {/* Containers - bottom row */}
+    <rect x="11" y="14.5" width="2.8" height="3.5" rx="0.3" />
+    <rect x="14.2" y="14.5" width="2.8" height="3.5" rx="0.3" />
+    {/* Containers - top row */}
+    <rect x="11.7" y="11" width="2.8" height="3.5" rx="0.3" />
+    <rect x="14.9" y="11" width="2.8" height="3.5" rx="0.3" />
+  </svg>
+);
 
 declare const __APP_VERSION__: string;
 
@@ -103,10 +127,10 @@ const menuItems: MenuItem[] = [
   { id: 'items', label: 'Item Master', icon: Package, description: 'FG Catalog' },
   { id: 'inventory', label: 'Inventory', icon: Boxes, description: 'Multi-Warehouse Stock' },
   { id: 'stock-movements', label: 'Stock Movements', icon: ArrowRightLeft, description: 'Audit Trail' },
-  { id: 'rack-view', label: 'Rack View', icon: Grid3X3, description: 'US Warehouse Racks' },
   { id: 'packing', label: 'Packing', icon: PackageOpen, description: 'FG Packing Workflow', hasSubmenu: true },
-  { id: 'dispatch' as View, label: 'Dispatch', icon: Plane, description: 'Dispatch & Shipping', hasSubmenu: true },
+  { id: 'dispatch' as View, label: 'Dispatch', icon: CargoShip as any, description: 'Dispatch & Shipping', hasSubmenu: true },
   { id: 'orders', label: 'Blanket Orders', icon: FileText, description: 'Customer Orders' },
+  { id: 'rack-view', label: 'Rack View', icon: Grid3X3, description: 'US Warehouse Racks' },
   { id: 'releases', label: 'Blanket Releases', icon: Calendar, description: 'Delivery Schedule' },
   { id: 'forecast', label: 'Forecasting', icon: TrendingUp, description: 'Demand Prediction' },
 
@@ -560,7 +584,7 @@ export default function App() {
   const currentMenuItem = packingMeta
     ? { id: currentView as View, label: packingMeta.label, icon: PackageOpen, description: packingMeta.description }
     : dispatchMeta
-      ? { id: currentView as View, label: dispatchMeta.label, icon: Plane, description: dispatchMeta.description }
+      ? { id: currentView as View, label: dispatchMeta.label, icon: CargoShip as any, description: dispatchMeta.description }
       : getMenuItems().find(item => item.id === currentView);
 
   return (
@@ -942,7 +966,7 @@ export default function App() {
                           onMouseEnter={(e) => { if (currentView !== 'pe-dispatch') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
                           onMouseLeave={(e) => { if (currentView !== 'pe-dispatch') e.currentTarget.style.backgroundColor = 'transparent'; }}
                         >
-                          <Truck size={15} strokeWidth={currentView === 'pe-dispatch' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-dispatch' ? 1 : 0.6 }} />
+                          <Forklift size={15} strokeWidth={currentView === 'pe-dispatch' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-dispatch' ? 1 : 0.6 }} />
                           <span>Dispatch Selection</span>
                         </button>
                       )}
@@ -963,7 +987,7 @@ export default function App() {
                           onMouseEnter={(e) => { if (currentView !== 'pe-mpl-home') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
                           onMouseLeave={(e) => { if (currentView !== 'pe-mpl-home') e.currentTarget.style.backgroundColor = 'transparent'; }}
                         >
-                          <Receipt size={15} strokeWidth={currentView === 'pe-mpl-home' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-mpl-home' ? 1 : 0.6 }} />
+                          <ClipboardList size={15} strokeWidth={currentView === 'pe-mpl-home' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-mpl-home' ? 1 : 0.6 }} />
                           <span>Packing List</span>
                         </button>
                       )}
@@ -984,7 +1008,7 @@ export default function App() {
                           onMouseEnter={(e) => { if (currentView !== 'pe-performa-invoice') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
                           onMouseLeave={(e) => { if (currentView !== 'pe-performa-invoice') e.currentTarget.style.backgroundColor = 'transparent'; }}
                         >
-                          <FileCheck size={15} strokeWidth={currentView === 'pe-performa-invoice' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-performa-invoice' ? 1 : 0.6 }} />
+                          <Stamp size={15} strokeWidth={currentView === 'pe-performa-invoice' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-performa-invoice' ? 1 : 0.6 }} />
                           <span>Performa Invoice</span>
                         </button>
                       )}
