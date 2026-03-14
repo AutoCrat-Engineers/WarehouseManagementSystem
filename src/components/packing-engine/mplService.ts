@@ -601,9 +601,34 @@ export async function markMplPrinted(mplId: string): Promise<void> {
 /**
  * Cancel MPL: DRAFT/CONFIRMED/PRINTED → CANCELLED
  * Calls the database function cancel_mpl() which handles pallet release.
+ * 
+ * GUARD: If the MPL is linked to an active Proforma Invoice,
+ * cancellation is blocked — the PI must be cancelled first.
  */
 export async function cancelMpl(mplId: string, reason?: string): Promise<void> {
     const userId = await getCurrentUserId();
+
+    // Pre-flight: check if MPL is linked to an active PI
+    const { data: mpl } = await supabase
+        .from('master_packing_lists')
+        .select('id, mpl_number, proforma_invoice_id')
+        .eq('id', mplId)
+        .single();
+
+    if (mpl?.proforma_invoice_id) {
+        // Check if the linked PI is still active (not CANCELLED)
+        const { data: pi } = await supabase
+            .from('pack_proforma_invoices')
+            .select('id, proforma_number, status')
+            .eq('id', mpl.proforma_invoice_id)
+            .single();
+
+        if (pi && pi.status !== 'CANCELLED') {
+            throw new Error(
+                `This MPL is linked to Proforma Invoice ${pi.proforma_number}. Cancel the Proforma Invoice first before cancelling this MPL.`
+            );
+        }
+    }
 
     const { error } = await supabase.rpc('cancel_mpl', {
         p_mpl_id: mplId,
@@ -716,7 +741,7 @@ export async function createPerformaInvoice(mplIds: string[], meta?: {
 }
 
 /**
- * Approve Performa Invoice: CONFIRMED → STOCK_MOVED
+ * Approve Performa Invoice: DRAFT/CONFIRMED → STOCK_MOVED
  * Triggers automatic stock movement: FG Warehouse → In Transit Warehouse
  */
 export async function approvePerformaInvoice(piId: string): Promise<void> {
@@ -731,7 +756,7 @@ export async function approvePerformaInvoice(piId: string): Promise<void> {
         .single();
 
     if (piErr || !pi) throw new Error('Performa Invoice not found');
-    if (pi.status !== 'CONFIRMED') throw new Error(`PI must be CONFIRMED to approve, current: ${pi.status}`);
+    if (pi.status !== 'DRAFT' && pi.status !== 'CONFIRMED') throw new Error(`PI must be DRAFT or CONFIRMED to approve, current: ${pi.status}`);
 
     // 2. Fetch linked MPLs
     const { data: piMpls } = await supabase
@@ -960,7 +985,7 @@ export async function approvePerformaInvoice(piId: string): Promise<void> {
         entity_id: piId,
         entity_number: pi.proforma_number,
         action: 'STOCK_MOVED',
-        from_status: 'CONFIRMED',
+        from_status: pi.status,
         to_status: 'STOCK_MOVED',
         performed_by: userId,
         metadata: {
@@ -973,6 +998,101 @@ export async function approvePerformaInvoice(piId: string): Promise<void> {
     });
 }
 
+
+/**
+ * Cancel a Proforma Invoice (DRAFT only).
+ * 
+ * Key behaviour:
+ *   - MPLs are UN-LINKED (proforma_invoice_id → null) so they can be reused.
+ *   - MPL status is NOT changed — stays CONFIRMED/PRINTED.
+ *   - Pallet allocations (master_packing_list_pallets) are NOT touched.
+ *   - Pallet states (pack_pallets.state) are NOT touched — remain LOCKED.
+ *   - Junction rows (proforma_invoice_mpls) are deleted to prevent orphan refs.
+ *   - Audit log entry is created.
+ */
+export async function cancelPerformaInvoice(piId: string, reason?: string): Promise<void> {
+    const userId = await getCurrentUserId();
+
+    // 1. Fetch & validate PI
+    const { data: pi, error: piErr } = await supabase
+        .from('pack_proforma_invoices')
+        .select('*')
+        .eq('id', piId)
+        .single();
+
+    if (piErr || !pi) throw new Error('Proforma Invoice not found');
+    if (pi.status !== 'DRAFT') throw new Error(`Only DRAFT Proforma Invoices can be cancelled (current: ${pi.status})`);
+
+    // 2. Fetch linked MPLs via junction table
+    const { data: piMpls } = await supabase
+        .from('proforma_invoice_mpls')
+        .select('mpl_id, mpl_number')
+        .eq('proforma_id', piId);
+
+    const mplIds = (piMpls || []).map((m: any) => m.mpl_id);
+    const mplNumbers = (piMpls || []).map((m: any) => m.mpl_number);
+
+    // 3. Clear proforma_invoice_id on each linked MPL (makes them reusable)
+    if (mplIds.length > 0) {
+        const { error: clearErr } = await supabase
+            .from('master_packing_lists')
+            .update({
+                proforma_invoice_id: null,
+                updated_at: new Date().toISOString(),
+                updated_by: userId,
+            })
+            .in('id', mplIds);
+        if (clearErr) throw new Error(`Failed to clear MPL links: ${clearErr.message}`);
+    }
+
+    // 4. Delete PI ↔ MPL junction rows (clean up)
+    const { error: junctionErr } = await supabase
+        .from('proforma_invoice_mpls')
+        .delete()
+        .eq('proforma_id', piId);
+    if (junctionErr) throw new Error(`Failed to delete junction rows: ${junctionErr.message}`);
+
+    // 5. Cancel the PI itself — try with optional columns first, fallback to minimal update
+    const { error: fullUpdateErr } = await supabase
+        .from('pack_proforma_invoices')
+        .update({
+            status: 'CANCELLED',
+            cancelled_at: new Date().toISOString(),
+            cancellation_reason: reason || null,
+            updated_at: new Date().toISOString(),
+        })
+        .eq('id', piId);
+
+    if (fullUpdateErr) {
+        // Fallback: some columns may not exist — try minimal update
+        const { error: minUpdateErr } = await supabase
+            .from('pack_proforma_invoices')
+            .update({
+                status: 'CANCELLED',
+                updated_at: new Date().toISOString(),
+            })
+            .eq('id', piId);
+        if (minUpdateErr) throw new Error(`Failed to cancel PI: ${minUpdateErr.message}`);
+    }
+
+    // 6. Audit log (non-blocking)
+    try {
+        await logDispatchAudit({
+            entity_type: 'PROFORMA_INVOICE',
+            entity_id: piId,
+            entity_number: pi.proforma_number,
+            action: 'CANCELLED',
+            from_status: 'DRAFT',
+            to_status: 'CANCELLED',
+            performed_by: userId,
+            metadata: {
+                reason: reason || null,
+                released_mpl_count: mplIds.length,
+                released_mpl_numbers: mplNumbers,
+            },
+        });
+    } catch { /* non-blocking */ }
+}
 
 // ============================================================================
 // SEARCH — Multi-field search optimized for indexed columns
@@ -1133,3 +1253,4 @@ export async function fetchCorrelatedAuditLog(correlationId: string): Promise<Di
         performer_name: d.profiles?.full_name || '—',
     }));
 }
+

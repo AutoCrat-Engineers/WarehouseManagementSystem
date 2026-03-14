@@ -11,7 +11,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-    Truck, CheckCircle2, Package, Search, Layers, Box, AlertTriangle,
+    Forklift, CheckCircle2, Package, Search, Layers, Box, AlertTriangle,
     ChevronDown, ChevronRight, FileText, Loader2, Check, Plus, XCircle, Info, X,
 } from 'lucide-react';
 import { Card, Modal, EmptyState, ModuleLoader } from '../ui/EnterpriseUI';
@@ -197,7 +197,7 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
 
     // ── FIRST-LOAD: full-page skeleton ──
     if (loading && readiness.length === 0) {
-        return <ModuleLoader moduleName="Dispatch Selection" icon={<Truck size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
+        return <ModuleLoader moduleName="Dispatch Selection" icon={<Forklift size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
     }
 
     return (
@@ -275,10 +275,10 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
 
             <Card style={{ padding: 0 }}>
                 {loading && filtered.length === 0 && readiness.length === 0 ? (
-                    <ModuleLoader moduleName="Dispatch Selection" icon={<Truck size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
+                    <ModuleLoader moduleName="Dispatch Selection" icon={<Forklift size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
                 ) : filtered.length === 0 ? (
                     <EmptyState
-                        icon={<Truck size={48} style={{ color: 'var(--enterprise-gray-400)' }} />}
+                        icon={<Forklift size={48} style={{ color: 'var(--enterprise-gray-400)' }} />}
                         title="No Dispatch Data"
                         description="Configure contract packing rules first, then containers & pallets will appear here."
                     />
