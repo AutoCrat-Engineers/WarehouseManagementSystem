@@ -7,7 +7,7 @@
  * No container_number shown — only Packing Box ID.
  */
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Search, Printer, Eye, XCircle, ChevronLeft, ChevronRight, ChevronDown, Package, FileText, Truck, AlertCircle, CheckCircle2, Clock, RefreshCw, Hash, Box, Loader2, Scale, Edit3, AlertTriangle, Settings, X, Info } from 'lucide-react';
+import { Search, Printer, Eye, XCircle, ChevronLeft, ChevronRight, ChevronDown, Package, FileText, Truck, AlertCircle, CheckCircle2, Clock, RefreshCw, Hash, Box, Loader2, Scale, Edit3, AlertTriangle, Settings, X, Info, ClipboardList } from 'lucide-react';
 import { fetchMasterPackingLists, confirmMpl, markMplPrinted, cancelMpl, fetchMplPallets, fetchDispatchAuditLog } from './mplService';
 import type { MasterPackingList, MplPallet, MplStatus, DispatchAuditEntry } from './mplService';
 import { getSupabaseClient } from '../../utils/supabase/client';
@@ -57,8 +57,10 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
     // Toast notification (same pattern as ItemMaster/StockMovement)
     const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; title: string; text: string } | null>(null);
     const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const toastKeyRef = useRef(0);
     const showToast = useCallback((type: 'success' | 'error' | 'warning' | 'info', title: string, text: string, duration = 5000) => {
         if (toastTimer.current) clearTimeout(toastTimer.current);
+        toastKeyRef.current += 1;
         setToast({ type, title, text });
         toastTimer.current = setTimeout(() => setToast(null), duration);
     }, []);
@@ -82,7 +84,7 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
     const [enrichedPallets, setEnrichedPallets] = useState<EnrichedPallet[]>([]);
     const [palletDetails, setPalletDetails] = useState<any[]>([]);
     const [plData, setPlData] = useState<any>(null);
-    const [dispatchForm, setDispatchForm] = useState({ invoice_number: '', invoice_date: '', purchase_order_number: '', purchase_order_date: '', ship_via: '', vendor_number: '' });
+    const [dispatchForm, setDispatchForm] = useState({ invoice_number: '', invoice_date: '', purchase_order_number: '', purchase_order_date: '', ship_via: '', vendor_number: '', mode_of_transport: '' });
     const [wizardLoading, setWizardLoading] = useState(false);
     const [saving, setSaving] = useState(false);
 
@@ -157,7 +159,7 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
             let data = await svc.fetchPackingListData(plId);
             if (!data) { data = await svc.upsertPackingListData(plId, {}); await svc.autoPopulatePalletDetails(plId, data.id); }
             setPlData(data);
-            setDispatchForm({ invoice_number: data.invoice_number || '', invoice_date: data.invoice_date || '', purchase_order_number: data.purchase_order_number || '', purchase_order_date: data.purchase_order_date || '', ship_via: data.ship_via || '', vendor_number: data.vendor_number || '' });
+            const mot = data.mode_of_transport || ''; setDispatchForm({ invoice_number: data.invoice_number || '', invoice_date: data.invoice_date || '', purchase_order_number: data.purchase_order_number || '', purchase_order_date: data.purchase_order_date || '', ship_via: data.ship_via || '', vendor_number: data.vendor_number || '', mode_of_transport: mot === 'OCEAN' ? 'SEA' : mot });
             const details = await svc.fetchPackingListPalletDetails(data.id);
             setPalletDetails(details);
             const { data: plItems } = await supabase.from('pack_packing_list_items').select('pallet_id').eq('packing_list_id', plId);
@@ -202,7 +204,7 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
             await supabase.from('master_packing_lists').update({ invoice_number: dispatchForm.invoice_number, po_number: dispatchForm.purchase_order_number, total_gross_weight_kg: enrichedPallets.reduce((s, p) => s + p.gross_weight_kg, 0), updated_at: new Date().toISOString() }).eq('id', wizardMpl.id);
             await confirmMpl(wizardMpl.id);
             showToast('success', 'Packing List Confirmed', `${wizardMpl.mpl_number} details saved & confirmed — Print is now enabled`);
-            setWizardMpl(null); loadMpls(); loadSummary();
+            setWizardMpl(null); loadMpls(true); loadSummary();
         } catch (err: any) { showToast('error', 'Save Failed', err.message); } finally { setSaving(false); }
     };
 
@@ -212,7 +214,7 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
             const bt = await svc.getPackingListFullBacktrack(mpl.packing_list_id);
             await openMasterPLPrint(bt, mpl);
             await markMplPrinted(mpl.id);
-            showToast('success', 'Printed', `${mpl.mpl_number} has been printed`); loadMpls(); loadSummary();
+            showToast('success', 'Printed', `${mpl.mpl_number} has been printed`); loadMpls(true); loadSummary();
         } catch (err: any) { showToast('error', 'Print Failed', err.message); }
     };
 
@@ -255,15 +257,16 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
             payment: hd?.payment_terms || 'Net-30',
             portDisc: hd?.port_of_discharge || 'CHARLESTON',
             finalDest: (hd?.final_destination && hd.final_destination !== 'CHARLESTON') ? hd.final_destination : 'UNITED STATES',
-            transport: hd?.mode_of_transport || 'OCEAN',
+            transport: (() => { const t = hd?.mode_of_transport || 'SEA'; return t === 'OCEAN' ? 'SEA' : t; })(),
             itemHdr: hd?.item_description_header || 'PRECISION MACHINED COMPONENTS',
             itemSub: hd?.item_description_sub_header || '(OTHERS FUELING COMPONENTS)',
         };
 
-        const itemRows = details.map((d: any) => {
+        const itemRows = details.map((d: any, idx: number) => {
             const dim = d.pallet_length_cm && d.pallet_width_cm && d.pallet_height_cm
-                ? `${d.pallet_length_cm} X ${d.pallet_width_cm} X ${d.pallet_height_cm}` : '\u2014';
+                ? `${Math.round(d.pallet_length_cm)} X ${Math.round(d.pallet_width_cm)} X ${Math.round(d.pallet_height_cm)}` : '\u2014';
             return `<tr>
+<td class="br c4 ctr">${idx + 1}</td>
 <td class="br c4">${d.pallet_number || ''}</td>
 <td class="br c4"><div style="font-size:14px;font-weight:800">${d.part_number || ''}</div><div style="font-size:12px">${d.item_name || d.item_code || ''}${d.master_serial_no ? ' (' + d.master_serial_no + ')' : ''}</div></td>
 
@@ -311,10 +314,10 @@ td,th{vertical-align:top}
 <table>
 <colgroup><col style="width:40%"/><col style="width:20%"/><col style="width:40%"/></colgroup>
 <tr>
-<td class="bb br c4" rowspan="4" style="vertical-align:top;padding:4px 6px">
+<td class="bb br c4" rowspan="5" style="vertical-align:top;padding:4px 6px">
 <div style="display:flex;justify-content:space-between;align-items:baseline;padding:2px 0">
 <span style="font-size:12px;font-weight:700">Exporter</span>
-<span style="font-size:11px;font-weight:700;color:#555">Vendor No : <span style="font-size:12px;font-weight:400;color:#000">${D.vendorNo}</span></span>
+<span style="font-size:11px;font-weight:700;color:#555; font-family:'Courier New'">Vendor No : <span style="font-size:12px;font-weight:700;color:#555;font-family:'Courier New'">${D.vendorNo}</span></span>
 </div>
 <div style="padding:3px 0;line-height:1.5">
 <div style="font-size:13px;font-weight:800">${D.expName}</div>
@@ -324,23 +327,27 @@ td,th{vertical-align:top}
 <div style="font-size:12px">GSTIN : ${D.expGstin}</div>
 </div>
 </td>
-<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">PO Number :</td>
+<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">PO Number & Date :</td>
 <td class="bb c4" style="padding:4px 6px"><div style="font-size:13px;font-weight:700">${hd?.purchase_order_number || ''}</div><div style="font-size:12px;color:#333;margin-top:1px">${poDate || ''}</div></td>
 </tr>
 <tr>
-<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Invoice No. :</td>
+<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Invoice No. & Date :</td>
 <td class="bb c4" style="padding:4px 6px"><div style="font-size:13px;font-weight:700">${hd?.invoice_number || ''}</div><div style="font-size:12px;color:#333;margin-top:1px">${invDate || ''}</div></td>
-</tr>
-<tr>
-<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Terms of Delivery & Payment :</td>
-<td class="bb c4" style="font-size:13px;padding:4px 6px">${D.delivery}</td>
 </tr>
 <tr>
 <td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">AD Code No :</td>
 <td class="bb c4" style="font-size:13px;padding:4px 6px;font-family:'Courier New',monospace">${D.expAd}</td>
 </tr>
 <tr>
-<td class="bb br c4" rowspan="3" style="vertical-align:top;padding:4px 6px">
+<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">IEC Code No :</td>
+<td class="bb c4" style="font-size:13px;padding:4px 6px;font-family:'Courier New',monospace">${D.expIec}</td>
+</tr>
+<tr>
+<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Terms of Delivery & Payment :</td>
+<td class="bb c4" style="font-size:13px;padding:4px 6px">${D.delivery}</td>
+</tr>
+<tr>
+<td class="bb br c4" style="vertical-align:top;padding:4px 6px">
 <div style="font-size:12px;font-weight:700;padding:2px 0">Consignee</div>
 <div style="padding:3px 0;line-height:1.5">
 <div style="font-size:13px;font-weight:700">${D.conName}</div>
@@ -348,23 +355,16 @@ td,th{vertical-align:top}
 <div style="font-size:11px">Telephone: +1 ${D.conPhone}</div>
 </div>
 </td>
-<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">IEC Code No :</td>
-<td class="bb c4" style="font-size:13px;padding:4px 6px;font-family:'Courier New',monospace">${D.expIec}</td>
-</tr>
-<tr>
-<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Buyer :</td>
-<td class="bb c4" style="font-size:13px;padding:4px 6px">${D.buyName}</td>
-</tr>
-<tr>
-<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Contact :</td>
-<td class="bb c4" style="font-size:13px;padding:4px 6px">+1 ${D.buyPhone} | ${D.buyEmail}</td>
+<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px;vertical-align:top">Buyer Details :</td>
+<td class="bb c4" style="font-size:13px;padding:4px 6px;vertical-align:top"><div style="font-weight:700">${D.buyName}</div><div style="font-size:11px;color:#333;margin-top:2px">+1 ${D.buyPhone}</div><div style="font-size:11px;color:#333;margin-top:1px">${D.buyEmail}</div></td>
 </tr>
 </table>
 
 <table>
-<colgroup><col style="width:25%"/><col style="width:25%"/><col style="width:25%"/><col style="width:25%"/></colgroup>
+<colgroup><col style="width:20%"/><col style="width:20%"/><col style="width:20%"/><col style="width:20%"/><col style="width:20%"/></colgroup>
 <tr>
-<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Ship Mode</span><br/><span style="font-size:13px;font-weight:700">${D.transport}</span></td>
+<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Mode of Transport</span><br/><span style="font-size:13px;font-weight:700">${D.transport}</span></td>
+<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Freight Forwarder</span><br/><span style="font-size:13px;font-weight:700">${hd?.ship_via || 'SEAHORSE'}</span></td>
 <td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Port of Loading</span><br/><span style="font-size:13px;font-weight:700">${D.portLoad}</span></td>
 <td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Port of Discharge</span><br/><span style="font-size:13px;font-weight:700">${D.portDisc}</span></td>
 <td class="bb c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Final Destination</span><br/><span style="font-size:13px;font-weight:700">${D.finalDest}</span></td>
@@ -374,10 +374,11 @@ td,th{vertical-align:top}
 <table><tr><td class="bb c4 ctr" style="padding:5px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:1px">${D.itemHdr}<br/><span style="font-weight:700;font-size:9px">${D.itemSub}</span></td></tr></table>
 
 <table>
-<colgroup><col style="width:18%"/><col style="width:24%"/><col style="width:14%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
+<colgroup><col style="width:5%"/><col style="width:15%"/><col style="width:22%"/><col style="width:14%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
 <tr style="background:#f5f5f5">
-<th class="bb br c4 lbl" style="text-align:left">PW/Pallet No. & Batch No.</th>
-<th class="bb br c4 lbl" style="text-align:left">Part No. & Description with P.O No.</th>
+<th class="bb br c4 lbl ctr">SL NO</th>
+<th class="bb br c4 lbl" style="text-align:left">PW/Pallet No.</th>
+<th class="bb br c4 lbl" style="text-align:left">Part No. & Description</th>
 
 <th class="bb br c4 lbl ctr">Pallet Size in CMs.</th>
 <th class="bb br c4 lbl ctr">Part Rev</th>
@@ -388,13 +389,15 @@ td,th{vertical-align:top}
 ${itemRows}
 </table>
 <table style="flex:1">
-<colgroup><col style="width:18%"/><col style="width:24%"/><col style="width:14%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
-<tr><td class="br" style="height:100%"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td></td></tr>
+<colgroup><col style="width:5%"/><col style="width:15%"/><col style="width:22%"/><col style="width:14%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
+<tr><td class="br" style="height:100%"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td></td></tr>
 </table>
 
+
 <table>
-<colgroup><col style="width:18%"/><col style="width:24%"/><col style="width:14%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
+<colgroup><col style="width:5%"/><col style="width:15%"/><col style="width:22%"/><col style="width:14%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
 <tr style="background:#f5f5f5">
+<td class="bt br c4"></td>
 <td class="bt br c4" colspan="2" style="font-weight:800;font-size:12px">Total</td>
 <td class="bt br c4 ctr mono" style="font-weight:800">${String(totalPkgs).padStart(2, '0')}</td>
 <td class="bt br c4"></td>
@@ -407,7 +410,7 @@ ${itemRows}
 <table style="border-top:1.5px solid #000">
 <colgroup><col style="width:50%"/><col style="width:50%"/></colgroup>
 <tr>
-<td class="bb c4" style="font-size:11px;font-weight:700;padding:5px 6px;vertical-align:top">ITC HS CODE: <span class="mono" style="font-weight:800">84139190</span><br/>US HTS Code: <span class="mono" style="font-weight:800">8413.91.9000</span></td>
+<td class="bb c4" style="font-size:11px;font-weight:700;padding:5px 6px;vertical-align:top">ITC HS CODE: <span class="mono" style="font-weight:800">84139190</span><br/>HTS Code : <span class="mono" style="font-weight:800">8413919085</span></td>
 <td class="bb c4 rgt" style="vertical-align:top;padding:4px 5px">
 <div style="font-size:10px;font-weight:700">for AUTOCRAT ENGINEERS</div>
 <div style="margin-top:12px;font-size:9px;font-style:italic">Authorised Signatory</div>
@@ -453,7 +456,7 @@ ${itemRows}
             const palletId = d.pallet_id || d.id || '';
             const barcodeImg = barcodeMap[palletId] || '';
             const dim = d.pallet_length_cm && d.pallet_width_cm && d.pallet_height_cm
-                ? `${d.pallet_length_cm} X ${d.pallet_width_cm} X ${d.pallet_height_cm}` : '';
+                ? `${Math.round(d.pallet_length_cm)} X ${Math.round(d.pallet_width_cm)} X ${Math.round(d.pallet_height_cm)}` : '';
             const palletNum = d.pallet_number || '';
             return `
 <div style="page-break-before:always;padding:24px 28px;font-family:Calibri,'Segoe UI',Arial,sans-serif;font-size:18px;color:#000;height:calc(100vh - 10mm);display:flex;flex-direction:column;box-sizing:border-box">
@@ -498,7 +501,7 @@ ${itemRows}
 </div>
 </div>
 <div style="text-align:center;margin-bottom:16px">
-<div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">COUNT</div>
+<div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">QTY in No's</div>
 <div style="font-size:80px;font-weight:900;margin-top:4px;line-height:1">${(d.qty_per_pallet || 0).toLocaleString()}</div>
 </div>
 <div style="display:flex;margin-bottom:14px">
@@ -518,20 +521,21 @@ ${itemRows}
 </div>
 <div style="flex:1">
 <div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">HTS CODE</div>
-<div style="font-size:28px;font-weight:800;margin-top:3px">${d.hts_code || '84139190'}</div>
+<div style="font-size:28px;font-weight:800;margin-top:3px">${d.hts_code || '8413919085'}</div>
 </div>
 <div style="flex:1;text-align:right">
 <div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">LOGISTICS</div>
-<div style="font-size:28px;font-weight:800;margin-top:3px">${hd?.ship_via || 'SEAHORSE BY OCEAN'}</div>
+<div style="font-size:28px;font-weight:800;margin-top:3px">${hd?.ship_via || 'SEAHORSE BY SEA'}</div>
 </div>
 </div>
 </div>
 
 <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 0">
 ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" />' : ''}
+<div style="font-size:24px;font-weight:900;color:#000;margin-top:6px;letter-spacing:1px">${palletNum}</div>
 </div>
 
-<div style="text-align:center;font-size:12px;color:#aaa;padding-top:4px;border-top:1px solid #eee">${palletNum} &middot; Slip ${idx + 1} of ${details.length}</div>
+<div style="text-align:center;font-size:12px;color:#aaa;padding-top:4px;border-top:1px solid #eee">Slip ${idx + 1} of ${details.length}</div>
 
 </div>`;
         }).join('');
@@ -559,7 +563,7 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
         if (!cancelTarget) return;
         if (cancelConfirmInput.trim() !== cancelTarget.mpl_number) return;
         if (!cancelReason.trim()) return;
-        try { setCancelling(true); await cancelMpl(cancelTarget.id, cancelReason || undefined); setCancelTarget(null); setCancelReason(''); setCancelConfirmInput(''); showToast('success', 'Packing List Cancelled', `${cancelTarget.mpl_number} has been cancelled successfully`); loadMpls(); loadSummary(); } catch (err: any) { showToast('error', 'Cancel Failed', err.message); } finally { setCancelling(false); }
+        try { setCancelling(true); await cancelMpl(cancelTarget.id, cancelReason || undefined); setCancelTarget(null); setCancelReason(''); setCancelConfirmInput(''); showToast('success', 'Packing List Cancelled', `${cancelTarget.mpl_number} has been cancelled successfully`); loadMpls(true); loadSummary(); } catch (err: any) { showToast('error', 'Cancel Failed', err.message); } finally { setCancelling(false); }
     };
 
     const isMplReady = (mpl: MasterPackingList) => !!(mpl.invoice_number && mpl.po_number);
@@ -853,8 +857,9 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
                                 {/* Shipping */}
                                 <div style={{ marginBottom: 20 }}>
                                     <div style={{ fontSize: 11, fontWeight: 700, color: '#1e3a8a', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}><Truck size={12} /> Shipping Details</div>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                                        <div><label style={{ ...lbl, color: '#374151' }}>Ship Via</label><input value={dispatchForm.ship_via} onChange={e => setDispatchForm({ ...dispatchForm, ship_via: e.target.value })} style={{ ...inp, borderRadius: 10, padding: '10px 14px', borderWidth: 2 }} placeholder="SEAHORSE" /></div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
+                                        <div><label style={{ ...lbl, color: '#374151' }}>Flight Forwarder</label><input value={dispatchForm.ship_via} onChange={e => setDispatchForm({ ...dispatchForm, ship_via: e.target.value })} style={{ ...inp, borderRadius: 10, padding: '10px 14px', borderWidth: 2 }} placeholder="SEAHORSE" /></div>
+                                        <div><label style={{ ...lbl, color: '#374151' }}>Mode of Transport</label><input value={dispatchForm.mode_of_transport} onChange={e => setDispatchForm({ ...dispatchForm, mode_of_transport: e.target.value })} style={{ ...inp, borderRadius: 10, padding: '10px 14px', borderWidth: 2 }} placeholder="SEA / AIR / ROAD" /></div>
                                         <div><label style={{ ...lbl, color: '#374151' }}>Vendor Number</label><input value={dispatchForm.vendor_number} onChange={e => setDispatchForm({ ...dispatchForm, vendor_number: e.target.value })} style={{ ...inp, borderRadius: 10, padding: '10px 14px', borderWidth: 2 }} placeholder="114395" /></div>
                                     </div>
                                 </div>
@@ -885,7 +890,7 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
     // ═══════════════════════════════════════════════════════════════
     // RENDER — DASHBOARD
     // ═══════════════════════════════════════════════════════════════
-    if (loading) return <ModuleLoader moduleName="Packing List" icon={<Package size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
+    if (loading) return <ModuleLoader moduleName="Packing List" icon={<ClipboardList size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
@@ -897,7 +902,7 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
 
             {/* ═══════════════ FLOATING TOAST NOTIFICATION ═══════════════ */}
             {toast && (
-                <div style={{
+                <div key={toastKeyRef.current} style={{
                     position: 'fixed', top: 24, right: 24, zIndex: 10000,
                     minWidth: 360, maxWidth: 440,
                     padding: '16px 20px', borderRadius: 14,
