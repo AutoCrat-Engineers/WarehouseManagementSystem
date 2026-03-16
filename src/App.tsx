@@ -119,7 +119,7 @@ const DISPATCH_VIEW_META: Record<string, { label: string; description: string }>
   'dispatch': { label: 'Dispatch', description: 'Dispatch & Shipping' },
   'pe-dispatch': { label: 'Dispatch Selection', description: 'Select Pallets for Dispatch' },
   'pe-mpl-home': { label: 'Packing List', description: 'Master Packing List Dashboard' },
-  'pe-performa-invoice': { label: 'Performa Invoice', description: 'Shipment Batching & Stock Dispatch' },
+  'pe-performa-invoice': { label: 'Proforma Invoice', description: 'Shipment Batching & Stock Dispatch' },
 };
 
 const menuItems: MenuItem[] = [
@@ -1009,7 +1009,7 @@ export default function App() {
                           onMouseLeave={(e) => { if (currentView !== 'pe-performa-invoice') e.currentTarget.style.backgroundColor = 'transparent'; }}
                         >
                           <Stamp size={15} strokeWidth={currentView === 'pe-performa-invoice' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-performa-invoice' ? 1 : 0.6 }} />
-                          <span>Performa Invoice</span>
+                          <span>Proforma Invoice</span>
                         </button>
                       )}
                     </div>
