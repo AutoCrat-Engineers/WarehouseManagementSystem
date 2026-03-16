@@ -112,3 +112,58 @@ If the module has **submodules** (like Packing), add a `submodules: [...]` array
 - ❌ Using `userRole` checks alone instead of checking `userPerms` map
 - ❌ Leaving action buttons unguarded (Add/Edit/Delete visible to everyone)
 - ❌ Forgetting `VIEW_PERMISSION_MAP` entry (view-level access won't work)
+
+---
+
+## Special Case: Packing Engine / Dispatch Submodules
+
+When adding a new packing-engine or dispatch sub-view:
+
+1. **`GrantAccessModal.tsx`** — Add it as a submodule **under the `packing` module** (not as a top-level module):
+   ```ts
+   {
+       id: '<submodule-id>',
+       label: '<Human Label>',
+       icon: <LucideIcon>,
+       description: '<Short description>',
+       actions: ['view', 'create', 'edit'],
+   },
+   ```
+
+2. **`App.tsx`** — Add to `VIEW_PERMISSION_MAP`:
+   ```ts
+   'pe-<submodule-id>': 'packing.<submodule-id>.view',
+   ```
+
+3. **`App.tsx`** — Add to the appropriate sub-views array:
+   - Packing views → `PACKING_SUB_VIEWS` + `PACKING_VIEW_META`
+   - Dispatch views → `DISPATCH_SUB_VIEWS` + `DISPATCH_VIEW_META`
+
+4. **`App.tsx`** — Add the `case` in `renderContent()`:
+   ```tsx
+   case 'pe-<submodule-id>':
+     if (!canAccessView('pe-<submodule-id>')) return renderAccessDenied('<Label>');
+     return <Component accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
+   ```
+
+5. **`App.tsx`** — Add to `getMenuItems()` permission check:
+   - Under `if (item.id === 'packing')` or `if (item.id === 'dispatch')` add:
+     ```ts
+     userPerms['packing.<submodule-id>.view'] ||
+     ```
+
+### Current Packing Submodules
+
+| Submodule ID | View ID | Location |
+|---|---|---|
+| `sticker-generation` | `packing-sticker` | Packing accordion |
+| `packing-details` | `packing-details` | Packing accordion |
+| `packing-list-invoice` | `packing-list-invoice` | Packing accordion |
+| `packing-list-sub-invoice` | `packing-list-sub-invoice` | Packing accordion |
+| `pallet-dashboard` | `pe-pallet-dashboard` | Packing accordion |
+| `contract-configs` | `pe-contract-configs` | Packing accordion |
+| `traceability` | `pe-traceability` | Packing accordion |
+| `dispatch` | `pe-dispatch` | Dispatch accordion |
+| `mpl-home` | `pe-mpl-home` | Dispatch accordion |
+| `performa-invoice` | `pe-performa-invoice` | Dispatch accordion |
+

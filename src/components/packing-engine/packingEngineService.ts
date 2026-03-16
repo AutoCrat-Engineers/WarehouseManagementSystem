@@ -741,6 +741,10 @@ export interface PalletImpact {
     adjustmentBoxRequired: boolean;
     adjustmentBoxQty: number;
     mustCreateAdjustmentFirst: boolean;
+    /** Number of boxes that will be converted to adjustment boxes for EXISTING pallets */
+    adjustmentBoxesForExistingPallets: number;
+    /** Total number of adjustment boxes (existing pallets + current pallet boundary) */
+    totalAdjustmentBoxes: number;
     palletSummary: string;
     warnings: string[];
 }
@@ -762,91 +766,146 @@ export async function calculatePalletImpact(
     // e.g., OPW-03: 66 full + 1 adj = 67; items with no adj remainder: just 66
     const totalContainersPerPallet = fullContainersPerPallet + (adjustmentQtyPerPallet > 0 ? 1 : 0);
 
-    // Find current open/filling pallet
-    const { data: openPallets } = await supabase
+    // ──────────────────────────────────────────────────────────────────────
+    // MULTI-PALLET AWARENESS: Fetch ALL open/filling/adjustment pallets
+    // Previously: .limit(1) — only detected the FIRST pallet needing adjustment
+    // Now: .limit(50) — detects ALL pallets needing adjustment
+    // ──────────────────────────────────────────────────────────────────────
+    const { data: allOpenPallets } = await supabase
         .from('pack_pallets')
         .select('*')
         .eq('item_code', item_code)
         .in('state', ['OPEN', 'FILLING', 'ADJUSTMENT_REQUIRED'])
         .order('created_at', { ascending: true })
-        .limit(1);
+        .limit(50);
 
-    const currentPallet = openPallets && openPallets.length > 0 ? openPallets[0] : null;
+    // Separate pallets by state: ADJUSTMENT_REQUIRED vs OPEN/FILLING
+    const adjRequiredPallets = (allOpenPallets || []).filter((p: any) => p.state === 'ADJUSTMENT_REQUIRED');
+    const fillingPallets = (allOpenPallets || []).filter((p: any) => p.state !== 'ADJUSTMENT_REQUIRED');
+    const adjustmentPalletsCount = adjRequiredPallets.length;
+
+    // The "current" pallet is the one being filled (OPEN/FILLING) — not the adj ones
+    const currentPallet = fillingPallets.length > 0 ? fillingPallets[0] : null;
     const currentQty = currentPallet?.current_qty || 0;
     const targetQty = currentPallet?.target_qty || outerQty;
     const containersFilled = currentPallet?.container_count || 0;
     const adjContainerCount = currentPallet?.adjustment_container_count || 0;
 
     const fullBoxesRemainingForPallet = Math.max(0, fullContainersPerPallet - containersFilled);
-    const adjustmentNeeded = adjustmentQtyPerPallet > 0 && adjContainerCount === 0;
+    const currentPalletNeedsAdj = adjustmentQtyPerPallet > 0 && adjContainerCount === 0;
 
-    // Initial split (inner boxes only, before adj conversion)
-    let innerBoxesToCurrentPallet = Math.min(incoming_box_count, fullBoxesRemainingForPallet);
-    let innerBoxesToNewPallet = incoming_box_count - innerBoxesToCurrentPallet;
+    // ──────────────────────────────────────────────────────────────────────
+    // STEP 1: Allocate boxes to EXISTING pallets needing adjustment FIRST
+    //   Priority: Fill existing ADJUSTMENT_REQUIRED pallets before anything else
+    // ──────────────────────────────────────────────────────────────────────
+    const adjustmentBoxesForExisting = Math.min(incoming_box_count, adjustmentPalletsCount);
+    let remainingBoxes = incoming_box_count - adjustmentBoxesForExisting;
+
+    // ──────────────────────────────────────────────────────────────────────
+    // STEP 2: Allocate remaining boxes to current FILLING pallet
+    // ──────────────────────────────────────────────────────────────────────
+    let innerBoxesToCurrentPallet = Math.min(remainingBoxes, fullBoxesRemainingForPallet);
+    let innerBoxesToNewPallet = remainingBoxes - innerBoxesToCurrentPallet;
 
     const afterThisMove_fullContainers = containersFilled + innerBoxesToCurrentPallet;
     const willFillAllFullContainers = afterThisMove_fullContainers >= fullContainersPerPallet;
 
-    // AUTO-ADJUSTMENT: When pallet boundary is crossed, convert 1 box to adjustment
-    // e.g., L1 enters 10 -> becomes 9 x 450 + 1 x 300 = 4,350 PCS
-    let adjustmentBoxIncluded = false;
-    let adjustedInnerBoxCount = incoming_box_count;
-    let adjustedTotalQty = incoming_box_count * innerQty;
+    // AUTO-ADJUSTMENT for the CURRENT filling pallet boundary
+    // When current pallet's full containers are filled, convert 1 box to adjustment
+    let adjustmentBoxForCurrentPallet = false;
+    let adjustedInnerBoxCount = remainingBoxes;
+    let adjustedTotalQty = (adjustmentBoxesForExisting * adjustmentQtyPerPallet) + (remainingBoxes * innerQty);
 
-    if (willFillAllFullContainers && adjustmentNeeded && incoming_box_count > 0) {
-        adjustmentBoxIncluded = true;
-        adjustedInnerBoxCount = incoming_box_count - 1;
-        adjustedTotalQty = (adjustedInnerBoxCount * innerQty) + adjustmentQtyPerPallet;
+    if (willFillAllFullContainers && currentPalletNeedsAdj && remainingBoxes > 0) {
+        adjustmentBoxForCurrentPallet = true;
+        adjustedInnerBoxCount = remainingBoxes - 1;
+        adjustedTotalQty = (adjustmentBoxesForExisting * adjustmentQtyPerPallet) +
+            (adjustedInnerBoxCount * innerQty) + adjustmentQtyPerPallet;
         // Recalculate split with adjusted count
         innerBoxesToCurrentPallet = Math.min(adjustedInnerBoxCount, fullBoxesRemainingForPallet);
         innerBoxesToNewPallet = adjustedInnerBoxCount - innerBoxesToCurrentPallet;
     }
 
-    const willCompletePallet = willFillAllFullContainers && (adjustmentBoxIncluded || !adjustmentNeeded);
-    const mustCreateAdjustmentFirst = willFillAllFullContainers && adjustmentNeeded && incoming_box_count > 0;
+    const totalAdjustmentBoxes = adjustmentBoxesForExisting + (adjustmentBoxForCurrentPallet ? 1 : 0);
+    const totalNormalBoxes = incoming_box_count - totalAdjustmentBoxes;
+    const adjustmentBoxIncluded = totalAdjustmentBoxes > 0;
 
-    // Breakdown text: "9 Boxes x 450 PCS + 1 Top-off Box x 300 PCS = 4,350 PCS"
+    const willCompletePallet = currentPallet
+        ? (willFillAllFullContainers && (adjustmentBoxForCurrentPallet || !currentPalletNeedsAdj))
+        : false;
+    // mustCreateAdjustmentFirst: true if ANY adjustment boxes are needed
+    // (either for existing ADJUSTMENT_REQUIRED pallets OR for the current pallet boundary)
+    const mustCreateAdjustmentFirst = totalAdjustmentBoxes > 0;
+
+    // ──────────────────────────────────────────────────────────────────────
+    // BREAKDOWN TEXT — Clear description of what will happen
+    // ──────────────────────────────────────────────────────────────────────
     let breakdownText = '';
-    if (adjustmentBoxIncluded) {
-        breakdownText = `${adjustedInnerBoxCount} Boxes x ${innerQty.toLocaleString()} PCS + 1 Top-off Box x ${adjustmentQtyPerPallet.toLocaleString()} PCS = ${adjustedTotalQty.toLocaleString()} PCS`;
-    } else {
-        breakdownText = `${incoming_box_count} Boxes x ${innerQty.toLocaleString()} PCS = ${adjustedTotalQty.toLocaleString()} PCS`;
+    const parts: string[] = [];
+
+    if (adjustmentBoxesForExisting > 0) {
+        parts.push(`${adjustmentBoxesForExisting} Top-Up Box${adjustmentBoxesForExisting > 1 ? 'es' : ''} x ${adjustmentQtyPerPallet.toLocaleString()} PCS (completing ${adjustmentBoxesForExisting} existing pallet${adjustmentBoxesForExisting > 1 ? 's' : ''})`);
+    }
+    if (totalNormalBoxes > 0) {
+        parts.push(`${totalNormalBoxes} Box${totalNormalBoxes > 1 ? 'es' : ''} x ${innerQty.toLocaleString()} PCS`);
+    }
+    if (adjustmentBoxForCurrentPallet) {
+        parts.push(`1 Top-off Box x ${adjustmentQtyPerPallet.toLocaleString()} PCS (completing current pallet)`);
     }
 
-    // Warnings
+    if (!adjustmentBoxIncluded) {
+        adjustedTotalQty = incoming_box_count * innerQty;
+    }
+    breakdownText = parts.join(' + ') + ` = ${adjustedTotalQty.toLocaleString()} PCS`;
+
+    // ──────────────────────────────────────────────────────────────────────
+    // WARNINGS — Clear user-facing warnings
+    // ──────────────────────────────────────────────────────────────────────
     const warnings: string[] = [];
-    if (adjustmentBoxIncluded && innerBoxesToNewPallet > 0) {
+
+    if (adjustmentBoxesForExisting > 0) {
+        const palletNames = adjRequiredPallets.slice(0, adjustmentBoxesForExisting)
+            .map((p: any) => p.pallet_number).join(', ');
         warnings.push(
-            `PALLET COMPLETION: Out of ${incoming_box_count} Boxes entered, ` +
-            `${innerBoxesToCurrentPallet > 0 ? innerBoxesToCurrentPallet + ' regular Boxes + ' : ''}` +
-            `1 Top-off Box (${adjustmentQtyPerPallet} PCS) will be used to complete ${currentPallet?.pallet_number || 'current pallet'}. ` +
-            `Remaining ${innerBoxesToNewPallet} Box(es) will go to a new pallet.`
-        );
-    } else if (adjustmentBoxIncluded) {
-        warnings.push(
-            `System will auto-create 1 Top-off Box of ${adjustmentQtyPerPallet} PCS. ` +
-            `This will ${willCompletePallet ? 'COMPLETE' : 'continue filling'} ${currentPallet?.pallet_number || 'the pallet'}.`
-        );
-    } else if (innerBoxesToNewPallet > 0) {
-        warnings.push(
-            `${innerBoxesToCurrentPallet} Box(es) will go to ${currentPallet?.pallet_number || 'current pallet'}, ` +
-            `${innerBoxesToNewPallet} box(es) will go to a new pallet.`
+            `MULTI-PALLET ADJUSTMENT: ${adjustmentBoxesForExisting} of ${incoming_box_count} Boxes will be converted to ` +
+            `Top-Up Boxes (${adjustmentQtyPerPallet} PCS each) to complete pallet(s): ${palletNames}.`
         );
     }
 
-    // Summary
+    if (adjustmentBoxForCurrentPallet) {
+        warnings.push(
+            `PALLET BOUNDARY: 1 additional Box will be converted to a Top-off Box (${adjustmentQtyPerPallet} PCS) ` +
+            `to complete ${currentPallet?.pallet_number || 'the current pallet'}.`
+        );
+    }
+
+    if (innerBoxesToNewPallet > 0) {
+        warnings.push(
+            `${innerBoxesToNewPallet} Box(es) will overflow to a new pallet.`
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // SUMMARY
+    // ──────────────────────────────────────────────────────────────────────
     const palletNumber = currentPallet?.pallet_number || 'NEW';
     let palletSummary = '';
-    if (!currentPallet) {
-        palletSummary = `No active pallet. New pallet (${totalContainersPerPallet} inner boxes) will be created.`;
-    } else {
-        palletSummary = `Pallet ${palletNumber}: ${currentQty.toLocaleString()}/${targetQty.toLocaleString()} PCS (${containersFilled}/${totalContainersPerPallet} inner boxes).`;
-        if (adjustmentBoxIncluded) {
-            palletSummary += ` Movement: ${adjustedInnerBoxCount} Boxes x ${innerQty} PCS + 1 Top-off Box x ${adjustmentQtyPerPallet} PCS.`;
-        }
-        if (innerBoxesToNewPallet > 0) {
-            palletSummary += ` ${innerBoxesToNewPallet} Box(es) will overflow to new pallet.`;
-        }
+
+    if (adjustmentPalletsCount > 0) {
+        palletSummary = `${adjustmentPalletsCount} pallet(s) awaiting adjustment. `;
+    }
+
+    if (!currentPallet && adjustmentPalletsCount === 0) {
+        palletSummary += `No active pallet. New pallet (${totalContainersPerPallet} containers) will be created.`;
+    } else if (currentPallet) {
+        palletSummary += `Pallet ${palletNumber}: ${currentQty.toLocaleString()}/${targetQty.toLocaleString()} PCS (${containersFilled}/${totalContainersPerPallet} containers).`;
+    }
+
+    if (totalAdjustmentBoxes > 0) {
+        palletSummary += ` Adjustment: ${totalAdjustmentBoxes} Top-Up Box(es).`;
+    }
+    if (innerBoxesToNewPallet > 0) {
+        palletSummary += ` ${innerBoxesToNewPallet} Box(es) will overflow to new pallet.`;
     }
 
     return {
@@ -859,7 +918,7 @@ export async function calculatePalletImpact(
             total_containers_needed: totalContainersPerPallet,
             containers_needed: Math.max(0, fullBoxesRemainingForPallet),
             adjustment_qty: adjustmentQtyPerPallet,
-            adjustment_needed: adjustmentNeeded,
+            adjustment_needed: currentPalletNeedsAdj,
             state: currentPallet.state,
         } : null,
         inner_box_qty: innerQty,
@@ -868,10 +927,12 @@ export async function calculatePalletImpact(
         total_containers_per_pallet: totalContainersPerPallet,
         adjustment_qty_per_pallet: adjustmentQtyPerPallet,
         adjustmentBoxIncluded,
-        adjustedInnerBoxCount,
+        adjustedInnerBoxCount: totalNormalBoxes,
         adjustedTotalQty,
         breakdownText,
         boxesToCurrentPallet: innerBoxesToCurrentPallet,
+        adjustmentBoxesForExistingPallets: adjustmentBoxesForExisting,
+        totalAdjustmentBoxes,
         boxesToNewPallet: innerBoxesToNewPallet,
         willCompletePallet,
         adjustmentBoxRequired: adjustmentBoxIncluded,

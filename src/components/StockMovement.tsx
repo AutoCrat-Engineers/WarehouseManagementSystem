@@ -343,7 +343,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   const [approvedQty, setApprovedQty] = useState<number>(0);
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [reviewReasonCode, setReviewReasonCode] = useState<ReasonCode | null>(null);
-  const [reviewBoxInfo, setReviewBoxInfo] = useState<{ boxes: number; perBox: number; total: number; adjQty?: number; adjIncluded?: boolean } | null>(null);
+  const [reviewBoxInfo, setReviewBoxInfo] = useState<{ boxes: number; perBox: number; total: number; adjQty?: number; adjBoxCount?: number; adjIncluded?: boolean } | null>(null);
 
   // Toast notification state
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; title: string; text: string } | null>(null);
@@ -783,7 +783,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
         reference_document_number: referenceId || null,
         notes: isProductionReceipt
           ? (palletImpact?.adjustmentBoxIncluded
-            ? `${selectedRoute.label} | Boxes: ${palletImpact.adjustedInnerBoxCount} x ${innerBoxQty} PCS/box + 1 Top-off Box x ${palletImpact.adjustmentBoxQty} PCS = ${finalQty} PCS | Stock Type: ${stockType}`
+            ? `${selectedRoute.label} | Boxes: ${palletImpact.adjustedInnerBoxCount} x ${innerBoxQty} PCS/box + ${palletImpact.totalAdjustmentBoxes || 1} Top-off Box${(palletImpact.totalAdjustmentBoxes || 1) > 1 ? 'es' : ''} x ${palletImpact.adjustmentBoxQty} PCS = ${finalQty} PCS | Stock Type: ${stockType}`
             : `${selectedRoute.label} | Boxes: ${boxCount} x ${innerBoxQty} PCS/box = ${finalQty} PCS | Stock Type: ${stockType}`)
           : `${selectedRoute.label} | Requested Qty: ${finalQty} | Stock Type: ${stockType}`,
         requested_by: userId,
@@ -845,34 +845,78 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
       }
     }
 
-    // For Production Receipts, fetch packing spec to show box breakdown
+    // For Production Receipts, fetch packing spec + ADJUSTMENT_REQUIRED pallets
+    // to show CORRECT box breakdown (multi-pallet aware)
     if (m.movement_type === 'PRODUCTION_RECEIPT' && m.item_code) {
       try {
-        const { data: spec } = await supabase
-          .from('packing_specifications')
-          .select('inner_box_quantity, outer_box_quantity')
-          .eq('item_code', m.item_code)
-          .eq('is_active', true)
-          .single();
+        // Parallel fetch: packing spec + ADJUSTMENT_REQUIRED pallets
+        const [specResult, adjPalletsResult] = await Promise.all([
+          supabase
+            .from('packing_specifications')
+            .select('inner_box_quantity, outer_box_quantity')
+            .eq('item_code', m.item_code)
+            .eq('is_active', true)
+            .single(),
+          supabase
+            .from('pack_pallets')
+            .select('id')
+            .eq('item_code', m.item_code)
+            .eq('state', 'ADJUSTMENT_REQUIRED'),
+        ]);
+
+        const spec = specResult.data;
+        const adjPalletsCount = adjPalletsResult.data?.length || 0;
+
         if (spec && spec.inner_box_quantity > 0) {
           const reqQty = m.requested_quantity || 0;
           const perBox = spec.inner_box_quantity;
           const outerQty = spec.outer_box_quantity || 0;
           const adjQty = outerQty > 0 ? outerQty % perBox : 0;
-          // Check if this movement includes an adjustment box
-          const totalBoxes = Math.round(reqQty / perBox);
-          // If total doesn't divide evenly and the remainder equals adjQty, adj is included
-          const remainder = reqQty - (totalBoxes * perBox);
-          const adjIncluded = adjQty > 0 && remainder !== 0 && Math.abs(remainder - adjQty + (totalBoxes * perBox) - reqQty) < 1;
-          // Simple heuristic: if reqQty != boxes*perBox, adjustment is likely included
-          const exactBoxes = Math.floor(reqQty / perBox);
-          const leftoverQty = reqQty - (exactBoxes * perBox);
-          const hasAdj = adjQty > 0 && leftoverQty === adjQty;
+
+          // MULTI-PALLET AWARE BREAKDOWN:
+          // The total qty includes both adjustment boxes and inner boxes.
+          // We query ADJUSTMENT_REQUIRED pallets to know exactly how many
+          // adj boxes will be created, instead of using a naive heuristic.
+          let adjBoxCount = 0;
+          let innerBoxCount = 0;
+
+          if (adjQty > 0 && adjPalletsCount > 0) {
+            // Determine how many adj boxes fit in the total qty
+            // Cap by actual pallets needing adjustment
+            const maxAdjFromQty = Math.floor(reqQty / adjQty);
+            adjBoxCount = Math.min(adjPalletsCount, maxAdjFromQty);
+            const adjTotal = adjBoxCount * adjQty;
+            const remainingQty = reqQty - adjTotal;
+            innerBoxCount = Math.floor(remainingQty / perBox);
+            // Check if remainder matches (validation)
+            const calculatedTotal = (adjBoxCount * adjQty) + (innerBoxCount * perBox);
+            if (calculatedTotal !== reqQty) {
+              // Remainder doesn't match perfectly — might have a boundary adj too
+              const leftover = reqQty - calculatedTotal;
+              if (leftover === adjQty) {
+                adjBoxCount += 1; // boundary adjustment for current filling pallet
+              }
+            }
+          } else if (adjQty > 0) {
+            // No ADJUSTMENT_REQUIRED pallets — check if qty has remainder
+            innerBoxCount = Math.floor(reqQty / perBox);
+            const leftover = reqQty - (innerBoxCount * perBox);
+            if (leftover === adjQty) {
+              adjBoxCount = 1; // single boundary adjustment
+            } else {
+              innerBoxCount = Math.round(reqQty / perBox);
+            }
+          } else {
+            innerBoxCount = Math.round(reqQty / perBox);
+          }
+
+          const hasAdj = adjBoxCount > 0;
           setReviewBoxInfo({
-            boxes: hasAdj ? exactBoxes : totalBoxes,
+            boxes: innerBoxCount,
             perBox,
             total: reqQty,
             adjQty: hasAdj ? adjQty : undefined,
+            adjBoxCount: hasAdj ? adjBoxCount : undefined,
             adjIncluded: hasAdj,
           });
         }
@@ -2350,7 +2394,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
                           }}>
                             <Info size={14} style={{ flexShrink: 0 }} />
-                            1 Box will be auto-converted to a Top-off Box ({palletImpact.adjustmentBoxQty} PCS)
+                            {(palletImpact.totalAdjustmentBoxes || 1)} Box{(palletImpact.totalAdjustmentBoxes || 1) > 1 ? 'es' : ''} will be auto-converted to Top-off Box{(palletImpact.totalAdjustmentBoxes || 1) > 1 ? 'es' : ''} ({palletImpact.adjustmentBoxQty} PCS each)
                           </div>
                         )}
 
@@ -2365,7 +2409,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                             <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500, #6b7280)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>Current Pallet</div>
                             <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--enterprise-primary, #1e3a8a)' }}>
                               {palletImpact.boxesToCurrentPallet} Box{palletImpact.boxesToCurrentPallet !== 1 ? 'es' : ''}
-                              {palletImpact.adjustmentBoxIncluded && <span style={{ color: '#7c3aed' }}> + 1 Top-off</span>}
+                              {palletImpact.adjustmentBoxIncluded && <span style={{ color: '#7c3aed' }}> + {palletImpact.totalAdjustmentBoxes || 1} Top-off</span>}
                             </div>
                             <div style={{ fontSize: 12, color: 'var(--enterprise-gray-500, #6b7280)', marginTop: 2, fontWeight: 500 }}>
                               {((palletImpact.boxesToCurrentPallet * palletImpact.inner_box_qty) + (palletImpact.adjustmentBoxIncluded ? palletImpact.adjustmentBoxQty : 0)).toLocaleString()} PCS total
@@ -2426,9 +2470,12 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                           <input type="checkbox" checked={adjustmentAcknowledged} onChange={e => setAdjustmentAcknowledged(e.target.checked)}
                             style={{ display: 'none' }} />
                           <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--enterprise-gray-700, #374151)', lineHeight: 1.5 }}>
-                            I confirm that a Top-off Box of <strong>{palletImpact.adjustmentBoxQty} PCS</strong> will be
+                            I confirm that <strong>{palletImpact.totalAdjustmentBoxes || 1} Top-off Box{(palletImpact.totalAdjustmentBoxes || 1) > 1 ? 'es' : ''}</strong> of <strong>{palletImpact.adjustmentBoxQty} PCS each</strong> will be
                             created during packing to complete{' '}
-                            <strong>{palletImpact.currentPallet?.pallet_number || 'the current pallet'}</strong> before
+                            {(palletImpact.adjustmentBoxesForExistingPallets || 0) > 0
+                              ? <strong>{palletImpact.adjustmentBoxesForExistingPallets} existing pallet{(palletImpact.adjustmentBoxesForExistingPallets || 0) > 1 ? 's' : ''}</strong>
+                              : <strong>{palletImpact.currentPallet?.pallet_number || 'the current pallet'}</strong>
+                            } before
                             starting a new pallet.
                           </span>
                         </label>
@@ -2835,8 +2882,8 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                         <div style={{ margin: '12px 0 8px', borderTop: '1px dashed #93a8d2' }} />
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr', alignItems: 'center' }}>
                           <div style={{ textAlign: 'center' }}>
-                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Top-off Box</div>
-                            <div style={{ fontSize: '22px', fontWeight: 800, color: '#b45309', lineHeight: '1' }}>1</div>
+                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Top-off Box{(reviewBoxInfo.adjBoxCount || 1) > 1 ? 'es' : ''}</div>
+                            <div style={{ fontSize: '22px', fontWeight: 800, color: '#b45309', lineHeight: '1' }}>{reviewBoxInfo.adjBoxCount || 1}</div>
                           </div>
                           <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>×</div>
                           <div style={{ textAlign: 'center' }}>
