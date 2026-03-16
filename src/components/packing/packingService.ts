@@ -19,7 +19,7 @@ import type {
     PackingRequestStatus, PackingAuditAction,
 } from '../../types/packing';
 import { processPackingBoxAsContainer } from '../packing-engine/packingEngineService';
-import { generateBoxBatch } from '../../utils/idGenerator';
+import { generateBoxBatch, generateMixedBoxBatch } from '../../utils/idGenerator';
 import { logInfo, logWarn, logError, withTiming } from '../../utils/auditLogger';
 
 const supabase = getSupabaseClient();
@@ -406,9 +406,10 @@ export async function autoGenerateBoxes(requestId: string): Promise<PackingBox[]
             throw new Error('Can only auto-generate boxes for APPROVED requests');
         }
 
-        // Fetch packing spec — can't parallelize with above due to item_code dependency
+        // ── PHASE 1b: Fetch FULL packing spec (both inner AND outer qty) ──
+        // CRITICAL: We need outer_box_quantity to calculate adjustment boxes
         const { data: packingSpec } = await supabase.from('packing_specifications')
-            .select('inner_box_quantity')
+            .select('inner_box_quantity, outer_box_quantity')
             .eq('item_code', req.item_code)
             .eq('is_active', true)
             .single();
@@ -418,14 +419,56 @@ export async function autoGenerateBoxes(requestId: string): Promise<PackingBox[]
         }
 
         const innerBoxQty = packingSpec.inner_box_quantity;
+        const outerBoxQty = packingSpec.outer_box_quantity || 0;
+        const adjustmentQty = outerBoxQty > 0 ? outerBoxQty % innerBoxQty : 0;
         const totalQty = Number(req.total_packed_qty);
-        const fullBoxes = Math.floor(totalQty / innerBoxQty);
-        const remainder = totalQty % innerBoxQty;
-        const totalBoxes = fullBoxes + (remainder > 0 ? 1 : 0);
+
+        // ── PHASE 1c: Query for ADJUSTMENT_REQUIRED pallets ──
+        // This is the CRITICAL multi-pallet awareness step.
+        // We must know how many existing pallets need adjustment boxes
+        // BEFORE we create the box batch — otherwise all boxes will be
+        // created as inner boxes (200 PCS) and no adjustment boxes (100 PCS)
+        // will ever be produced.
+        let adjPalletsNeedingCompletion = 0;
+        if (adjustmentQty > 0) {
+            const { data: adjPallets } = await supabase
+                .from('pack_pallets')
+                .select('id')
+                .eq('item_code', req.item_code)
+                .eq('state', 'ADJUSTMENT_REQUIRED');
+            adjPalletsNeedingCompletion = adjPallets?.length || 0;
+        }
+
+        // ── PHASE 2: Calculate the CORRECT box mix ──
+        // Previously: naively did totalQty / innerBoxQty → ALL boxes same size
+        // Now: creates adjustment boxes FIRST, then normal inner boxes
+        //
+        // Example with 2 ADJ pallets, innerBoxQty=200, adjustmentQty=100, totalQty=800:
+        //   adjustmentBoxCount = min(2, boxes we can make from 800 PCS) = 2
+        //   adjustmentTotal   = 2 × 100 = 200 PCS
+        //   remainingQty      = 800 - 200 = 600 PCS
+        //   normalFullBoxes   = 600 / 200 = 3
+        //   normalRemainder   = 0
+        //   RESULT: 2 adj boxes (100 PCS each) + 3 inner boxes (200 PCS each)
+        const adjustmentBoxCount = Math.min(
+            adjPalletsNeedingCompletion,
+            adjustmentQty > 0 ? Math.floor(totalQty / adjustmentQty) : 0,
+        );
+        const adjustmentTotal = adjustmentBoxCount * adjustmentQty;
+        const remainingQty = totalQty - adjustmentTotal;
+        const normalFullBoxes = Math.floor(remainingQty / innerBoxQty);
+        const normalRemainder = remainingQty % innerBoxQty;
+        const totalBoxes = adjustmentBoxCount + normalFullBoxes + (normalRemainder > 0 ? 1 : 0);
 
         if (totalBoxes <= 0) throw new Error('Cannot generate boxes — total quantity is 0');
 
-        // ── PHASE 2: Status transition + audit (parallel) ──
+        logInfo('PACKING', 'boxMixCalculated', userId, requestId, {
+            totalQty, innerBoxQty, outerBoxQty, adjustmentQty,
+            adjPalletsNeedingCompletion, adjustmentBoxCount,
+            normalFullBoxes, normalRemainder, totalBoxes,
+        });
+
+        // ── PHASE 3: Status transition + audit (parallel) ──
         await Promise.all([
             supabase.from('packing_requests').update({
                 status: 'PACKING_IN_PROGRESS',
@@ -436,15 +479,18 @@ export async function autoGenerateBoxes(requestId: string): Promise<PackingBox[]
                 auto_generated: true,
                 total_boxes: totalBoxes,
                 inner_box_qty: innerBoxQty,
+                adjustment_boxes: adjustmentBoxCount,
+                adjustment_qty: adjustmentQty,
             }),
         ]);
 
-        // ── PHASE 3: BATCH INSERT with pre-computed IDs (single DB call!) ──
-        // v0.4.1 optimization: Generate UUIDs + packing IDs client-side
-        // before INSERT. This eliminates the N update calls that were the
-        // main bottleneck (100 boxes = 100 individual UPDATE calls → 0).
-        const boxInserts = generateBoxBatch(
-            totalBoxes, requestId, userId, innerBoxQty, remainder
+        // ── PHASE 4: BATCH INSERT with correct box mix ──
+        // Creates adjustment boxes FIRST (so they are processed first in Phase 5),
+        // then normal inner boxes, then any remainder box.
+        const boxInserts = generateMixedBoxBatch(
+            requestId, userId, innerBoxQty,
+            adjustmentBoxCount, adjustmentQty,
+            normalFullBoxes, normalRemainder,
         );
 
         const { data: insertedBoxes, error: insertError } = await supabase
@@ -462,9 +508,14 @@ export async function autoGenerateBoxes(requestId: string): Promise<PackingBox[]
         logInfo('PACKING', 'batchBoxInsert', userId, requestId, {
             total_boxes: totalBoxes,
             inner_box_qty: innerBoxQty,
+            adjustment_boxes: adjustmentBoxCount,
         });
 
-        // ── PHASE 4: PACKING ENGINE — Create containers + assign to pallets ──
+        // ── PHASE 5: PACKING ENGINE — Create containers + assign to pallets ──
+        // Boxes are ordered: adjustment boxes FIRST, then normal.
+        // processPackingBoxAsContainer detects adjustment boxes by their qty
+        // (box_qty !== innerQty && box_qty === adjustmentQty) and routes them
+        // to ADJUSTMENT_REQUIRED pallets.
         try {
             const { data: itemData } = await supabase.from('items')
                 .select('id').eq('item_code', req.item_code).single();
@@ -482,6 +533,8 @@ export async function autoGenerateBoxes(requestId: string): Promise<PackingBox[]
                         });
                         logInfo('CONTAINER', 'containerAssigned', userId, box.id, {
                             box_number: box.box_number,
+                            box_qty: box.box_qty,
+                            is_adjustment: box.box_qty === adjustmentQty && adjustmentQty > 0,
                             container: result.container.container_number,
                             pallet: result.pallet.pallet_number,
                             pallet_state: result.pallet.state,
@@ -489,6 +542,7 @@ export async function autoGenerateBoxes(requestId: string): Promise<PackingBox[]
                     } catch (boxErr: any) {
                         logWarn('CONTAINER', 'containerFailed', userId, box.id, {
                             box_number: box.box_number,
+                            box_qty: box.box_qty,
                             error: boxErr.message,
                         });
                     }
@@ -504,7 +558,9 @@ export async function autoGenerateBoxes(requestId: string): Promise<PackingBox[]
         await logAudit(requestId, 'BOX_CREATED', userId, role, {
             auto_generated: true,
             total_boxes: totalBoxes,
+            adjustment_boxes: adjustmentBoxCount,
             inner_box_qty: innerBoxQty,
+            adjustment_qty: adjustmentQty,
             total_qty: totalQty,
             movement_number: req.movement_number,
         });
