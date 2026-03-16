@@ -118,3 +118,112 @@ export function generateBoxBatch(
     }
     return boxes;
 }
+
+// ============================================================================
+// MIXED BATCH ID GENERATION (Multi-Pallet Aware)
+// ============================================================================
+
+/**
+ * Pre-generate a mixed batch of box records with BOTH adjustment and normal boxes.
+ *
+ * CRITICAL: This function replaces generateBoxBatch for the packing engine.
+ * The old function naively created boxes all at the same innerBoxQty, which
+ * meant ZERO adjustment boxes were ever created when multiple pallets needed
+ * completion.
+ *
+ * Box ordering: ADJUSTMENT BOXES FIRST, then normal inner boxes.
+ * This ensures processPackingBoxAsContainer processes adj boxes first
+ * and routes them to ADJUSTMENT_REQUIRED pallets before filling new ones.
+ *
+ * @param requestId - Packing request ID
+ * @param userId - Creator user ID
+ * @param innerBoxQty - Standard inner box quantity (e.g., 200 PCS)
+ * @param adjustmentBoxCount - Number of adjustment boxes to create (for existing ADJUSTMENT_REQUIRED pallets)
+ * @param adjustmentQty - Quantity per adjustment box (e.g., 100 PCS)
+ * @param normalFullBoxes - Number of full normal inner boxes to create
+ * @param normalRemainder - Quantity for the last partial box (0 = no partial)
+ *
+ * @example
+ * // 2 pallets needing adjustment (100 PCS each) + 3 normal boxes (200 PCS each)
+ * generateMixedBoxBatch('req-1', 'usr-1', 200, 2, 100, 3, 0)
+ * // → [
+ * //     { box_number: 1, box_qty: 100 },  // ADJ box for pallet 1
+ * //     { box_number: 2, box_qty: 100 },  // ADJ box for pallet 2
+ * //     { box_number: 3, box_qty: 200 },  // Normal inner box
+ * //     { box_number: 4, box_qty: 200 },  // Normal inner box
+ * //     { box_number: 5, box_qty: 200 },  // Normal inner box
+ * //   ]
+ *
+ * @returns Array of box records ready for bulk INSERT
+ */
+export function generateMixedBoxBatch(
+    requestId: string,
+    userId: string,
+    innerBoxQty: number,
+    adjustmentBoxCount: number,
+    adjustmentQty: number,
+    normalFullBoxes: number,
+    normalRemainder: number,
+): Array<{
+    id: string;
+    packing_id: string;
+    packing_request_id: string;
+    box_number: number;
+    box_qty: number;
+    created_by: string;
+    is_transferred: boolean;
+    sticker_printed: boolean;
+}> {
+    const boxes = [];
+    let boxNumber = 1;
+
+    // ── STEP 1: Adjustment boxes FIRST ──
+    // These will be processed first by processPackingBoxAsContainer,
+    // which detects them by qty (box_qty !== innerQty && box_qty === adjustmentQty)
+    // and routes them to ADJUSTMENT_REQUIRED pallets.
+    for (let i = 0; i < adjustmentBoxCount; i++) {
+        const boxId = generateUUID();
+        boxes.push({
+            id: boxId,
+            packing_id: generatePackingId(boxId),
+            packing_request_id: requestId,
+            box_number: boxNumber++,
+            box_qty: adjustmentQty,
+            created_by: userId,
+            is_transferred: false,
+            sticker_printed: false,
+        });
+    }
+
+    // ── STEP 2: Normal inner boxes ──
+    for (let i = 0; i < normalFullBoxes; i++) {
+        const boxId = generateUUID();
+        boxes.push({
+            id: boxId,
+            packing_id: generatePackingId(boxId),
+            packing_request_id: requestId,
+            box_number: boxNumber++,
+            box_qty: innerBoxQty,
+            created_by: userId,
+            is_transferred: false,
+            sticker_printed: false,
+        });
+    }
+
+    // ── STEP 3: Remainder box (if any) ──
+    if (normalRemainder > 0) {
+        const boxId = generateUUID();
+        boxes.push({
+            id: boxId,
+            packing_id: generatePackingId(boxId),
+            packing_request_id: requestId,
+            box_number: boxNumber++,
+            box_qty: normalRemainder,
+            created_by: userId,
+            is_transferred: false,
+            sticker_printed: false,
+        });
+    }
+
+    return boxes;
+}
