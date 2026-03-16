@@ -262,9 +262,8 @@ export function PackingListPrint({ accessToken, userRole, userPerms = {} }: Prop
             expAd: hd?.exporter_ad_code || '6361504-8400009',
             vendorNo: hd?.vendor_number || '',
             conName: hd?.consignee_name || 'Milano Millworks, LLC',
-            conAddr: hd?.consignee_address || '9223 Industrial Blvd NE Leland\nNC 28451 USA',
-            conPhone: hd?.consignee_phone || '(910) 443-3075',
-            buyName: hd?.buyer_name || 'Brown, Sherry',
+            conAddr: (hd?.consignee_address || '9223 Industrial Blvd NE Leland\nNC 28451 USA').replace('8223', '9223'),
+            conPhone: hd?.consignee_phone || '(910) 443-3075', buyName: hd?.buyer_name || 'Brown, Sherry',
             buyPhone: hd?.buyer_phone || '919-209-2411',
             buyEmail: hd?.buyer_email || 'sherry.brown@opwglobal.com',
             billName: hd?.bill_to_name || 'OPW Fueling Components, LLC',
@@ -290,7 +289,7 @@ export function PackingListPrint({ accessToken, userRole, userPerms = {} }: Prop
             return `<tr>
 <td class="bb br c4 ctr">${idx + 1}</td>
 <td class="bb br c4">${d.pallet_number || ''}</td>
-<td class="bb br c4"><b>${d.master_serial_no || ''}</b><br/>${d.part_number || ''}<br/>${d.item_name || d.item_code || ''}${d.hts_code ? '<br/><span class="sm">HTS CODE: ' + d.hts_code + '</span>' : ''}</td>
+<td class="bb br c4"><b>${d.master_serial_no ? '[' + d.master_serial_no + ']' : ''}</b><br/>${d.part_number || ''}<br/>${d.item_name || d.item_code || ''}${d.hts_code ? '<br/><span class="sm">HTS CODE: ' + d.hts_code.replace(/^84139190$/, '8413919085') + '</span>' : ''}</td>
 <td class="bb br c4 ctr">${d.num_pallets || 1}</td>
 <td class="bb br c4 ctr">${dim}</td>
 <td class="bb br c4 ctr">${d.part_revision || '\u2014'}</td>
@@ -414,10 +413,10 @@ td,th{vertical-align:top}
 <colgroup><col style="width:5%"/><col style="width:14%"/><col style="width:20%"/><col style="width:6%"/><col style="width:11%"/><col style="width:6%"/><col style="width:11%"/><col style="width:12%"/><col style="width:15%"/></colgroup>
 <tr style="background:#f5f5f5">
 <th class="bb br c4 lbl ctr">SL NO</th>
-<th class="bb br c4 lbl" style="text-align:left">PW/Pallet No. & Batch No.</th>
+<th class="bb br c4 lbl" style="text-align:left">Pallet No. & Batch No.</th>
 <th class="bb br c4 lbl" style="text-align:left">Part No. & Description with P.O No.</th>
 <th class="bb br c4 lbl ctr">No. of Pallet</th>
-<th class="bb br c4 lbl ctr">Pallet Size in CMs.</th>
+<th class="bb br c4 lbl ctr">Dimensions in cm</th>
 <th class="bb br c4 lbl ctr">Part Rev</th>
 <th class="bb br c4 lbl rgt">Qty Per Pallet</th>
 <th class="bb br c4 lbl rgt">Net Wt in KGs</th>

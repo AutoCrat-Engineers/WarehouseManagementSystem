@@ -241,7 +241,7 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
             expAd: hd?.exporter_ad_code || '6361504-8400009',
             vendorNo: hd?.vendor_number || '',
             conName: hd?.consignee_name || 'Milano Millworks, LLC',
-            conAddr: hd?.consignee_address || '9223 Industrial Blvd NE Leland\nNC 28451 USA',
+            conAddr: (hd?.consignee_address || '9223 Industrial Blvd NE Leland\nNC 28451 USA').replace('8223', '9223'),
             conPhone: hd?.consignee_phone || '(910) 443-3075',
             buyName: hd?.buyer_name || 'Brown, Sherry',
             buyPhone: hd?.buyer_phone || '919-209-2411',
@@ -377,10 +377,10 @@ td,th{vertical-align:top}
 <colgroup><col style="width:5%"/><col style="width:15%"/><col style="width:22%"/><col style="width:14%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
 <tr style="background:#f5f5f5">
 <th class="bb br c4 lbl ctr">SL NO</th>
-<th class="bb br c4 lbl" style="text-align:left">PW/Pallet No.</th>
+<th class="bb br c4 lbl" style="text-align:left">Pallet No.</th>
 <th class="bb br c4 lbl" style="text-align:left">Part No. & Description</th>
 
-<th class="bb br c4 lbl ctr">Pallet Size in CMs.</th>
+<th class="bb br c4 lbl ctr">Dimensions</th>
 <th class="bb br c4 lbl ctr">Part Rev</th>
 <th class="bb br c4 lbl rgt">Qty Per Pallet</th>
 <th class="bb br c4 lbl rgt">Net Wt in KGs</th>
@@ -461,12 +461,12 @@ ${itemRows}
             return `
 <div style="page-break-before:always;padding:24px 28px;font-family:Calibri,'Segoe UI',Arial,sans-serif;font-size:18px;color:#000;height:calc(100vh - 10mm);display:flex;flex-direction:column;box-sizing:border-box">
 
-<div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:14px;position:relative">
+<div style="display:flex;justify-content:space-between;align-items:flex-end;padding-bottom:14px;position:relative">
 <img src="/logo.png" alt="AE" style="height:50px" onerror="this.style.display='none'" />
-<div style="position:absolute;left:0;right:0;text-align:center;pointer-events:none">
-<span style="font-size:36px;font-weight:900;letter-spacing:4px;color:#000">PALLET SLIP</span>
+<div style="text-align:right">
+<div style="font-size:36px;font-weight:900;letter-spacing:4px;color:#000;line-height:1">PALLET SLIP</div>
+<div style="font-weight:700;font-size:16px;color:#555;text-transform:uppercase;margin-top:4px">WWW.AUTOCRATENGINEERS.IN</div>
 </div>
-<div style="font-weight:700;font-size:16px;color:#555;text-transform:uppercase">WWW.AUTOCRATENGINEERS.IN</div>
 </div>
 
 <div style="display:flex;padding:10px 0;border-top:2px solid #ddd;border-bottom:2px solid #ddd;margin-bottom:14px">
@@ -484,7 +484,7 @@ ${itemRows}
 
 <div style="text-align:center;padding:14px 0 10px;border-bottom:2px solid #ddd;margin-bottom:14px">
 <div style="font-size:56px;font-weight:900;letter-spacing:1px">${d.part_number || ''} ${d.part_revision ? '(Rev-' + d.part_revision + ')' : ''}</div>
-<div style="font-size:28px;color:#333;margin-top:4px">${d.item_name || d.item_code || ''} &middot; ${d.master_serial_no || ''}</div>
+<div style="font-size:28px;color:#333;margin-top:4px">${d.item_name || d.item_code || ''} &middot; ${d.master_serial_no ? '[' + d.master_serial_no + ']' : ''}</div>
 </div>
 
 <div style="background:#f2f2f2;border:2px solid #ddd;padding:20px 22px;flex:1;display:flex;flex-direction:column;justify-content:space-between;margin-bottom:14px">
@@ -521,7 +521,7 @@ ${itemRows}
 </div>
 <div style="flex:1">
 <div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">HTS CODE</div>
-<div style="font-size:28px;font-weight:800;margin-top:3px">${d.hts_code || '8413919085'}</div>
+<div style="font-size:28px;font-weight:800;margin-top:3px">${(d.hts_code || '8413919085').replace(/^84139190$/, '8413919085')}</div>
 </div>
 <div style="flex:1;text-align:right">
 <div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">LOGISTICS</div>

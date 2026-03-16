@@ -1641,7 +1641,7 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
                 <Input type="text" value={unitPriceStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setUnitPriceStr(v); }} placeholder="0.00" />
               </div>
               <div>
-                <Label>Standard Cost (₹)</Label>
+                <Label>Standard Cost ($)</Label>
                 <Input type="text" value={standardCostStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setStandardCostStr(v); }} placeholder="0.00" />
               </div>
             </div>
