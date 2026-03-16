@@ -543,7 +543,7 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
                 return w + ' Only';
             };
             // Build rows HTML
-            const rowsHtml = itemRows.map((r, i) => `<tr><td class="br c4 ctr" style="padding:6px 4px">${i + 1}</td><td class="br c4" style="padding:6px 4px">${r.po}</td><td class="br c4" style="font-size:11px;font-weight:700;padding:6px 4px">${r.partNo}</td><td class="br c4" style="padding:6px 4px"><div style="font-size:14px">${r.desc}</div></td><td class="br c4 rgt mono" style="padding:6px 4px">${r.qty.toLocaleString()}<br/><span class="sm">Nos</span></td><td class="br c4 rgt mono" style="padding:6px 4px">${r.rate.toFixed(2)}</td><td class="c4 rgt mono" style="padding:6px 4px"><b>${r.amount.toFixed(2)}</b></td></tr>`).join('');
+            const rowsHtml = itemRows.map((r, i) => `<tr><td class="br c4 ctr" style="padding:2px 4px">${i + 1}</td><td class="br c4" style="padding:2px 4px">${r.po}</td><td class="br c4" style="font-size:11px;font-weight:700;padding:2px 4px">${r.partNo}</td><td class="br c4" style="padding:2px 4px"><div style="font-size:14px">${r.desc}</div></td><td class="br c4 rgt mono" style="padding:2px 4px">${r.qty.toLocaleString()}<br/><span class="sm">Nos</span></td><td class="br c4 rgt mono" style="padding:2px 4px">${r.rate.toFixed(2)}</td><td class="c4 rgt mono" style="padding:2px 4px"><b>${r.amount.toFixed(2)}</b></td></tr>`).join('');
             // Pad empty rows to fill at least 5 rows
             const emptyRowsNeeded = Math.max(0, 5 - itemRows.length);
             const emptyRowsHtml = Array(emptyRowsNeeded).fill('<tr><td class="br c4 ctr">&nbsp;</td><td class="br c4"></td><td class="br c4"></td><td class="br c4"></td><td class="c4"></td></tr>').join('');
@@ -639,7 +639,7 @@ td,th{vertical-align:top}
 </tr>
 <tr>
 <td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Bill To :</td>
-<td class="bb c4" style="font-size:12px;padding:4px 6px">OPW FUELING COMPONENTS LLC 3250 US HIGHWAY 70, SMITHFIELD 275577, USA</td>
+<td class="bb c4" style="font-size:12px;padding:4px 6px">OPW FUELING COMPONENTS LLC <br>3250 US HIGHWAY 70, SMITHFIELD 275577, USA</td>
 </tr>
 </table>
 
@@ -689,8 +689,8 @@ ${rowsHtml}
 <colgroup><col style="width:5%"/><col style="width:10%"/><col style="width:12%"/><col style="width:33%"/><col style="width:12%"/><col style="width:12%"/><col style="width:16%"/></colgroup>
 <tr style="font-weight:700">
 <td class="bb br c4" colspan="4" style="font-size:12px;padding:5px 6px"><b>Total</b>&nbsp;&nbsp;&mdash;&nbsp;&nbsp;<span style="font-weight:600;font-size:11px;color:#333">${numToWords(totalAmount)}</span></td>
-<td class="bb br c4 rgt mono" style="font-size:12px;padding:5px 6px">${totalQtyAll.toLocaleString()}</td>
-<td class="bb br c4 rgt mono" style="font-size:12px;padding:5px 6px">${totalRate.toFixed(2)}</td>
+<td class="bb br c4 rgt mono" style="font-size:12px;padding:5px 6px"></td>
+<td class="bb br c4 rgt mono" style="font-size:12px;padding:5px 6px"></td>
 <td class="bb c4 rgt mono" style="font-size:12px;padding:5px 6px"><b>${totalAmount.toFixed(2)}</b></td>
 </tr>
 </table>
@@ -700,8 +700,8 @@ ${rowsHtml}
 <colgroup><col style="width:60%"/><col style="width:40%"/></colgroup>
 <tr>
 <td class="bt c4" style="padding:4px 6px;vertical-align:top">
-<div style="font-size:11px"><b>ITC HS CODE:</b> 8413919090</div>
-<div style="font-size:11px"><b>HTS Code :</b> 841391909085</div>
+<div style="font-size:11px"><b>ITC HS CODE:</b> 84139190</div>
+<div style="font-size:11px"><b>HTS Code :</b> 8413919085</div>
 <div style="font-size:11px"><b>DBK CODE :</b> 8413B</div>
 <div style="margin-top:6px;font-size:10px;color:#c00;font-weight:700">NOTE :</div>
 <div style="font-size:10px">1. NON-TAXABLE</div>
@@ -797,7 +797,7 @@ ${rowsHtml}
                         />
                         <ActionBar>
                             <RefreshButton onClick={handleRefresh} loading={refreshing} />
-                            {step === 'LIST' && canCreate && <AddButton label="Create Performa Invoice" onClick={handleStartCreate} />}
+                            {step === 'LIST' && canCreate && <AddButton label="Create Proforma Invoice" onClick={handleStartCreate} />}
                         </ActionBar>
                     </FilterBar>
 
@@ -1478,36 +1478,61 @@ ${rowsHtml}
                                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                                     <thead>
                                         <tr style={{ background: '#fafbfc', borderBottom: '2px solid #e5e7eb' }}>
-                                            <th style={{ padding: '10px 20px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.3px' }}>#</th>
+                                            <th style={{ padding: '10px 16px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.3px' }}>#</th>
                                             <th style={{ padding: '10px 16px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.3px' }}>MPL #</th>
+                                            <th style={{ padding: '10px 16px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.3px' }}>PART #</th>
                                             <th style={{ padding: '10px 16px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.3px' }}>ITEM CODE</th>
+                                            <th style={{ padding: '10px 16px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.3px' }}>MSN</th>
                                             <th style={{ padding: '10px 16px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.3px' }}>INVOICE #</th>
                                             <th style={{ padding: '10px 16px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.3px' }}>PO #</th>
                                             <th style={{ padding: '10px 16px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.3px' }}>PALLETS</th>
                                             <th style={{ padding: '10px 16px', textAlign: 'right', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.3px' }}>QTY</th>
+                                            <th style={{ padding: '10px 16px', textAlign: 'right', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.3px' }}>NET WT</th>
                                             <th style={{ padding: '10px 16px', textAlign: 'right', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.3px' }}>GROSS WT</th>
+                                            <th style={{ padding: '10px 16px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.3px' }}>STATUS</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {piMpls.map((m: any, idx: number) => (
-                                            <tr key={m.id} style={{ borderBottom: '1px solid #f3f4f6', transition: 'background 0.1s' }} onMouseEnter={e => e.currentTarget.style.background = '#fafbff'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                                                <td style={{ padding: '12px 20px', color: '#9ca3af', fontSize: 13 }}>{idx + 1}</td>
-                                                <td style={{ padding: '12px 16px' }}><span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1e3a8a', fontSize: 13 }}>{m.mpl_number}</span></td>
-                                                <td style={{ padding: '12px 16px', fontFamily: 'monospace', color: '#374151', fontSize: 13 }}>{m.item_code}</td>
-                                                <td style={{ padding: '12px 16px', color: '#374151', fontSize: 13 }}>{m.invoice_number || '—'}</td>
-                                                <td style={{ padding: '12px 16px', color: '#374151', fontSize: 13 }}>{m.po_number || '—'}</td>
-                                                <td style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 700, color: '#059669', fontSize: 13 }}>{m.total_pallets}</td>
-                                                <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 600, fontSize: 13 }}>{m.total_quantity?.toLocaleString()}</td>
-                                                <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'monospace', fontSize: 13 }}>{Number(m.total_gross_weight_kg || 0).toFixed(2)}</td>
-                                            </tr>
-                                        ))}
+                                        {piMpls.map((m: any, idx: number) => {
+                                            const palletsMap = mplPalletDetails[m.mpl_id] || [];
+                                            const partNo = palletsMap.length > 0 ? palletsMap[0].part_number : '—';
+                                            const msn = palletsMap.length > 0 ? palletsMap[0].master_serial_no : '—';
+                                            const netWt = palletsMap.reduce((s: number, p: any) => s + Number(p.net_weight_kg || p.unit_weight * p.quantity || 0), 0);
+                                            return (
+                                                <tr key={m.id} style={{ borderBottom: '1px solid #f3f4f6', transition: 'background 0.1s' }} onMouseEnter={e => e.currentTarget.style.background = '#fafbff'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                                                    <td style={{ padding: '12px 16px', color: '#9ca3af', fontSize: 13 }}>{idx + 1}</td>
+                                                    <td style={{ padding: '12px 16px' }}><span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1e3a8a', fontSize: 13 }}>{m.mpl_number}</span></td>
+                                                    <td style={{ padding: '12px 16px', fontFamily: 'monospace', color: '#374151', fontSize: 13 }}>{partNo}</td>
+                                                    <td style={{ padding: '12px 16px', fontFamily: 'monospace', color: '#374151', fontSize: 13 }}>{m.item_code}</td>
+                                                    <td style={{ padding: '12px 16px', fontFamily: 'monospace', color: '#7c3aed', fontSize: 13 }}>{msn}</td>
+                                                    <td style={{ padding: '12px 16px', color: '#374151', fontSize: 13 }}>{m.invoice_number || '—'}</td>
+                                                    <td style={{ padding: '12px 16px', color: '#374151', fontSize: 13 }}>{m.po_number || '—'}</td>
+                                                    <td style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 700, color: '#059669', fontSize: 13 }}>{m.total_pallets}</td>
+                                                    <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 600, fontSize: 13 }}>{m.total_quantity?.toLocaleString()}</td>
+                                                    <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'monospace', fontSize: 13 }}>{netWt.toFixed(2)}</td>
+                                                    <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'monospace', fontSize: 13 }}>{Number(m.total_gross_weight_kg || 0).toFixed(2)}</td>
+                                                    <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                                                        <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 4, background: m.status === 'CANCELLED' ? '#fee2e2' : '#dcfce7', color: m.status === 'CANCELLED' ? '#991b1b' : '#065f46' }}>
+                                                            {m.status === 'CANCELLED' ? 'CANCELLED' : 'ACTIVE'}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
                                     </tbody>
                                     <tfoot>
                                         <tr style={{ background: '#f8fafc', borderTop: '2px solid #e5e7eb' }}>
-                                            <td colSpan={5} style={{ padding: '12px 20px', fontSize: 13, fontWeight: 700, color: '#374151' }}>TOTAL</td>
+                                            <td colSpan={7} style={{ padding: '12px 16px', fontSize: 13, fontWeight: 700, color: '#374151' }}>TOTAL</td>
                                             <td style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 700, color: '#059669', fontSize: 13 }}>{piMpls.reduce((s: number, m: any) => s + (m.total_pallets || 0), 0)}</td>
                                             <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, fontSize: 13 }}>{piMpls.reduce((s: number, m: any) => s + (m.total_quantity || 0), 0).toLocaleString()}</td>
+                                            <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, fontSize: 13 }}>
+                                                {piMpls.reduce((s: number, m: any) => {
+                                                    const palletsMap = mplPalletDetails[m.mpl_id] || [];
+                                                    return s + palletsMap.reduce((ns: number, p: any) => ns + Number(p.net_weight_kg || p.unit_weight * p.quantity || 0), 0);
+                                                }, 0).toFixed(2)}
+                                            </td>
                                             <td style={{ padding: '12px 16px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, fontSize: 13 }}>{piMpls.reduce((s: number, m: any) => s + Number(m.total_gross_weight_kg || 0), 0).toFixed(2)}</td>
+                                            <td></td>
                                         </tr>
                                     </tfoot>
                                 </table>
