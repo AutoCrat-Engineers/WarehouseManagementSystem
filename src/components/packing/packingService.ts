@@ -147,9 +147,10 @@ export async function fetchPackingRequests(onlyMine: boolean = false): Promise<P
     const userIds = [...new Set(rows.flatMap((r: any) => [r.created_by, r.approved_by].filter(Boolean)))];
     const itemCodes = [...new Set(rows.map((r: any) => r.item_code).filter(Boolean))];
     const requestIds = rows.map((r: any) => r.id);
+    const movementHeaderIds = [...new Set(rows.map((r: any) => r.movement_header_id).filter(Boolean))];
 
-    // ── PARALLEL ENRICHMENT — all 4 queries run simultaneously ──
-    const [profilesResult, itemsResult, boxesResult, specsResult] = await Promise.all([
+    // ── PARALLEL ENRICHMENT — all 5 queries run simultaneously ──
+    const [profilesResult, itemsResult, boxesResult, specsResult, headersResult] = await Promise.all([
         userIds.length
             ? supabase.from('profiles').select('id, full_name').in('id', userIds)
             : Promise.resolve({ data: [] as any[] }),
@@ -161,6 +162,9 @@ export async function fetchPackingRequests(onlyMine: boolean = false): Promise<P
             : Promise.resolve({ data: [] as any[] }),
         itemCodes.length
             ? supabase.from('packing_specifications').select('item_code, inner_box_quantity').eq('is_active', true).in('item_code', itemCodes)
+            : Promise.resolve({ data: [] as any[] }),
+        movementHeaderIds.length
+            ? supabase.from('inv_movement_headers').select('id, notes').in('id', movementHeaderIds)
             : Promise.resolve({ data: [] as any[] }),
     ]);
 
@@ -194,14 +198,38 @@ export async function fetchPackingRequests(onlyMine: boolean = false): Promise<P
         if (b.is_transferred) boxAgg[b.packing_request_id].transferredSum += Number(b.box_qty);
     });
 
+    const headerNotesMap: Record<string, string> = {};
+    (headersResult.data || []).forEach((h: any) => {
+        if (h.notes) headerNotesMap[h.id] = h.notes;
+    });
+
     return rows.map((r: any) => {
         // Use actual box count from packing_boxes if available,
-        // otherwise calculate expected count from total_packed_qty / inner_box_quantity
+        // otherwise calculate expected count from movement notes or total / inner_qty
         const actualBoxCount = boxAgg[r.id]?.count ?? 0;
         const innerBoxQty = specMap[r.item_code];
-        const calculatedBoxCount = innerBoxQty && innerBoxQty > 0
-            ? Math.floor(Number(r.total_packed_qty) / innerBoxQty) + (Number(r.total_packed_qty) % innerBoxQty > 0 ? 1 : 0)
-            : 0;
+        
+        let expectedBoxes = 0;
+        const notes = headerNotesMap[r.movement_header_id];
+        if (notes) {
+            const adjMatch = notes.match(/Boxes:\s*(\d+)\s*[x×]\s*\d+\s*PCS\/box\s*\+\s*(\d+)\s*(?:Adj|Top-off)\s*Box/i);
+            if (adjMatch) {
+                 expectedBoxes = parseInt(adjMatch[1], 10) + parseInt(adjMatch[2], 10);
+            } else {
+                 const boxMatch = notes.match(/Boxes:\s*(\d+)\s*[x×]\s*\d+\s*PCS\/box\s*=/i);
+                 if (boxMatch) {
+                     expectedBoxes = parseInt(boxMatch[1], 10);
+                 }
+            }
+        }
+        
+        let calculatedBoxCount = expectedBoxes;
+        if (calculatedBoxCount === 0) {
+            calculatedBoxCount = innerBoxQty && innerBoxQty > 0
+                ? Math.floor(Number(r.total_packed_qty) / innerBoxQty) + (Number(r.total_packed_qty) % innerBoxQty > 0 ? 1 : 0)
+                : 0;
+        }
+        
         const boxesCount = actualBoxCount > 0 ? actualBoxCount : calculatedBoxCount;
 
         return {
@@ -420,7 +448,7 @@ export async function autoGenerateBoxes(requestId: string): Promise<PackingBox[]
 
         const innerBoxQty = packingSpec.inner_box_quantity;
         const outerBoxQty = packingSpec.outer_box_quantity || 0;
-        const adjustmentQty = outerBoxQty > 0 ? outerBoxQty % innerBoxQty : 0;
+        let adjustmentQty = outerBoxQty > 0 ? outerBoxQty % innerBoxQty : 0;
         const totalQty = Number(req.total_packed_qty);
 
         // ── PHASE 1c: Query for ADJUSTMENT_REQUIRED pallets ──
@@ -440,24 +468,54 @@ export async function autoGenerateBoxes(requestId: string): Promise<PackingBox[]
         }
 
         // ── PHASE 2: Calculate the CORRECT box mix ──
-        // Previously: naively did totalQty / innerBoxQty → ALL boxes same size
-        // Now: creates adjustment boxes FIRST, then normal inner boxes
-        //
-        // Example with 2 ADJ pallets, innerBoxQty=200, adjustmentQty=100, totalQty=800:
-        //   adjustmentBoxCount = min(2, boxes we can make from 800 PCS) = 2
-        //   adjustmentTotal   = 2 × 100 = 200 PCS
-        //   remainingQty      = 800 - 200 = 600 PCS
-        //   normalFullBoxes   = 600 / 200 = 3
-        //   normalRemainder   = 0
-        //   RESULT: 2 adj boxes (100 PCS each) + 3 inner boxes (200 PCS each)
-        const adjustmentBoxCount = Math.min(
-            adjPalletsNeedingCompletion,
-            adjustmentQty > 0 ? Math.floor(totalQty / adjustmentQty) : 0,
-        );
-        const adjustmentTotal = adjustmentBoxCount * adjustmentQty;
-        const remainingQty = totalQty - adjustmentTotal;
-        const normalFullBoxes = Math.floor(remainingQty / innerBoxQty);
-        const normalRemainder = remainingQty % innerBoxQty;
+        let explicitNormalFullBoxes = 0;
+        let explicitAdjustmentBoxCount = 0;
+        let explicitAdjustmentQty = 0;
+        let hasExplicitOverrides = false;
+
+        if (req.movement_header_id) {
+            const { data: hData } = await supabase.from('inv_movement_headers').select('notes').eq('id', req.movement_header_id).single();
+            if (hData && hData.notes) {
+                const adjMatch = hData.notes.match(/Boxes:\s*(\d+)\s*[x×]\s*\d+\s*PCS\/box\s*\+\s*(\d+)\s*(?:Adj|Top-off)\s*Box(?:es)?\s*[x×]\s*(\d+)\s*PCS/i);
+                if (adjMatch) {
+                    explicitNormalFullBoxes = parseInt(adjMatch[1], 10);
+                    explicitAdjustmentBoxCount = parseInt(adjMatch[2], 10);
+                    explicitAdjustmentQty = parseInt(adjMatch[3], 10);
+                    hasExplicitOverrides = true;
+                } else {
+                    const boxMatch = hData.notes.match(/Boxes:\s*(\d+)\s*[x×]\s*\d+\s*PCS\/box\s*=/i);
+                    if (boxMatch) {
+                        explicitNormalFullBoxes = parseInt(boxMatch[1], 10);
+                        hasExplicitOverrides = true;
+                    }
+                }
+            }
+        }
+
+        let adjustmentBoxCount = 0;
+        let normalFullBoxes = 0;
+        let normalRemainder = 0;
+
+        if (hasExplicitOverrides) {
+            adjustmentBoxCount = explicitAdjustmentBoxCount;
+            if (explicitAdjustmentQty > 0) adjustmentQty = explicitAdjustmentQty;
+            normalFullBoxes = explicitNormalFullBoxes;
+
+            const calculatedExplicitTotal = (adjustmentBoxCount * adjustmentQty) + (normalFullBoxes * innerBoxQty);
+            if (totalQty > calculatedExplicitTotal) {
+                normalRemainder = totalQty - calculatedExplicitTotal;
+            }
+        } else {
+            adjustmentBoxCount = Math.min(
+                adjPalletsNeedingCompletion,
+                adjustmentQty > 0 ? Math.floor(totalQty / adjustmentQty) : 0,
+            );
+            const adjustmentTotal = adjustmentBoxCount * adjustmentQty;
+            const remainingQty = totalQty - adjustmentTotal;
+            normalFullBoxes = Math.floor(remainingQty / innerBoxQty);
+            normalRemainder = remainingQty % innerBoxQty;
+        }
+
         const totalBoxes = adjustmentBoxCount + normalFullBoxes + (normalRemainder > 0 ? 1 : 0);
 
         if (totalBoxes <= 0) throw new Error('Cannot generate boxes — total quantity is 0');

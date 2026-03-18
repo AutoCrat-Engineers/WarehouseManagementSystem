@@ -153,6 +153,7 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
 
     // ─── Open inline wizard for a PENDING MPL ───
     const handleOpenWizard = async (mpl: MasterPackingList) => {
+        setActiveDropdown(null);
         setWizardMpl(mpl); setWizardStep('REVIEW'); setWizardLoading(true);
         try {
             const plId = mpl.packing_list_id;
@@ -160,7 +161,10 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
             if (!data) { data = await svc.upsertPackingListData(plId, {}); await svc.autoPopulatePalletDetails(plId, data.id); }
             setPlData(data);
             const mot = data.mode_of_transport || ''; setDispatchForm({ invoice_number: data.invoice_number || '', invoice_date: data.invoice_date || '', purchase_order_number: data.purchase_order_number || '', purchase_order_date: data.purchase_order_date || '', ship_via: data.ship_via || '', vendor_number: data.vendor_number || '', mode_of_transport: mot === 'OCEAN' ? 'SEA' : mot });
-            const details = await svc.fetchPackingListPalletDetails(data.id);
+            let details = await svc.fetchPackingListPalletDetails(data.id);
+            if (details.length === 0) {
+                details = await svc.autoPopulatePalletDetails(plId, data.id);
+            }
             setPalletDetails(details);
             const { data: plItems } = await supabase.from('pack_packing_list_items').select('pallet_id').eq('packing_list_id', plId);
             const palletIds = (plItems || []).map((i: any) => i.pallet_id);
@@ -179,7 +183,7 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
                         state: p.state, current_qty: p.current_qty, target_qty: p.target_qty, container_count: p.container_count,
                         spec: specMap[p.item_code] || null,
                         containers: pContainers.map((pc: any) => ({ packing_id: pc.pack_containers?.packing_boxes?.packing_id || '—', quantity: pc.pack_containers?.quantity || 0, container_type: pc.pack_containers?.container_type || '', is_adjustment: pc.pack_containers?.is_adjustment || false, operator: pc.pack_containers?.profiles?.full_name || '—' })),
-                        gross_weight_kg: Number(detail?.gross_weight_kg || 0),
+                        gross_weight_kg: Number(specMap[p.item_code]?.outer_box_gross_weight_kg || detail?.gross_weight_kg || 0),
                     };
                 });
                 setEnrichedPallets(enriched);
@@ -192,7 +196,7 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
     // Save PO/Invoice + weights → confirm MPL
     const handleSaveAndConfirm = async () => {
         if (!wizardMpl || !plData) return;
-        if (!dispatchForm.invoice_number || !dispatchForm.purchase_order_number) { setError('Invoice Number and PO Number are required'); return; }
+        if (!dispatchForm.invoice_number || !dispatchForm.purchase_order_number) { setError('Invoice Number and BPA Number are required'); return; }
         setSaving(true); setError(null);
         try {
             await svc.upsertPackingListData(wizardMpl.packing_list_id, { ...dispatchForm, is_finalized: true });
@@ -212,9 +216,15 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
     const handlePrintMpl = async (mpl: MasterPackingList) => {
         try {
             const bt = await svc.getPackingListFullBacktrack(mpl.packing_list_id);
-            await openMasterPLPrint(bt, mpl);
+            // DO DATABASE UPDATE FIRST to avoid window.print() blocking the JS event loop and crashing fetch
             await markMplPrinted(mpl.id);
-            showToast('success', 'Printed', `${mpl.mpl_number} has been printed`); loadMpls(true); loadSummary();
+
+            // Execute all network requests BEFORE opening the print popup
+            await loadMpls(true);
+            await loadSummary();
+            showToast('success', 'Printed', `${mpl.mpl_number} has been printed`);
+
+            await openMasterPLPrint(bt, mpl);
         } catch (err: any) { showToast('error', 'Print Failed', err.message); }
     };
 
@@ -232,7 +242,7 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
 
         const D = {
             expName: hd?.exporter_name || 'AUTOCRAT ENGINEERS',
-            expAddr: hd?.exporter_address || 'NO. 21 & 22, Export Promotion Industrial Park,\nPhase - I,\nWhitefield, Bangalore-560066,\nKARNATAKA - INDIA',
+            expAddr: hd?.exporter_address || '264 KIADB Hi tech Defence Aerospace Park, Phase-2,\nRoad No 10& 17, Polanahalli,\nDevanahalli-562135',
             expPhone: hd?.exporter_phone || 'PH 91 80 43330127',
             expEmail: hd?.exporter_email || 'dispatch@autocratengineers.in',
             expGstin: hd?.exporter_gstin || '29ABLPK6831H1ZB',
@@ -248,18 +258,32 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
             buyEmail: hd?.buyer_email || 'sherry.brown@opwglobal.com',
             billName: hd?.bill_to_name || 'OPW Fueling Components, LLC',
             billAddr: hd?.bill_to_address || '3250 US Highway 70 Business West\nSmithfield, NC 27577\nUnited States',
-            preCarr: hd?.pre_carriage_by || 'Road',
-            receipt: hd?.place_of_receipt || 'BANGALORE',
-            origin: hd?.country_of_origin || 'INDIA',
-            dest: hd?.country_of_destination || 'UNITED STATES',
-            portLoad: hd?.port_of_loading || 'BANGALORE, ICD',
+            preCarr: (hd?.pre_carriage_by || 'ROAD').toUpperCase(),
+            receipt: (hd?.place_of_receipt || 'BANGALORE, INDIA').toUpperCase(),
+            origin: (hd?.country_of_origin || 'INDIA').toUpperCase(),
+            dest: (hd?.country_of_destination || 'UNITED STATES').toUpperCase(),
+            portLoad: (hd?.port_of_loading || 'BANGALORE, INDIA').replace(/BANGALORE, ICD/i, 'BANGALORE, INDIA').toUpperCase(),
             delivery: hd?.terms_of_delivery || 'DDP',
             payment: hd?.payment_terms || 'Net-30',
-            portDisc: hd?.port_of_discharge || 'CHARLESTON',
-            finalDest: (hd?.final_destination && hd.final_destination !== 'CHARLESTON') ? hd.final_destination : 'UNITED STATES',
-            transport: (() => { const t = hd?.mode_of_transport || 'SEA'; return t === 'OCEAN' ? 'SEA' : t; })(),
+            portDisc: (hd?.port_of_discharge || 'CHARLESTON, USA').toUpperCase(),
+            finalDest: (hd?.final_destination && hd.final_destination.toUpperCase() !== 'CHARLESTON') ? hd.final_destination.toUpperCase() : 'UNITED STATES',
+            transport: (() => { const t = hd?.mode_of_transport || 'SEA'; return (t === 'OCEAN' ? 'SEA' : t).toUpperCase(); })(),
             itemHdr: hd?.item_description_header || 'PRECISION MACHINED COMPONENTS',
             itemSub: hd?.item_description_sub_header || '(OTHERS FUELING COMPONENTS)',
+        };
+
+        const formatDescText = (text: string, extMsn: string) => {
+            let out = text;
+            const match = out.match(/\s*(\([^)]+\))\s*$/);
+            if (match) {
+                const safeStr = match[1].replace(/-/g, '&#8209;');
+                out = out.replace(/\s*(\([^)]+\))\s*$/, ` <span class="mono" style="white-space:nowrap;display:inline-block">${safeStr}</span>`);
+            }
+            if (extMsn) {
+                const safeExt = extMsn.replace(/-/g, '&#8209;');
+                out += ` <span class="mono" style="white-space:nowrap;display:inline-block">(${safeExt})</span>`;
+            }
+            return out;
         };
 
         const itemRows = details.map((d: any, idx: number) => {
@@ -268,11 +292,11 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
             return `<tr>
 <td class="br c4 ctr">${idx + 1}</td>
 <td class="br c4">${d.pallet_number || ''}</td>
-<td class="br c4"><div style="font-size:14px;font-weight:800">${d.part_number || ''}</div><div style="font-size:12px">${d.item_name || d.item_code || ''}${d.master_serial_no ? ' (' + d.master_serial_no + ')' : ''}</div></td>
+<td class="br c4"><div style="font-size:14px;font-weight:800">${d.part_number || ''}</div><div style="font-size:12px">${formatDescText(d.item_name || d.item_code || '', d.master_serial_no)}</div></td>
 
 <td class="br c4 ctr">${dim}</td>
 <td class="br c4 ctr">${d.part_revision || '\u2014'}</td>
-<td class="br c4 rgt mono">${(d.qty_per_pallet || 0).toLocaleString()}<br/><span class="sm">Nos</span></td>
+<td class="br c4 rgt mono">${(d.qty_per_pallet || 0).toLocaleString()}</td>
 <td class="br c4 rgt mono">${Number(d.net_weight_kg || 0).toFixed(2)}</td>
 <td class="c4 rgt mono"><b>${Number(d.gross_weight_kg || 0).toFixed(2)}</b></td></tr>`;
         }).join('');
@@ -321,13 +345,13 @@ td,th{vertical-align:top}
 </div>
 <div style="padding:3px 0;line-height:1.5">
 <div style="font-size:13px;font-weight:800">${D.expName}</div>
-<div style="font-size:12px">NO. 21 & 22, Export Promotion Industrial Park, Phase - I,</div>
-<div style="font-size:12px">Whitefield, Bangalore-560066,</div>
-<div style="font-size:12px">KARNATAKA - INDIA</div>
+<div style="font-size:12px">264 KIADB Hi tech Defence Aerospace Park, Phase-2,</div>
+<div style="font-size:12px">Road No 10&amp; 17, Polanahalli,</div>
+<div style="font-size:12px">Devanahalli-562135</div>
 <div style="font-size:12px">GSTIN : ${D.expGstin}</div>
 </div>
 </td>
-<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">PO Number & Date :</td>
+<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">BPA Number & Date :</td>
 <td class="bb c4" style="padding:4px 6px"><div style="font-size:13px;font-weight:700">${hd?.purchase_order_number || ''}</div><div style="font-size:12px;color:#333;margin-top:1px">${poDate || ''}</div></td>
 </tr>
 <tr>
@@ -363,11 +387,11 @@ td,th{vertical-align:top}
 <table>
 <colgroup><col style="width:20%"/><col style="width:20%"/><col style="width:20%"/><col style="width:20%"/><col style="width:20%"/></colgroup>
 <tr>
+<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Freight Forwarder</span><br/><span style="font-size:13px;font-weight:700">${hd?.ship_via || 'WEISS ROHLING INDIA'}</span></td>
 <td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Mode of Transport</span><br/><span style="font-size:13px;font-weight:700">${D.transport}</span></td>
-<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Freight Forwarder</span><br/><span style="font-size:13px;font-weight:700">${hd?.ship_via || 'SEAHORSE'}</span></td>
+<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Country of Origin</span><br/><span style="font-size:13px;font-weight:700">${D.origin}</span></td>
 <td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Port of Loading</span><br/><span style="font-size:13px;font-weight:700">${D.portLoad}</span></td>
-<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Port of Discharge</span><br/><span style="font-size:13px;font-weight:700">${D.portDisc}</span></td>
-<td class="bb c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Final Destination</span><br/><span style="font-size:13px;font-weight:700">${D.finalDest}</span></td>
+<td class="bb c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Port of Discharge</span><br/><span style="font-size:13px;font-weight:700">${D.portDisc}</span></td>
 </tr>
 </table>
 
@@ -377,14 +401,14 @@ td,th{vertical-align:top}
 <colgroup><col style="width:5%"/><col style="width:15%"/><col style="width:22%"/><col style="width:14%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
 <tr style="background:#f5f5f5">
 <th class="bb br c4 lbl ctr">SL NO</th>
-<th class="bb br c4 lbl" style="text-align:left">Pallet No.</th>
+<th class="bb br c4 lbl" style="text-align:left">Box No.</th>
 <th class="bb br c4 lbl" style="text-align:left">Part No. & Description</th>
 
-<th class="bb br c4 lbl ctr">Dimensions</th>
+<th class="bb br c4 lbl ctr">Dimensions (cm)</th>
 <th class="bb br c4 lbl ctr">Part Rev</th>
-<th class="bb br c4 lbl rgt">Qty Per Pallet</th>
-<th class="bb br c4 lbl rgt">Net Wt in KGs</th>
-<th class="bb c4 lbl rgt">Gross Wt in KGs</th>
+<th class="bb br c4 lbl rgt" style="white-space:nowrap">Qty in pallet (Nos)</th>
+<th class="bb br c4 lbl rgt">Net Wt (kg)</th>
+<th class="bb c4 lbl rgt">Gross Wt (kg)</th>
 </tr>
 ${itemRows}
 </table>
@@ -402,15 +426,15 @@ ${itemRows}
 <td class="bt br c4 ctr mono" style="font-weight:800">${String(totalPkgs).padStart(2, '0')}</td>
 <td class="bt br c4"></td>
 <td class="bt br c4 rgt mono" style="font-weight:800">${totalQty.toLocaleString()}</td>
-<td class="bt br c4 rgt mono" style="font-weight:800">${totalNet.toFixed(2)}<br/><span class="sm">Kgs</span></td>
-<td class="bt c4 rgt mono" style="font-weight:800">${totalGross.toFixed(2)}<br/><span class="sm">Kgs</span></td>
+<td class="bt br c4 rgt mono" style="font-weight:800">${totalNet.toFixed(2)}</td>
+<td class="bt c4 rgt mono" style="font-weight:800">${totalGross.toFixed(2)}</td>
 </tr>
 </table>
 
 <table style="border-top:1.5px solid #000">
 <colgroup><col style="width:50%"/><col style="width:50%"/></colgroup>
 <tr>
-<td class="bb c4" style="font-size:11px;font-weight:700;padding:5px 6px;vertical-align:top">ITC HS CODE: <span class="mono" style="font-weight:800">84139190</span><br/>HTS Code : <span class="mono" style="font-weight:800">8413919085</span></td>
+<td class="bb c4" style="font-size:11px;font-weight:700;padding:5px 6px;vertical-align:top">ITC HS CODE: <span class="mono" style="font-weight:800">84139190</span><br/>HTS US Code : <span class="mono" style="font-weight:800">8413919085</span></td>
 <td class="bb c4 rgt" style="vertical-align:top;padding:4px 5px">
 <div style="font-size:10px;font-weight:700">for AUTOCRAT ENGINEERS</div>
 <div style="margin-top:12px;font-size:9px;font-style:italic">Authorised Signatory</div>
@@ -465,7 +489,6 @@ ${itemRows}
 <img src="/logo.png" alt="AE" style="height:50px" onerror="this.style.display='none'" />
 <div style="text-align:right">
 <div style="font-size:36px;font-weight:900;letter-spacing:4px;color:#000;line-height:1">PALLET SLIP</div>
-<div style="font-weight:700;font-size:16px;color:#555;text-transform:uppercase;margin-top:4px">WWW.AUTOCRATENGINEERS.IN</div>
 </div>
 </div>
 
@@ -473,12 +496,12 @@ ${itemRows}
 <div style="flex:1;padding-right:20px">
 <div style="font-weight:800;font-size:16px;text-transform:uppercase;color:#888;margin-bottom:4px">FROM</div>
 <div style="font-weight:800;font-size:18px">${D.expName}</div>
-<div style="font-size:15px;line-height:1.5;color:#333">${D.expAddr.replace(/\\n/g, '<br/>')}</div>
+<div style="font-size:15px;line-height:1.5;color:#333">${D.expAddr.replace(/\\n|\n/g, '<br/>')}</div>
 </div>
 <div style="flex:1;padding-left:20px">
 <div style="font-weight:800;font-size:16px;text-transform:uppercase;color:#888;margin-bottom:4px">TO</div>
 <div style="font-weight:800;font-size:18px">${D.billName}</div>
-<div style="font-size:15px;line-height:1.5;color:#333">${D.conName}<br/>${D.conAddr.replace(/\\n/g, '<br/>')}</div>
+<div style="font-size:15px;line-height:1.5;color:#333">${D.conName}<br/>${D.conAddr.replace(/\\n|\n/g, '<br/>')}</div>
 </div>
 </div>
 
@@ -495,7 +518,7 @@ ${itemRows}
 <div style="font-size:22px;font-weight:500;color:#555;margin-top:2px">${invDate || ''}</div>
 </div>
 <div style="flex:1;text-align:right">
-<div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">PO & DATE</div>
+<div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">BPA NO. & DATE</div>
 <div style="font-size:40px;font-weight:900;margin-top:4px">${hd?.purchase_order_number || ''}</div>
 <div style="font-size:22px;font-weight:500;color:#555;margin-top:2px">${poDate || ''}</div>
 </div>
@@ -519,8 +542,8 @@ ${itemRows}
 <div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">ORIGIN</div>
 <div style="font-size:28px;font-weight:800;margin-top:3px">${D.origin}</div>
 </div>
-<div style="flex:1">
-<div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">HTS CODE</div>
+<div style="flex:1;text-align:center">
+<div style="font-weight:700;font-size:20px;text-transform:uppercase;color:#888">HTS US CODE</div>
 <div style="font-size:28px;font-weight:800;margin-top:3px">${(d.hts_code || '8413919085').replace(/^84139190$/, '8413919085')}</div>
 </div>
 <div style="flex:1;text-align:right">
@@ -535,13 +558,18 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
 <div style="font-size:24px;font-weight:900;color:#000;margin-top:6px;letter-spacing:1px">${palletNum}</div>
 </div>
 
-<div style="text-align:center;font-size:12px;color:#aaa;padding-top:4px;border-top:1px solid #eee">Slip ${idx + 1} of ${details.length}</div>
+<div style="display:flex;justify-content:space-between;align-items:flex-end;font-size:12px;color:#aaa;padding-top:4px;border-top:1px solid #eee;margin-top:auto">
+<div>Slip ${idx + 1} of ${details.length}</div>
+<div style="text-align:right">
+<div style="font-weight:700;font-size:13px;color:#555;text-transform:uppercase">WWW.AUTOCRATENGINEERS.IN</div>
+</div>
+</div>
 
 </div>`;
         }).join('');
 
         // ── Combine: Packing List + Pallet Slips ──
-        const fullHtml = html.replace('</body></html>', palletSlips + '<script>window.onload=function(){window.print();}<\\/script></body></html>');
+        const fullHtml = html.replace('</body></html>', palletSlips + '<script>window.onload=function(){setTimeout(function(){window.print();}, 500);}<\\/script></body></html>');
         // Remove the first script tag (already in packing list html)
         const cleanHtml = fullHtml.replace(/<script>window\.onload=function\(\)\{window\.print\(\);\}<\\\/script>/, '');
 
@@ -552,6 +580,7 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
 
     // View Detail
     const handleViewDetail = async (mpl: MasterPackingList) => {
+        setActiveDropdown(null);
         setSelectedMpl(mpl); setShowDetail(true); setDetailLoading(true);
         try {
             const [pallets, audit] = await Promise.all([fetchMplPallets(mpl.id), fetchDispatchAuditLog(mpl.id, 'MASTER_PACKING_LIST')]);
@@ -596,7 +625,7 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
         const currentStepIdx = steps.findIndex(s => s.key === wizardStep);
 
         return (
-            <div style={{ padding: '24px 28px', maxWidth: 1200, margin: '0 auto' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                 {/* Header */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 28 }}>
                     <button onClick={() => setWizardMpl(null)} style={{ padding: '8px 16px', borderRadius: 10, border: '1px solid #e5e7eb', background: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, color: '#374151', transition: 'all 0.15s ease', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = '#fff'}><ChevronLeft size={16} /> Back to Packing List</button>
@@ -845,7 +874,7 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
                                     <div style={{ fontSize: 11, fontWeight: 700, color: '#1e3a8a', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}><FileText size={12} /> Purchase Order Details</div>
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                                         <div>
-                                            <label style={{ ...lbl, color: '#374151' }}>PO Number (SAP) <span style={{ color: '#ef4444' }}>*</span></label>
+                                            <label style={{ ...lbl, color: '#374151' }}>BPA Number (SAP) <span style={{ color: '#ef4444' }}>*</span></label>
                                             <input value={dispatchForm.purchase_order_number} onChange={e => setDispatchForm({ ...dispatchForm, purchase_order_number: e.target.value })} style={{ ...inp, borderColor: !dispatchForm.purchase_order_number ? '#fca5a5' : '#d1d5db', borderRadius: 10, padding: '10px 14px', borderWidth: 2, transition: 'border-color 0.15s' }} placeholder="260067798" onFocus={e => e.currentTarget.style.borderColor = '#1e3a8a'} onBlur={e => e.currentTarget.style.borderColor = !dispatchForm.purchase_order_number ? '#fca5a5' : '#d1d5db'} />
                                         </div>
                                         <div>
@@ -980,7 +1009,7 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
                                     <tr style={{ backgroundColor: 'var(--table-header-bg)', borderBottom: '2px solid var(--table-border)' }}>
                                         <th style={{ ...thS, minWidth: 120 }}>MPL #</th>
                                         <th style={{ ...thS, minWidth: 100 }}>MSN</th>
-                                        <th style={{ ...thS, minWidth: 100 }}>PO Number</th>
+                                        <th style={{ ...thS, minWidth: 100 }}>BPA #</th>
                                         <th style={{ ...thS, minWidth: 100 }}>Invoice #</th>
                                         <th style={{ ...thS, textAlign: 'center', minWidth: 70 }}>Pallets</th>
                                         <th style={{ ...thS, textAlign: 'center', minWidth: 70 }}>Qty</th>
