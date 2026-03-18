@@ -221,13 +221,40 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
     const handleVerifyMpl = (mplId: string) => { setPickedMpls(prev => prev.map(p => p.mpl.id === mplId ? { ...p, verified: true } : p)); };
     const handleRemoveMpl = (mplId: string) => { setPickedMpls(prev => prev.filter(p => p.mpl.id !== mplId)); };
 
-    // Inspect MPL — fetch pallets for preview before picking
     const handleInspectMpl = async (mplId: string) => {
         if (inspectMplId === mplId) { setInspectMplId(null); setInspectPallets([]); return; }
         setInspectMplId(mplId); setInspectLoading(true);
         try {
             const { data } = await supabase.from('master_packing_list_pallets').select('*').eq('mpl_id', mplId).eq('status', 'ACTIVE').order('line_number');
-            setInspectPallets(data || []);
+            if (!data || data.length === 0) { setInspectPallets([]); return; }
+
+            const palletIds = [...new Set(data.map((p: any) => p.pallet_id))];
+            const itemCodes = [...new Set(data.map((p: any) => p.item_code).filter(Boolean))];
+
+            const [{ data: items }, { data: plPalletDetails }] = await Promise.all([
+                supabase.from('items').select('item_code, item_name, part_number, master_serial_no, revision').in('item_code', itemCodes),
+                supabase.from('pack_packing_list_pallet_details').select('*').in('pallet_id', palletIds)
+            ]);
+
+            const itemMap = new Map((items || []).map((i: any) => [i.item_code, i]));
+            const plDetailMap = new Map((plPalletDetails || []).map((d: any) => [d.pallet_id, d]));
+
+            const enriched = data.map((mp: any) => {
+                const itemInfo = itemMap.get(mp.item_code) || {};
+                const plDetail = plDetailMap.get(mp.pallet_id) || {};
+                return {
+                    ...mp,
+                    net_weight_kg: plDetail.net_weight_kg || mp.net_weight_kg || 0,
+                    gross_weight_kg: plDetail.gross_weight_kg || mp.gross_weight_kg || 0,
+                    part_number: plDetail.part_number || itemInfo.part_number || '—',
+                    master_serial_no: plDetail.master_serial_no || itemInfo.master_serial_no || '—',
+                    revision: plDetail.part_revision || itemInfo.revision || '—',
+                    item_description: itemInfo.item_name || mp.item_name || '—',
+                    pallet_dims: plDetail.pallet_length_cm ? `${plDetail.pallet_length_cm}×${plDetail.pallet_width_cm}×${plDetail.pallet_height_cm} cm` : '—',
+                };
+            });
+
+            setInspectPallets(enriched);
         } catch { setInspectPallets([]); } finally { setInspectLoading(false); }
     };
 
@@ -264,6 +291,8 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
                     if (!grouped[mp.mpl_id]) grouped[mp.mpl_id] = [];
                     grouped[mp.mpl_id].push({
                         ...mp,
+                        net_weight_kg: plDetail.net_weight_kg || mp.net_weight_kg || 0,
+                        gross_weight_kg: plDetail.gross_weight_kg || mp.gross_weight_kg || 0,
                         pallet_number: palletInfo.pallet_number || mp.pallet_number || '—',
                         pallet_state: palletInfo.state || '—',
                         part_number: plDetail.part_number || itemInfo.part_number || '—',
@@ -337,6 +366,8 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
                         if (!grouped[mp.mpl_id]) grouped[mp.mpl_id] = [];
                         grouped[mp.mpl_id].push({
                             ...mp,
+                            net_weight_kg: plDetail.net_weight_kg || mp.net_weight_kg || 0,
+                            gross_weight_kg: plDetail.gross_weight_kg || mp.gross_weight_kg || 0,
                             pallet_number: palletInfo.pallet_number || mp.pallet_number || '—',
                             pallet_state: palletInfo.state || '—',
                             part_number: plDetail.part_number || itemInfo.part_number || '—',
@@ -495,34 +526,51 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
 
             // Fetch part_number and standard_cost from items table
             const uniqueItemCodes = [...new Set((mplPallets || []).map((p: any) => p.item_code))];
-            let itemsLookup: Record<string, { part_number: string; standard_cost: number }> = {};
+            let itemsLookup: Record<string, { part_number: string; standard_cost: number; master_serial_no: string }> = {};
             if (uniqueItemCodes.length > 0) {
                 const { data: itemsData } = await supabase
                     .from('items')
-                    .select('item_code, part_number, standard_cost')
+                    .select('item_code, part_number, standard_cost, master_serial_no')
                     .in('item_code', uniqueItemCodes);
                 for (const itm of (itemsData || [])) {
                     itemsLookup[itm.item_code] = {
                         part_number: itm.part_number || itm.item_code,
                         standard_cost: itm.standard_cost || 0,
+                        master_serial_no: itm.master_serial_no || '',
                     };
                 }
             }
 
             // Build item rows from pallet details using items lookup
-            const itemRows: Array<{ po: string; partNo: string; desc: string; qty: number; rate: number; amount: number }> = [];
+            const itemMapGroup = new Map<string, { po: string; partNo: string; desc: string; msn: string; qty: number; rate: number; amount: number }>();
             for (const p of (mplPallets || [])) {
                 const mpl = mplFull?.find((m: any) => m.id === p.mpl_id);
-                const itemInfo = itemsLookup[p.item_code] || { part_number: p.item_code, standard_cost: 0 };
+                const itemInfo = itemsLookup[p.item_code] || { part_number: p.item_code, standard_cost: 0, master_serial_no: '' };
                 const rate = itemInfo.standard_cost;
-                const amount = rate * p.quantity;
-                itemRows.push({ po: mpl?.po_number || '', partNo: itemInfo.part_number, desc: p.item_name || p.item_code, qty: p.quantity, rate, amount });
+                const po = mpl?.po_number || '';
+                const partNo = itemInfo.part_number;
+                const key = `${po}_${partNo}`;
+
+                if (itemMapGroup.has(key)) {
+                    const existing = itemMapGroup.get(key)!;
+                    existing.qty += p.quantity;
+                    existing.amount += (rate * p.quantity);
+                } else {
+                    itemMapGroup.set(key, { po, partNo, desc: p.item_name || p.item_code, msn: itemInfo.master_serial_no || '', qty: p.quantity, rate, amount: rate * p.quantity });
+                }
             }
+            const itemRows = Array.from(itemMapGroup.values());
             const totalAmount = itemRows.reduce((s, r) => s + r.amount, 0);
             const totalQtyAll = itemRows.reduce((s, r) => s + r.qty, 0);
             const piDate = new Date(pi.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
             const invNo = plData?.invoice_number || mplFull?.[0]?.invoice_number || '';
             const poNo = plData?.purchase_order_number || mplFull?.[0]?.po_number || '';
+            const freightForwarder = plData?.ship_via || 'WEISS ROHLING INDIA';
+            const transportMode = (() => { const t = plData?.mode_of_transport || 'SEA'; return t === 'OCEAN' ? 'SEA' : t; })();
+            const originCountry = (plData?.country_of_origin || 'INDIA').toUpperCase();
+            const loadingPort = (plData?.port_of_loading || 'BANGALORE, INDIA').replace(/BANGALORE, ICD/i, 'BANGALORE, INDIA').toUpperCase();
+            const dischargePort = (plData?.port_of_discharge || 'CHARLESTON, USA').toUpperCase();
+            const finalDest = (plData?.final_destination && plData.final_destination.toUpperCase() !== 'CHARLESTON' && plData.final_destination.toUpperCase() !== 'CHARLESTON, USA') ? plData.final_destination.toUpperCase() : 'UNITED STATES';
             // Number to words (basic)
             const numToWords = (n: number): string => {
                 const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
@@ -543,7 +591,20 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
                 return w + ' Only';
             };
             // Build rows HTML
-            const rowsHtml = itemRows.map((r, i) => `<tr><td class="br c4 ctr" style="padding:2px 4px">${i + 1}</td><td class="br c4" style="padding:2px 4px">${r.po}</td><td class="br c4" style="font-size:11px;font-weight:700;padding:2px 4px">${r.partNo}</td><td class="br c4" style="padding:2px 4px"><div style="font-size:14px">${r.desc}</div></td><td class="br c4 rgt mono" style="padding:2px 4px">${r.qty.toLocaleString()}<br/><span class="sm">Nos</span></td><td class="br c4 rgt mono" style="padding:2px 4px">${r.rate.toFixed(2)}</td><td class="c4 rgt mono" style="padding:2px 4px"><b>${r.amount.toFixed(2)}</b></td></tr>`).join('');
+            const formatDescText = (text: string, extMsn: string) => {
+                let out = text;
+                const match = out.match(/\s*(\([^)]+\))\s*$/);
+                if (match) {
+                    const safeStr = match[1].replace(/-/g, '&#8209;');
+                    out = out.replace(/\s*(\([^)]+\))\s*$/, ` <span class="mono" style="white-space:nowrap;display:inline-block">${safeStr}</span>`);
+                }
+                if (extMsn) {
+                    const safeExt = extMsn.replace(/-/g, '&#8209;');
+                    out += ` <span class="mono" style="white-space:nowrap;display:inline-block">(${safeExt})</span>`;
+                }
+                return out;
+            };
+            const rowsHtml = itemRows.map((r, i) => `<tr><td class="br c4 ctr" style="padding:2px 4px">${i + 1}</td><td class="br c4" style="padding:2px 4px">${r.po}</td><td class="br c4" style="font-size:14px;font-weight:800;padding:2px 4px">${r.partNo}</td><td class="br c4" style="padding:2px 4px"><div style="font-size:12px">${formatDescText(r.desc, r.msn)}</div></td><td class="br c4 rgt mono" style="padding:2px 4px">${r.qty.toLocaleString()}</td><td class="br c4 rgt mono" style="padding:2px 4px"><div style="display:flex;justify-content:space-between"><span>$</span><span>${r.rate.toFixed(2)}</span></div></td><td class="c4 rgt mono" style="padding:2px 4px"><div style="display:flex;justify-content:space-between"><span>$</span><span><b>${r.amount.toFixed(2)}</b></span></div></td></tr>`).join('');
             // Pad empty rows to fill at least 5 rows
             const emptyRowsNeeded = Math.max(0, 5 - itemRows.length);
             const emptyRowsHtml = Array(emptyRowsNeeded).fill('<tr><td class="br c4 ctr">&nbsp;</td><td class="br c4"></td><td class="br c4"></td><td class="br c4"></td><td class="c4"></td></tr>').join('');
@@ -597,13 +658,15 @@ td,th{vertical-align:top}
 <td class="bb br c4" rowspan="4" style="vertical-align:top;padding:4px 6px">
 <div style="display:flex;justify-content:space-between;align-items:baseline;padding:2px 0">
 <span style="font-size:12px;font-weight:700">Exporter</span>
-<span style="font-size:11px;font-weight:700">Vendor No : 114395</span>
+<span style="white-space:nowrap; color:#555; font-family:'Courier New';">
+<span style="font-size:11px; font-weight:700; margin-right:2px;"> VENDOR NO : 114395 </span>
+</span>
 </div>
 <div style="padding:3px 0;line-height:1.5">
 <div style="font-size:13px;font-weight:800">AUTOCRAT ENGINEERS</div>
-<div style="font-size:12px">NO. 21 & 22, Export Promotion Industrial Park, Phase - I,</div>
-<div style="font-size:12px">Whitefield, Bangalore-560066,</div>
-<div style="font-size:12px">KARNATAKA - INDIA</div>
+<div style="font-size:12px">264 KIADB Hi tech Defence Aerospace Park, Phase-2,</div>
+<div style="font-size:12px">Road No 10&amp; 17, Polanahalli,</div>
+<div style="font-size:12px">Devanahalli-562135</div>
 <div style="font-size:12px">GSTIN : 29ABLPK6831H1ZB</div>
 </div>
 </td>
@@ -628,10 +691,9 @@ td,th{vertical-align:top}
 <td class="bb br c4" rowspan="2" style="vertical-align:top;padding:4px 6px">
 <div style="font-size:12px;font-weight:700;padding:2px 0">Consignee</div>
 <div style="padding:3px 0;line-height:1.5">
-<div style="font-size:13px;font-weight:700">OPW FUELING COMPONENTS, LLC</div>
-<div style="font-size:11px">MILANO MILLWORKS, LLC OF 9223</div>
-<div style="font-size:11px">INDUSTRIAL BLVD NE,</div>
-<div style="font-size:11px">LELAND NC 28451 USA</div>
+<div style="font-size:13px;font-weight:700">MILANO MILLWORKS,<span style="font-size:11px;font-weight:400"> LLC</span></div>
+<div style="font-size:11px">9223 INDUSTRIAL BLVD NE,</div>
+<div style="font-size:11px">LELAND, NC, 28451, USA</div>
 </div>
 </td>
 <td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Buyer Details:</td>
@@ -647,11 +709,11 @@ td,th{vertical-align:top}
 <table>
 <colgroup><col style="width:20%"/><col style="width:20%"/><col style="width:20%"/><col style="width:20%"/><col style="width:20%"/></colgroup>
 <tr>
-<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Freight Forwarder</span><br/><span style="font-size:13px;font-weight:700">WEISS ROHLING INDIA</span></td>
-<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Mode of Transport</span><br/><span style="font-size:13px;font-weight:700">SEA</span></td>
-<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Port of Discharge</span><br/><span style="font-size:13px;font-weight:700">CHARLESTON</span></td>
-<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Country of Origin</span><br/><span style="font-size:13px;font-weight:700">INDIA</span></td>
-<td class="bb c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Final Destination</span><br/><span style="font-size:13px;font-weight:700">UNITED STATES</span></td>
+<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Freight Forwarder</span><br/><span style="font-size:13px;font-weight:700">${freightForwarder}</span></td>
+<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Mode of Transport</span><br/><span style="font-size:13px;font-weight:700">${transportMode}</span></td>
+<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Country of Origin</span><br/><span style="font-size:13px;font-weight:700">${originCountry}</span></td>
+<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Port of Loading</span><br/><span style="font-size:13px;font-weight:700">${loadingPort}</span></td>
+<td class="bb c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Port of Discharge</span><br/><span style="font-size:13px;font-weight:700">${dischargePort}</span></td>
 </tr>
 </table>
 
@@ -664,12 +726,12 @@ td,th{vertical-align:top}
 <colgroup><col style="width:5%"/><col style="width:10%"/><col style="width:12%"/><col style="width:33%"/><col style="width:12%"/><col style="width:12%"/><col style="width:16%"/></colgroup>
 <tr style="background:#f5f5f5;line-height:1.5">
 <td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">SL NO</td>
-<td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">PO#</td>
-<td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">PART NO</td>
+<td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">BPA NO.</td>
+<td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">PART NO.</td>
 <td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">DESCRIPTION</td>
-<td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">QTY (NOS)</td>
-<td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">RATE USD</td>
-<td class="bb ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">AMOUNT USD</td>
+<td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle;white-space:nowrap">QTY in pallet (Nos)</td>
+<td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">RATE (USD)</td>
+<td class="bb ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">AMOUNT (USD)</td>
 </tr>
 ${rowsHtml}
 </table>
@@ -691,7 +753,7 @@ ${rowsHtml}
 <td class="bb br c4" colspan="4" style="font-size:12px;padding:5px 6px"><b>Total</b>&nbsp;&nbsp;&mdash;&nbsp;&nbsp;<span style="font-weight:600;font-size:11px;color:#333">${numToWords(totalAmount)}</span></td>
 <td class="bb br c4 rgt mono" style="font-size:12px;padding:5px 6px"></td>
 <td class="bb br c4 rgt mono" style="font-size:12px;padding:5px 6px"></td>
-<td class="bb c4 rgt mono" style="font-size:12px;padding:5px 6px"><b>${totalAmount.toFixed(2)}</b></td>
+<td class="bb c4 rgt mono" style="font-size:12px;padding:5px 6px"><div style="display:flex;justify-content:space-between"><span>$</span><span><b>${totalAmount.toFixed(2)}</b></span></div></td>
 </tr>
 </table>
 
@@ -701,14 +763,14 @@ ${rowsHtml}
 <tr>
 <td class="bt c4" style="padding:4px 6px;vertical-align:top">
 <div style="font-size:11px"><b>ITC HS CODE:</b> 84139190</div>
-<div style="font-size:11px"><b>HTS Code :</b> 8413919085</div>
+<div style="font-size:11px"><b>HTS US Code:</b> 8413919085</div>
 <div style="font-size:11px"><b>DBK CODE :</b> 8413B</div>
 <div style="margin-top:6px;font-size:10px;color:#c00;font-weight:700">NOTE :</div>
 <div style="font-size:10px">1. NON-TAXABLE</div>
 <div style="font-size:10px">2. BANK A/C NO: 912030016364407</div>
 <div style="font-size:10px">3. REMIT TO: AXIS BANK LTD, BANGALORE, 560 001 KARNATAKA, INDIA</div>
 <div style="margin-top:6px;font-size:10px;color:#c00;font-weight:700">DECLARATION :</div>
-<div style="font-size:10px">WE DECLARE THAT THIS INVOICE SHOWS THE ACTUAL PRICE OF THE GOODS DESCRIBED AND THAT ALL PARTICULARS ARE TRUE AND CORRECT.</div>
+<div style="font-size:10px">WE DECLARE THAT THIS PROFORMA INVOICE SHOWS THE ACTUAL PRICE OF THE GOODS DESCRIBED AND THAT ALL PARTICULARS ARE TRUE AND CORRECT.</div>
 </td>
 <td class="c4 rgt" style="padding:4px 6px;vertical-align:bottom">
 <div style="font-size:12px;font-weight:700">for AUTOCRAT ENGINEERS</div>
@@ -731,9 +793,12 @@ ${rowsHtml}
 </div>
 </body></html>`);
             w.document.close();
-        } catch (err: any) { setError(err.message); }
+            showToast('success', 'Document Ready', `Proforma Invoice ${pi.proforma_number} generated for printing.`);
+        } catch (err: any) { 
+            setError(err.message); 
+            showToast('error', 'Print Failed', 'Failed to generate Proforma Invoice for printing.');
+        }
     };
-
     const StatusBadge = ({ status }: { status: string }) => {
         const styles: Record<string, { bg: string; color: string; label: string }> = { DRAFT: { bg: '#fef3c7', color: '#92400e', label: 'DRAFT' }, CONFIRMED: { bg: '#dbeafe', color: '#1d4ed8', label: 'CONFIRMED' }, STOCK_MOVED: { bg: '#d1fae5', color: '#059669', label: 'DISPATCHED' }, CANCELLED: { bg: '#fee2e2', color: '#dc2626', label: 'CANCELLED' } };
         const s = styles[status] || styles.DRAFT;
@@ -847,32 +912,40 @@ ${rowsHtml}
                                                             <ShieldCheck size={15} /> Approve
                                                         </button>
                                                     ) : (
-                                                        <button onClick={() => handleViewDetail(pi)} style={{ height: 34, minWidth: 80, padding: '0 14px', borderRadius: '8px 0 0 8px', border: '1px solid #e5e7eb', borderRight: 'none', backgroundColor: 'white', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 13, fontWeight: 500, color: '#374151', transition: 'all 0.15s ease', whiteSpace: 'nowrap' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'white'}>
+                                                        <button onClick={() => handleViewDetail(pi)} style={{ height: 34, minWidth: pi.status === 'CANCELLED' ? 112 : 80, padding: '0 14px', borderRadius: pi.status === 'CANCELLED' ? 8 : '8px 0 0 8px', border: '1px solid #e5e7eb', borderRight: pi.status === 'CANCELLED' ? '1px solid #e5e7eb' : 'none', backgroundColor: 'white', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 13, fontWeight: 500, color: '#374151', transition: 'all 0.15s ease', whiteSpace: 'nowrap' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'white'}>
                                                             <Eye size={15} /> View
                                                         </button>
                                                     )}
                                                     {/* Dropdown toggle */}
-                                                    <button onClick={(e) => { e.stopPropagation(); if (activeDropdown === pi.id) { setActiveDropdown(null); } else { const rect = e.currentTarget.getBoundingClientRect(); setDropdownDirection(window.innerHeight - rect.bottom < 200 ? 'up' : 'down'); setActiveDropdown(pi.id); } }} style={{ height: 34, padding: '0 8px', border: `1px solid ${pi.status === 'DRAFT' && canApprove && pi.total_invoices > 0 ? '#059669' : '#e5e7eb'}`, borderRadius: '0 8px 8px 0', backgroundColor: pi.status === 'DRAFT' && canApprove && pi.total_invoices > 0 ? '#059669' : 'white', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: pi.status === 'DRAFT' && canApprove && pi.total_invoices > 0 ? '#fff' : '#374151', transition: 'all 0.15s ease' }} onMouseEnter={e => e.currentTarget.style.opacity = '0.85'} onMouseLeave={e => e.currentTarget.style.opacity = '1'}>
-                                                        <ChevronDown size={14} style={{ transition: 'transform 0.2s', transform: activeDropdown === pi.id ? 'rotate(180deg)' : 'rotate(0deg)' }} />
-                                                    </button>
-                                                    {/* Dropdown menu */}
-                                                    {activeDropdown === pi.id && (
-                                                        <div style={{ position: 'absolute', ...(dropdownDirection === 'up' ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), right: 0, zIndex: 9999, width: 200, backgroundColor: 'white', borderRadius: 12, boxShadow: '0 10px 40px rgba(0,0,0,0.15)', border: '1px solid #e5e7eb', overflow: 'hidden' }}>
-                                                            {/* View Details — only when main button is NOT View */}
-                                                            {(pi.status === 'DRAFT' || pi.status === 'CONFIRMED') && (
-                                                                <button onClick={() => { handleViewDetail(pi); setActiveDropdown(null); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: 14, textAlign: 'left', color: '#374151' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
-                                                                    <Eye size={16} /> View Details
-                                                                </button>)}
-                                                            {/* Print — always */}
-                                                            <div style={{ borderTop: '1px solid #f3f4f6' }} />
-                                                            <button onClick={() => { handlePrintPI(pi); setActiveDropdown(null); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: 14, textAlign: 'left', color: '#059669' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f0fdf4'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
-                                                                <Printer size={16} /> Print
+                                                    {pi.status !== 'CANCELLED' && (
+                                                        <>
+                                                            <button onClick={(e) => { e.stopPropagation(); if (activeDropdown === pi.id) { setActiveDropdown(null); } else { const rect = e.currentTarget.getBoundingClientRect(); setDropdownDirection(window.innerHeight - rect.bottom < 200 ? 'up' : 'down'); setActiveDropdown(pi.id); } }} style={{ height: 34, padding: '0 8px', border: `1px solid ${pi.status === 'DRAFT' && canApprove && pi.total_invoices > 0 ? '#059669' : '#e5e7eb'}`, borderRadius: '0 8px 8px 0', backgroundColor: pi.status === 'DRAFT' && canApprove && pi.total_invoices > 0 ? '#059669' : 'white', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', color: pi.status === 'DRAFT' && canApprove && pi.total_invoices > 0 ? '#fff' : '#374151', transition: 'all 0.15s ease' }} onMouseEnter={e => e.currentTarget.style.opacity = '0.85'} onMouseLeave={e => e.currentTarget.style.opacity = '1'}>
+                                                                <ChevronDown size={14} style={{ transition: 'transform 0.2s', transform: activeDropdown === pi.id ? 'rotate(180deg)' : 'rotate(0deg)' }} />
                                                             </button>
-                                                            {/* Cancel (DRAFT or CONFIRMED) */}
-                                                            {(pi.status === 'DRAFT' || pi.status === 'CONFIRMED') && canCreate && (<><div style={{ borderTop: '1px solid #f3f4f6' }} /><button onClick={() => { setCancelTarget(pi); setCancelReason(''); setCancelConfirmInput(''); setActiveDropdown(null); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: 14, textAlign: 'left', color: '#dc2626' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#fef2f2'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
-                                                                <XCircle size={16} /> Cancel PI
-                                                            </button></>)}
-                                                        </div>
+                                                            {/* Dropdown menu */}
+                                                            {activeDropdown === pi.id && (
+                                                                <div style={{ position: 'absolute', ...(dropdownDirection === 'up' ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), right: 0, zIndex: 9999, width: 200, backgroundColor: 'white', borderRadius: 12, boxShadow: '0 10px 40px rgba(0,0,0,0.15)', border: '1px solid #e5e7eb', overflow: 'hidden' }}>
+                                                                    {/* View Details — only when main button is NOT View */}
+                                                                    {(pi.status === 'DRAFT' || pi.status === 'CONFIRMED') && (
+                                                                        <button onClick={() => { handleViewDetail(pi); setActiveDropdown(null); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: 14, textAlign: 'left', color: '#374151' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                                                                            <Eye size={16} /> View Details
+                                                                        </button>)}
+                                                                    {/* Print — hide if CANCELLED */}
+                                                                    {pi.status !== 'CANCELLED' && (
+                                                                        <>
+                                                                            <div style={{ borderTop: '1px solid #f3f4f6' }} />
+                                                                            <button onClick={() => { handlePrintPI(pi); setActiveDropdown(null); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: 14, textAlign: 'left', color: '#059669' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f0fdf4'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                                                                                <Printer size={16} /> Print
+                                                                            </button>
+                                                                        </>
+                                                                    )}
+                                                                    {/* Cancel (DRAFT or CONFIRMED) */}
+                                                                    {(pi.status === 'DRAFT' || pi.status === 'CONFIRMED') && canCreate && (<><div style={{ borderTop: '1px solid #f3f4f6' }} /><button onClick={() => { setCancelTarget(pi); setCancelReason(''); setCancelConfirmInput(''); setActiveDropdown(null); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: 14, textAlign: 'left', color: '#dc2626' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#fef2f2'} onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                                                                        <XCircle size={16} /> Cancel PI
+                                                                    </button></>)}
+                                                                </div>
+                                                            )}
+                                                        </>
                                                     )}
                                                 </div>
                                             </td>
@@ -990,31 +1063,38 @@ ${rowsHtml}
                                                         <div style={{ fontSize: 11, fontWeight: 700, color: '#1e3a8a', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>Pallet Breakdown ({inspectPallets.length} pallets)</div>
                                                         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                                                             <thead><tr style={{ background: '#e0e7ff' }}>
-                                                                <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: '#374151' }}>#</th>
-                                                                <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: '#374151' }}>Pallet</th>
-                                                                <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: '#374151' }}>Item</th>
-                                                                <th style={{ padding: '6px 10px', textAlign: 'center', fontWeight: 600, fontSize: 11, color: '#374151' }}>Boxes</th>
+                                                                <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: '#374151', whiteSpace: 'nowrap' }}>Pallet ID</th>
+                                                                <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: '#374151' }}>Part Number</th>
+                                                                <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: '#374151' }}>Description</th>
+                                                                <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, fontSize: 11, color: '#374151' }}>MSN</th>
+                                                                <th style={{ padding: '6px 10px', textAlign: 'center', fontWeight: 600, fontSize: 11, color: '#374151' }}>Rev</th>
+                                                                <th style={{ padding: '6px 10px', textAlign: 'center', fontWeight: 600, fontSize: 11, color: '#374151' }}>Inner Boxes</th>
                                                                 <th style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, fontSize: 11, color: '#374151' }}>Qty</th>
-                                                                <th style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, fontSize: 11, color: '#374151' }}>Net Wt</th>
-                                                                <th style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, fontSize: 11, color: '#374151' }}>Gross Wt</th>
+                                                                <th style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, fontSize: 11, color: '#374151' }}>Net Wt (kg)</th>
+                                                                <th style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, fontSize: 11, color: '#374151' }}>Gross Wt (kg)</th>
+                                                                <th style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, fontSize: 11, color: '#374151' }}>Dimensions</th>
                                                             </tr></thead>
                                                             <tbody>{inspectPallets.map((p: any, i: number) => (
                                                                 <tr key={p.id} style={{ borderBottom: '1px solid #e5e7eb', background: i % 2 === 0 ? '#fff' : '#f8fafc' }}>
-                                                                    <td style={{ padding: '6px 10px', color: '#9ca3af' }}>{i + 1}</td>
-                                                                    <td style={{ padding: '6px 10px', fontFamily: 'monospace', fontWeight: 600, color: '#1e3a8a' }}>{p.pallet_number}</td>
-                                                                    <td style={{ padding: '6px 10px', fontFamily: 'monospace', fontSize: 11 }}>{p.item_code}</td>
+                                                                    <td style={{ padding: '6px 10px', fontFamily: 'monospace', fontWeight: 600, color: '#1e3a8a', whiteSpace: 'nowrap' }}>{p.pallet_number}</td>
+                                                                    <td style={{ padding: '6px 10px', fontFamily: 'monospace', fontSize: 11, fontWeight: 700 }}>{p.part_number}</td>
+                                                                    <td style={{ padding: '6px 10px', fontSize: 11 }}>{p.item_description}</td>
+                                                                    <td style={{ padding: '6px 10px', fontFamily: 'monospace', fontSize: 11, color: '#7c3aed' }}>{p.master_serial_no}</td>
+                                                                    <td style={{ padding: '6px 10px', textAlign: 'center', fontSize: 11 }}>{p.revision}</td>
                                                                     <td style={{ padding: '6px 10px', textAlign: 'center', fontWeight: 600 }}>{p.container_count}</td>
                                                                     <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 600 }}>{p.quantity.toLocaleString()}</td>
                                                                     <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'monospace', fontSize: 11 }}>{Number(p.net_weight_kg || 0).toFixed(2)}</td>
                                                                     <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'monospace', fontSize: 11 }}>{Number(p.gross_weight_kg || 0).toFixed(2)}</td>
+                                                                    <td style={{ padding: '6px 10px', textAlign: 'right', fontSize: 10, color: '#6b7280' }}>{p.pallet_dims}</td>
                                                                 </tr>
                                                             ))}</tbody>
                                                             <tfoot><tr style={{ background: '#e0e7ff', fontWeight: 700 }}>
-                                                                <td colSpan={3} style={{ padding: '6px 10px', fontSize: 11 }}>TOTAL</td>
+                                                                <td colSpan={5} style={{ padding: '6px 10px', fontSize: 11 }}>Totals ({inspectPallets.length} pallets)</td>
                                                                 <td style={{ padding: '6px 10px', textAlign: 'center' }}>{inspectPallets.reduce((s: number, p: any) => s + (p.container_count || 0), 0)}</td>
                                                                 <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'monospace' }}>{inspectPallets.reduce((s: number, p: any) => s + p.quantity, 0).toLocaleString()}</td>
                                                                 <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'monospace', fontSize: 11 }}>{inspectPallets.reduce((s: number, p: any) => s + Number(p.net_weight_kg || 0), 0).toFixed(2)}</td>
                                                                 <td style={{ padding: '6px 10px', textAlign: 'right', fontFamily: 'monospace', fontSize: 11 }}>{inspectPallets.reduce((s: number, p: any) => s + Number(p.gross_weight_kg || 0), 0).toFixed(2)}</td>
+                                                                <td style={{ padding: '6px 10px' }}></td>
                                                             </tr></tfoot>
                                                         </table>
                                                         <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>

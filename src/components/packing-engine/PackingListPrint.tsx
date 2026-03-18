@@ -253,7 +253,7 @@ export function PackingListPrint({ accessToken, userRole, userPerms = {} }: Prop
         /* ── hardcoded defaults (override from hd when available) ── */
         const D = {
             expName: hd?.exporter_name || 'AUTOCRAT ENGINEERS',
-            expAddr: hd?.exporter_address || 'NO. 21 & 22, Export Promotion Industrial Park, Phase - I, Whitefield,\nBangalore-560066, KARNATAKA - INDIA',
+            expAddr: hd?.exporter_address || '264 KIADB Hi tech Defence Aerospace Park, Phase-2,\nRoad No 10& 17, Polanahalli,\nDevanahalli-562135',
             expPhone: hd?.exporter_phone || 'PH 91 80 43330127',
             expEmail: hd?.exporter_email || 'dispatch@autocratengineers.in',
             expGstin: hd?.exporter_gstin || '29ABLPK6831H1ZB',
@@ -268,16 +268,17 @@ export function PackingListPrint({ accessToken, userRole, userPerms = {} }: Prop
             buyEmail: hd?.buyer_email || 'sherry.brown@opwglobal.com',
             billName: hd?.bill_to_name || 'OPW Fueling Components, LLC',
             billAddr: hd?.bill_to_address || '3250 US Highway 70 Business West\nSmithfield, NC 27577\nUnited States',
-            preCarr: hd?.pre_carriage_by || 'Road',
-            receipt: hd?.place_of_receipt || 'BANGALORE',
-            origin: hd?.country_of_origin || 'INDIA',
-            dest: hd?.country_of_destination || 'UNITED STATES',
-            portLoad: hd?.port_of_loading || 'BANGALORE, ICD',
+            preCarr: (hd?.pre_carriage_by || 'ROAD').toUpperCase(),
+            receipt: (hd?.place_of_receipt || 'BANGALORE, INDIA').toUpperCase(),
+            origin: (hd?.country_of_origin || 'INDIA').toUpperCase(),
+            dest: (hd?.country_of_destination || 'UNITED STATES').toUpperCase(),
+            portLoad: (hd?.port_of_loading || 'BANGALORE, INDIA').replace(/BANGALORE, ICD/i, 'BANGALORE, INDIA').toUpperCase(),
             delivery: hd?.terms_of_delivery || 'DDP',
             payment: hd?.payment_terms || 'Net-30',
-            portDisc: hd?.port_of_discharge || 'CHARLESTON',
-            finalDest: hd?.final_destination || 'UNITED STATES',
-            transport: hd?.mode_of_transport || 'Sea',
+            portDisc: (hd?.port_of_discharge || 'CHARLESTON, USA').toUpperCase(),
+            finalDest: (hd?.final_destination || 'UNITED STATES').toUpperCase(),
+            transport: (hd?.mode_of_transport || 'SEA').toUpperCase(),
+            freightForwarder: hd?.ship_via || 'WEISS ROHLING INDIA',
             itemHdr: hd?.item_description_header || 'PRECISION MACHINED COMPONENTS',
             itemSub: hd?.item_description_sub_header || '(OTHERS FUELING COMPONENTS)',
         };
@@ -286,14 +287,21 @@ export function PackingListPrint({ accessToken, userRole, userPerms = {} }: Prop
         const itemRows = details.map((d, idx) => {
             const dim = d.pallet_length_cm && d.pallet_width_cm && d.pallet_height_cm
                 ? `${d.pallet_length_cm} X ${d.pallet_width_cm} X ${d.pallet_height_cm}` : '\u2014';
+            let fItemName = d.item_name || d.item_code || '';
+            const match = fItemName.match(/\s*(\([^)]+\))\s*$/);
+            if (match) {
+                const safeStr = match[1].replace(/-/g, '&#8209;');
+                fItemName = fItemName.replace(/\s*(\([^)]+\))\s*$/, ` <span class="mono" style="white-space:nowrap;display:inline-block">${safeStr}</span>`);
+            }
+
             return `<tr>
 <td class="bb br c4 ctr">${idx + 1}</td>
 <td class="bb br c4">${d.pallet_number || ''}</td>
-<td class="bb br c4"><b>${d.master_serial_no ? '[' + d.master_serial_no + ']' : ''}</b><br/>${d.part_number || ''}<br/>${d.item_name || d.item_code || ''}${d.hts_code ? '<br/><span class="sm">HTS CODE: ' + d.hts_code.replace(/^84139190$/, '8413919085') + '</span>' : ''}</td>
+<td class="bb br c4"><span class="mono">${d.master_serial_no ? '[' + d.master_serial_no + ']' : ''}</span><br/>${d.part_number || ''}<br/>${fItemName}${d.hts_code ? '<br/><span class="sm">HTS US Code: ' + d.hts_code.replace(/^84139190$/, '8413919085') + '</span>' : ''}</td>
 <td class="bb br c4 ctr">${d.num_pallets || 1}</td>
 <td class="bb br c4 ctr">${dim}</td>
 <td class="bb br c4 ctr">${d.part_revision || '\u2014'}</td>
-<td class="bb br c4 rgt mono">${(d.qty_per_pallet || 0).toLocaleString()}<br/><span class="sm">Nos</span></td>
+<td class="bb br c4 rgt mono">${(d.qty_per_pallet || 0).toLocaleString()}</td>
 <td class="bb br c4 rgt mono">${Number(d.net_weight_kg || 0).toFixed(2)}</td>
 <td class="bb c4 rgt mono"><b>${Number(d.gross_weight_kg || 0).toFixed(2)}</b></td></tr>`;
         }).join('');
@@ -343,7 +351,7 @@ td,th{vertical-align:top}
 <div class="bb" style="padding:2px 5px;font-size:8px">Exporter</div>
 <div style="padding:4px 5px;line-height:1.5">
 <div style="font-size:10px;font-weight:800">${D.expName}</div>
-<div style="font-size:8px">${D.expAddr.replace(/\n/g, '<br/>')}</div>
+<div style="font-size:8px">${D.expAddr.replace(/\\n|\n/g, '<br/>')}</div>
 <div style="font-size:8px">${D.expPhone}</div>
 <div style="font-size:8px">E mail : ${D.expEmail}</div>
 <div style="font-size:8px">GSTIN : ${D.expGstin}</div>
@@ -356,7 +364,7 @@ td,th{vertical-align:top}
 <div class="lbl" style="margin-top:8px">VENDOR NO:</div><div style="font-size:13px;font-weight:800">${D.vendorNo}</div>
 </td>
 </tr>
-<tr><td class="bb br c4 lbl">Purchase Order No. & Date :</td><td class="bb br c4 mono" style="font-weight:700">${hd?.purchase_order_number || ''} ${poDate ? 'DT.' + poDate : ''}</td></tr>
+<tr><td class="bb br c4 lbl">BPA Number & Date :</td><td class="bb br c4 mono" style="font-weight:700">${hd?.purchase_order_number || ''} ${poDate ? 'DT.' + poDate : ''}</td></tr>
 <tr><td class="bb br c4 lbl">Ship Via :</td><td class="bb br c4" style="font-weight:700">${hd?.ship_via || ''}</td></tr>
 <tr><td class="bb br c4 lbl">Others Reference(s) :</td><td class="bb br c4"></td></tr>
 </table>
@@ -396,10 +404,9 @@ td,th{vertical-align:top}
 <td class="bb c4" colspan="2" style="font-size:8px">Days from the date of Invoice</td>
 </tr>
 <tr>
+<td class="bb br c4 lbl">Freight Forwarder<br/><span style="font-weight:700">${D.freightForwarder}</span></td>
 <td class="bb br c4 lbl">Mode of Transport<br/><span style="font-weight:400">${D.transport}</span></td>
-<td class="bb br c4 lbl">Freight Forwarder<br/><span style="font-weight:700">WEISS ROHLING INDIA</span></td>
-<td class="bb br c4 lbl">Port of Discharge<br/><span style="font-weight:700">${D.portDisc}</span></td>
-<td class="bb br c4 lbl">Final Destination<br/><span style="font-weight:700">${D.finalDest}</span></td>
+<td class="bb br c4 lbl" colspan="2">Port of Discharge<br/><span style="font-weight:700">${D.portDisc}</span></td>
 <td class="bb br c4 lbl">IEC Code No :<br/><span class="mono" style="font-weight:400">${D.expIec}</span></td>
 <td class="bb c4 lbl">AD Code No:<br/><span class="mono" style="font-weight:400">${D.expAd}</span></td>
 </tr>
@@ -413,14 +420,14 @@ td,th{vertical-align:top}
 <colgroup><col style="width:5%"/><col style="width:14%"/><col style="width:20%"/><col style="width:6%"/><col style="width:11%"/><col style="width:6%"/><col style="width:11%"/><col style="width:12%"/><col style="width:15%"/></colgroup>
 <tr style="background:#f5f5f5">
 <th class="bb br c4 lbl ctr">SL NO</th>
-<th class="bb br c4 lbl" style="text-align:left">Pallet No. & Batch No.</th>
-<th class="bb br c4 lbl" style="text-align:left">Part No. & Description with P.O No.</th>
+<th class="bb br c4 lbl" style="text-align:left">Box No. & Batch No.</th>
+<th class="bb br c4 lbl" style="text-align:left">Part No. & Description</th>
 <th class="bb br c4 lbl ctr">No. of Pallet</th>
-<th class="bb br c4 lbl ctr">Dimensions in cm</th>
+<th class="bb br c4 lbl ctr">Dimensions (cm)</th>
 <th class="bb br c4 lbl ctr">Part Rev</th>
-<th class="bb br c4 lbl rgt">Qty Per Pallet</th>
-<th class="bb br c4 lbl rgt">Net Wt in KGs</th>
-<th class="bb c4 lbl rgt">Gross Wt in KGs</th>
+<th class="bb br c4 lbl rgt" style="white-space:nowrap">Qty in pallet (Nos)</th>
+<th class="bb br c4 lbl rgt">Net Wt (kg)</th>
+<th class="bb c4 lbl rgt">Gross Wt (kg)</th>
 </tr>
 ${itemRows}
 </table>
@@ -433,18 +440,18 @@ ${itemRows}
 <colgroup><col style="width:5%"/><col style="width:14%"/><col style="width:20%"/><col style="width:6%"/><col style="width:11%"/><col style="width:6%"/><col style="width:11%"/><col style="width:12%"/><col style="width:15%"/></colgroup>
 <tr style="background:#f5f5f5">
 <td class="bt br c4"></td>
-<td class="bt br c4" colspan="2" style="font-weight:800;font-size:9px">Total No of Pkgs. ${String(totalPkgs).padStart(2, '0')}<br/>Net. Wt.in Kgs. ${totalNet.toFixed(2)}<br/>in kgs ${totalGross.toFixed(2)}</td>
+<td class="bt br c4" colspan="2" style="font-weight:800;font-size:9px">Total No of Pkgs. ${String(totalPkgs).padStart(2, '0')}<br/>Net Wt. (kg) ${totalNet.toFixed(2)}<br/>Gross Wt. (kg) ${totalGross.toFixed(2)}</td>
 <td class="bt br c4 ctr lbl">Total<br/>Total<br/>Gross</td>
 <td class="bt br c4 ctr mono" style="font-weight:800">${String(totalPkgs).padStart(2, '0')}</td>
 <td class="bt br c4"></td>
 <td class="bt br c4 rgt mono" style="font-weight:800">${totalQty.toLocaleString()}</td>
-<td class="bt br c4 rgt mono" style="font-weight:800">${totalNet.toFixed(2)}<br/><span class="sm">Kgs</span></td>
-<td class="bt c4 rgt mono" style="font-weight:800">${totalGross.toFixed(2)}<br/><span class="sm">Kgs</span></td>
+<td class="bt br c4 rgt mono" style="font-weight:800">${totalNet.toFixed(2)}</td>
+<td class="bt c4 rgt mono" style="font-weight:800">${totalGross.toFixed(2)}</td>
 </tr>
 </table>
 
 <!-- ═══ ITC HS CODE ═══ -->
-<table><tr><td class="bt c4" style="font-size:9px;font-weight:700;padding:4px 5px">ITC HS CODE: <span class="mono">84139190</span></td></tr></table>
+<table><tr><td class="bt c4" style="font-size:9px;font-weight:700;padding:4px 5px">ITC HS CODE: <span class="mono">84139190</span><br/>HTS US Code: <span class="mono">8413919085</span></td></tr></table>
 
 <!-- ═══ EPCG / LUT + SIGNATORY ═══ -->
 <table style="border-top:1px solid #000">
