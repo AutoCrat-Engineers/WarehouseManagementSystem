@@ -792,7 +792,7 @@ function ItemViewModal({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
             <p style={{ fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-gray-600)', marginBottom: '12px' }}>Pricing</p>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
               <div><Label>Unit Price</Label><Input value={item.unit_price != null ? `₹${item.unit_price.toLocaleString()}` : '-'} disabled /></div>
-              <div><Label>Standard Cost</Label><Input value={item.standard_cost != null ? `₹${item.standard_cost.toLocaleString()}` : '-'} disabled /></div>
+              <div><Label>Standard Cost</Label><Input value={item.standard_cost != null ? `$${item.standard_cost.toLocaleString()}` : '-'} disabled /></div>
               <div><Label>Status</Label><Input value={item.is_active ? 'Active' : 'Inactive'} disabled /></div>
             </div>
           </div>

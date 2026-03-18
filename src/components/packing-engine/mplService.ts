@@ -540,9 +540,7 @@ export async function confirmMpl(mplId: string): Promise<void> {
         .update({
             status: 'CONFIRMED',
             confirmed_at: new Date().toISOString(),
-            confirmed_by: userId,
             updated_at: new Date().toISOString(),
-            updated_by: userId,
         })
         .eq('id', mplId);
 
@@ -565,26 +563,52 @@ export async function markMplPrinted(mplId: string): Promise<void> {
 
     const { data: mpl, error } = await supabase
         .from('master_packing_lists')
-        .select('id, mpl_number, status, print_count')
+        .select('*')
         .eq('id', mplId)
         .single();
 
-    if (error || !mpl) throw new Error('MPL not found');
-    if (mpl.status !== 'CONFIRMED' && mpl.status !== 'PRINTED') {
+    if (error || !mpl) {
+        console.error('[markMplPrinted] Fetch error:', error);
+        throw new Error(`MPL not found: ${error?.message || 'No record'}`);
+    }
+    if (mpl.status !== 'CONFIRMED' && mpl.status !== 'PRINTED' && mpl.status !== 'DISPATCHED') {
         throw new Error(`Cannot print MPL in ${mpl.status} status`);
     }
 
-    await supabase
+    const updatePayload: any = {
+        printed_at: new Date().toISOString(),
+        printed_by: userId,
+        updated_at: new Date().toISOString(),
+        updated_by: userId,
+    };
+    
+    // Only change status to PRINTED if it's currently CONFIRMED or PRINTED
+    // If it's already DISPATCHED, leave the status as DISPATCHED
+    if (mpl.status === 'CONFIRMED' || mpl.status === 'PRINTED') {
+        updatePayload.status = 'PRINTED';
+    }
+
+    // Safely increment print count if the column exists on the record
+    if (mpl.print_count !== undefined) {
+        updatePayload.print_count = (mpl.print_count || 0) + 1;
+    }
+
+    let { error: updateError } = await supabase
         .from('master_packing_lists')
-        .update({
-            status: 'PRINTED',
-            printed_at: new Date().toISOString(),
-            printed_by: userId,
-            print_count: (mpl.print_count || 0) + 1,
-            updated_at: new Date().toISOString(),
-            updated_by: userId,
-        })
+        .update(updatePayload)
         .eq('id', mplId);
+
+    // Fallback if print_count doesn't exist on the table structure
+    if (updateError && updateError.message?.includes('print_count')) {
+        delete updatePayload.print_count;
+        const res = await supabase.from('master_packing_lists').update(updatePayload).eq('id', mplId);
+        updateError = res.error;
+    }
+
+    if (updateError) {
+        console.error('[markMplPrinted] Database Error:', updateError);
+        throw new Error(`Failed to update MPL status to PRINTED: ${updateError.message || JSON.stringify(updateError)}`);
+    }
 
     await logDispatchAudit({
         entity_type: 'MASTER_PACKING_LIST',
@@ -592,9 +616,9 @@ export async function markMplPrinted(mplId: string): Promise<void> {
         entity_number: mpl.mpl_number,
         action: 'PRINTED',
         from_status: mpl.status,
-        to_status: 'PRINTED',
+        to_status: mpl.status === 'CONFIRMED' || mpl.status === 'PRINTED' ? 'PRINTED' : mpl.status,
         performed_by: userId,
-        metadata: { print_count: (mpl.print_count || 0) + 1 },
+        metadata: { print_count: mpl.print_count !== undefined ? (mpl.print_count || 0) + 1 : 1 },
     });
 }
 
@@ -1037,9 +1061,7 @@ export async function cancelPerformaInvoice(piId: string, reason?: string): Prom
         const { error: clearErr } = await supabase
             .from('master_packing_lists')
             .update({
-                proforma_invoice_id: null,
-                updated_at: new Date().toISOString(),
-                updated_by: userId,
+                proforma_invoice_id: null
             })
             .in('id', mplIds);
         if (clearErr) throw new Error(`Failed to clear MPL links: ${clearErr.message}`);
@@ -1069,7 +1091,6 @@ export async function cancelPerformaInvoice(piId: string, reason?: string): Prom
             .from('pack_proforma_invoices')
             .update({
                 status: 'CANCELLED',
-                updated_at: new Date().toISOString(),
             })
             .eq('id', piId);
         if (minUpdateErr) throw new Error(`Failed to cancel PI: ${minUpdateErr.message}`);

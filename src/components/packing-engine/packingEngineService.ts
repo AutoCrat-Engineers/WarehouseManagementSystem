@@ -1470,7 +1470,7 @@ export async function fetchAllPackingListData(): Promise<(PackingListData & { pa
 export const PACKING_LIST_DEFAULTS: Partial<Omit<PackingListData, 'id' | 'packing_list_id' | 'created_by' | 'created_at' | 'updated_at'>> = {
     // Exporter
     exporter_name: 'AUTOCRAT ENGINEERS',
-    exporter_address: 'NO. 21 & 22, Export Promotion Industrial Park, Phase - I, Whitefield, Bangalore-560066, KARNATAKA - INDIA',
+    exporter_address: '264 KIADB Hi tech Defence Aerospace Park, Phase-2, Road No 10& 17, Polanahalli, Devanahalli-562135',
     exporter_phone: 'PH 91 80 43330127',
     exporter_email: 'dispatch@autocratengineers.in',
     exporter_gstin: '29ABLPK6831H1ZB',
@@ -1490,12 +1490,13 @@ export const PACKING_LIST_DEFAULTS: Partial<Omit<PackingListData, 'id' | 'packin
     bill_to_address: '3250 US Highway 70 Business West, Smithfield, NC 27577, United States',
     // Shipping
     pre_carriage_by: 'Road',
-    place_of_receipt: 'BANGALORE',
-    country_of_origin: 'INDIA',
+    place_of_receipt: 'BANGALORE, INDIA',
+    country_of_origin: 'India',
     country_of_destination: 'UNITED STATES',
-    port_of_loading: 'BANGALORE, ICD',
+    port_of_loading: 'BANGALORE, INDIA',
     terms_of_delivery: 'DDP',
     payment_terms: 'Net-30',
+    port_of_discharge: 'Charleston, USA',
     final_destination: 'UNITED STATES',
     mode_of_transport: 'SEA',
     // Item description
@@ -1522,7 +1523,6 @@ export async function upsertPackingListData(
             .from('pack_packing_list_data')
             .update({
                 ...data,
-                updated_by: userId,
                 updated_at: new Date().toISOString(),
             })
             .eq('id', existing.id)
@@ -1541,7 +1541,6 @@ export async function upsertPackingListData(
             ...data,
             packing_list_id: packingListId,
             created_by: userId,
-            updated_by: userId,
         })
         .select()
         .single();
@@ -1612,7 +1611,7 @@ export async function autoPopulatePalletDetails(
         const widthCm = spec ? (spec.outer_box_width_mm / 10) : null;
         const heightCm = spec ? (spec.outer_box_height_mm / 10) : null;
         const netWt = spec ? Number(spec.inner_box_net_weight_kg || 0) * (p.container_count || 0) : 0;
-        const grossWt = spec ? Number(spec.outer_box_gross_weight_kg || 0) * (p.container_count || 0) : 0;
+        const grossWt = spec ? Number(spec.outer_box_gross_weight_kg || 0) : 0;
 
         return {
             packing_list_data_id: packingListDataId,
@@ -1665,10 +1664,7 @@ export async function updatePalletDetail(
 ): Promise<PackingListPalletDetail> {
     const { data, error } = await supabase
         .from('pack_packing_list_pallet_details')
-        .update({
-            ...updates,
-            updated_at: new Date().toISOString(),
-        })
+        .update(updates)
         .eq('id', detailId)
         .select()
         .single();
@@ -1715,6 +1711,9 @@ export async function getPackingListFullBacktrack(packingListId: string): Promis
     let palletDetails: PackingListPalletDetail[] = [];
     if (headerData) {
         palletDetails = await fetchPackingListPalletDetails(headerData.id);
+        if (palletDetails.length === 0) {
+            palletDetails = await autoPopulatePalletDetails(packingListId, headerData.id);
+        }
     }
 
     // 3.5 Enrich missing part_revision from items table

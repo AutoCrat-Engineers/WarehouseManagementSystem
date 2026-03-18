@@ -778,7 +778,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
         status: 'PENDING_APPROVAL',
         approval_status: 'PENDING',
         reason_code: selectedCategory || null,
-        reason_description: note,
+        reason_description: (isProductionReceipt && palletImpact?.adjustmentBoxIncluded) ? `${note.trim()} [Top-off: ${palletImpact.totalAdjustmentBoxes || 1} Box of ${palletImpact.adjustmentBoxQty} PCS]` : note.trim(),
         reference_document_type: referenceType || null,
         reference_document_number: referenceId || null,
         notes: isProductionReceipt
@@ -2837,7 +2837,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
               </div>
 
               {/* ══════════ SECTION 3.5: BOX BREAKDOWN (Production Receipt only) ══════════ */}
-              {reviewMovement.movement_type === 'PRODUCTION_RECEIPT' && reviewBoxInfo && reviewBoxInfo.boxes > 0 && (
+              {reviewMovement.movement_type === 'PRODUCTION_RECEIPT' && reviewBoxInfo && (reviewBoxInfo.boxes > 0 || reviewBoxInfo.adjIncluded) && (
                 <div style={{ padding: '16px 0', borderBottom: '1px solid #f0f2f5' }}>
                   <div style={{ ...labelStyle, marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <Package size={13} style={{ color: '#1e3a8a' }} />
@@ -2849,6 +2849,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                     padding: '16px 20px',
                   }}>
                     {/* Inner boxes row */}
+                    {reviewBoxInfo.boxes > 0 && (
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr', alignItems: 'center' }}>
                       <div style={{ textAlign: 'center' }}>
                         <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Inner Boxes</div>
@@ -2875,11 +2876,12 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                         </div>
                       </div>
                     </div>
+                    )}
 
                     {/* Top-off box row (if applicable) */}
-                    {reviewBoxInfo.adjIncluded && reviewBoxInfo.adjQty && (
+                    {reviewBoxInfo.adjIncluded && reviewBoxInfo.adjQty !== undefined && (
                       <>
-                        <div style={{ margin: '12px 0 8px', borderTop: '1px dashed #93a8d2' }} />
+                        {reviewBoxInfo.boxes > 0 && <div style={{ margin: '12px 0 8px', borderTop: '1px dashed #93a8d2' }} />}
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr', alignItems: 'center' }}>
                           <div style={{ textAlign: 'center' }}>
                             <div style={{ fontSize: '11px', fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Top-off Box{(reviewBoxInfo.adjBoxCount || 1) > 1 ? 'es' : ''}</div>
