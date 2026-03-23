@@ -963,6 +963,7 @@ export async function createPackingList(palletIds: string[], meta?: {
     vehicle_number?: string;
 }): Promise<PackingList> {
     const userId = await getCurrentUserId();
+
     const plNumber = generateNumber('PL');
 
     // Fetch full pallet data (needed for item inserts)
@@ -1584,12 +1585,12 @@ export async function autoPopulatePalletDetails(
 
     const palletIds = plItems.map((i: any) => i.pallet_id);
 
-    // Fetch pallets with item info
+    // Fetch pallets with item info (including weight for net weight calculation)
     const { data: pallets, error: palErr } = await supabase
         .from('pack_pallets')
         .select(`
                 *,
-                items!pack_pallets_item_id_fkey (item_name, master_serial_no, part_number, revision)
+                items!pack_pallets_item_id_fkey (item_name, master_serial_no, part_number, revision, weight)
             `)
         .in('id', palletIds);
 
@@ -1610,8 +1611,11 @@ export async function autoPopulatePalletDetails(
         const lengthCm = spec ? (spec.outer_box_length_mm / 10) : null;
         const widthCm = spec ? (spec.outer_box_width_mm / 10) : null;
         const heightCm = spec ? (spec.outer_box_height_mm / 10) : null;
-        const netWt = spec ? Number(spec.inner_box_net_weight_kg || 0) * (p.container_count || 0) : 0;
-        const grossWt = spec ? Number(spec.outer_box_gross_weight_kg || 0) : 0;
+        // Net weight = item unit weight (in grams) × quantity, converted to kg
+        const itemWeight = Number(p.items?.weight || 0);
+        const netWt = (itemWeight * (p.current_qty || 0)) / 1000;
+        // Gross weight starts at 0 — user must enter manually
+        const grossWt = 0;
 
         return {
             packing_list_data_id: packingListDataId,

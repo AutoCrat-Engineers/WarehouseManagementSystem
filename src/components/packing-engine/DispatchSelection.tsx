@@ -23,6 +23,7 @@ import * as svc from './packingEngineService';
 import type { Pallet, DispatchReadiness, PackingList } from './packingEngineService';
 import { createMasterPackingList } from './mplService';
 import { getSupabaseClient } from '../../utils/supabase/client';
+import { useSessionPersistence } from '../../hooks/useSessionPersistence';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
@@ -70,6 +71,25 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
     }, []);
     const [refreshing, setRefreshing] = useState(false);
 
+    // ── OPTIONAL SESSION PERSISTENCE for form state (graceful — no-ops if migration not run) ──
+    const { patchSession } = useSessionPersistence(
+        'dispatch_selection',
+        undefined,
+        undefined,
+        {
+            onRecover: (data, isNew) => {
+                if (!isNew && data) {
+                    if (data.selectedPalletIds?.length > 0) {
+                        setSelectedPalletIds(new Set(data.selectedPalletIds));
+                    }
+                    if (data.expandedItem) {
+                        setExpandedItem(data.expandedItem);
+                    }
+                }
+            },
+        }
+    );
+
     const fetchData = useCallback(async () => {
         setLoading(true);
         try {
@@ -105,6 +125,7 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
             return;
         }
         setExpandedItem(itemCode);
+        patchSession({ expandedItem: itemCode });
         setLoadingPallets(true);
         setSelectedPalletIds(new Set());
         try {
@@ -125,11 +146,13 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
         if (next.has(id)) next.delete(id);
         else next.add(id);
         setSelectedPalletIds(next);
+        patchSession({ selectedPalletIds: Array.from(next) });
     };
 
     const selectAllReady = () => {
         const readyIds = pallets.filter(p => p.state === 'READY').map(p => p.id);
         setSelectedPalletIds(new Set(readyIds));
+        patchSession({ selectedPalletIds: readyIds });
     };
 
     const readyPallets = pallets.filter(p => p.state === 'READY');
@@ -140,22 +163,32 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
         setGenerating(true);
         try {
             const item = readiness.find(r => r.item_code === expandedItem);
+            const palletIdsArray = Array.from(selectedPalletIds);
+            const customerName = item?.customer_name || '';
+
+            // Step 1: Create Packing List (server-side, atomic)
             const pl = await svc.createPackingList(
-                Array.from(selectedPalletIds),
-                { customer_name: item?.customer_name || undefined }
+                palletIdsArray,
+                { customer_name: customerName || undefined }
             );
-            // Create MPL directly in the database (no localStorage)
+
+            // Step 2: Create MPL from the PL
+            // Both createPackingList and createMasterPackingList are idempotent —
+            // if called again for same pallets/PL, they return the existing record.
             const mpl = await createMasterPackingList({ packing_list_id: pl.id });
+
             setSelectedPalletIds(new Set());
             fetchData();
-            // Redirect to MPL Home — MPL already exists in DB
+
+            // Redirect to MPL Home
             if (onNavigate) {
                 onNavigate('pe-mpl-home');
             } else {
-                alert(`Packing List ${pl.packing_list_number} created! MPL ${mpl.mpl_number} is ready in MPL Home.`);
+                showToast('success', 'Packing List Created', `PL ${pl.packing_list_number} & MPL ${mpl.mpl_number} created successfully.`);
             }
         } catch (err: any) {
-            alert('Error generating packing list: ' + (err.message || err));
+            console.error('Generate packing list error:', err);
+            showToast('error', 'Generation Failed', 'Error: ' + (err.message || err));
         } finally {
             setGenerating(false);
         }

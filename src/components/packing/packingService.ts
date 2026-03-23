@@ -130,13 +130,13 @@ export async function createPackingFromMovementRejection(
 // FETCH
 // ============================================================================
 
-export async function fetchPackingRequests(onlyMine: boolean = false): Promise<PackingRequest[]> {
+export async function fetchPackingRequests(onlyMine: boolean = false, pageSize: number = 200, offset: number = 0): Promise<PackingRequest[]> {
     const userId = await getCurrentUserId();
     let query = supabase
         .from('packing_requests')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(200);
+        .range(offset, offset + pageSize - 1);
 
     if (onlyMine) query = query.eq('created_by', userId);
     const { data, error } = await query;

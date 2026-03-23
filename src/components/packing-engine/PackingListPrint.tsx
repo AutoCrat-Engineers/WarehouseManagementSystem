@@ -23,6 +23,7 @@ import {
 import * as svc from './packingEngineService';
 import type { PackingList, PackingListData, PackingListPalletDetail, PackingSpec } from './packingEngineService';
 import { getSupabaseClient } from '../../utils/supabase/client';
+import { useSessionPersistence } from '../../hooks/useSessionPersistence';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 interface Props { accessToken: string; userRole?: UserRole; userPerms?: Record<string, boolean>; }
@@ -83,6 +84,27 @@ export function PackingListPrint({ accessToken, userRole, userPerms = {} }: Prop
     // Step 4: Generated
     const [generated, setGenerated] = useState(false);
 
+    // ── SESSION PERSISTENCE (PL print wizard) ──
+    const {
+        patchSession: patchPlSession,
+        completeSession: completePlSession,
+    } = useSessionPersistence(
+        'packing_list_wizard',
+        undefined,
+        'packing_list',
+        {
+            onRecover: (data, isNew) => {
+                if (!isNew && data) {
+                    if (data.wizardStep) setStep(data.wizardStep);
+                    if (data.dispatchForm) setDispatchForm(data.dispatchForm);
+                    // selectedPL will be restored after packingLists load
+                    plRecoveryRef.current = data;
+                }
+            },
+        }
+    );
+    const plRecoveryRef = React.useRef<Record<string, any> | null>(null);
+
     const fetchPLs = useCallback(async () => {
         setLoading(true);
         try { setPackingLists(await svc.fetchPackingLists()); }
@@ -91,6 +113,18 @@ export function PackingListPrint({ accessToken, userRole, userPerms = {} }: Prop
     }, []);
 
     useEffect(() => { fetchPLs(); }, [fetchPLs]);
+
+    // Restore selected PL from recovered session after packingLists load
+    useEffect(() => {
+        if (plRecoveryRef.current && packingLists.length > 0) {
+            const data = plRecoveryRef.current;
+            if (data.selectedPlId) {
+                const pl = packingLists.find(p => p.id === data.selectedPlId);
+                if (pl) handleSelectPL(pl);
+            }
+            plRecoveryRef.current = null;
+        }
+    }, [packingLists]);
 
     // Auto-select PL if redirected from Dispatch Selection
     useEffect(() => {
@@ -111,6 +145,7 @@ export function PackingListPrint({ accessToken, userRole, userPerms = {} }: Prop
         setLoadingDetail(true);
         setStep('REVIEW');
         setGenerated(false);
+        patchPlSession({ selectedPlId: pl.id, wizardStep: 'REVIEW' });
         try {
             // 1. Ensure PL data exists
             let data = await svc.fetchPackingListData(pl.id);
@@ -181,7 +216,7 @@ export function PackingListPrint({ accessToken, userRole, userPerms = {} }: Prop
                             created_at: pc.pack_containers?.created_at || '',
                             operator: pc.pack_containers?.profiles?.full_name || '—',
                         })),
-                        gross_weight_kg: Number(detail?.gross_weight_kg || 0),
+                        gross_weight_kg: 0, // starts empty — user must enter manually
                     };
                 });
                 setEnrichedPallets(enriched);
@@ -190,9 +225,9 @@ export function PackingListPrint({ accessToken, userRole, userPerms = {} }: Prop
         finally { setLoadingDetail(false); }
     };
 
-    // ─── STEP 2: Update gross weight ───
     const handleWeightChange = (palletId: string, weight: number) => {
         setEnrichedPallets(prev => prev.map(p => p.id === palletId ? { ...p, gross_weight_kg: weight } : p));
+        patchPlSession({ grossWeights: { [palletId]: weight } });
     };
 
     // ─── STEP 3 → 4: Save all data and generate ───
@@ -219,6 +254,7 @@ export function PackingListPrint({ accessToken, userRole, userPerms = {} }: Prop
             }
             setGenerated(true);
             setStep('GENERATE');
+            await completePlSession();
         } catch (err: any) { alert('Error: ' + (err.message || err)); }
         finally { setSaving(false); }
     };
@@ -260,7 +296,7 @@ export function PackingListPrint({ accessToken, userRole, userPerms = {} }: Prop
             expRef: hd?.exporter_ref || '-NIL-',
             expIec: hd?.exporter_iec_code || '0702002747',
             expAd: hd?.exporter_ad_code || '6361504-8400009',
-            vendorNo: hd?.vendor_number || '',
+            vendorNo: hd?.vendor_number || '114395',
             conName: hd?.consignee_name || 'Milano Millworks, LLC',
             conAddr: (hd?.consignee_address || '9223 Industrial Blvd NE Leland\nNC 28451 USA').replace('8223', '9223'),
             conPhone: hd?.consignee_phone || '(910) 443-3075', buyName: hd?.buyer_name || 'Brown, Sherry',
@@ -630,10 +666,46 @@ ${itemRows}
             )}
 
             {/* ═══ STEP: WEIGHTS ═══ */}
-            {step === 'WEIGHTS' && (
+            {step === 'WEIGHTS' && (() => {
+                // Validation: compute errors per pallet
+                const weightErrors: Record<string, string> = {};
+                enrichedPallets.forEach(p => {
+                    const detail = palletDetails.find(d => d.pallet_id === p.id);
+                    const netWt = Number(detail?.net_weight_kg || 0);
+                    if (!p.gross_weight_kg || p.gross_weight_kg <= 0) {
+                        weightErrors[p.id] = 'Gross weight is required';
+                    } else if (p.gross_weight_kg < netWt) {
+                        weightErrors[p.id] = `Gross weight (${p.gross_weight_kg.toFixed(2)}) cannot be less than net weight (${netWt.toFixed(2)})`;
+                    }
+                });
+                const hasErrors = Object.keys(weightErrors).length > 0;
+                const emptyCount = enrichedPallets.filter(p => !p.gross_weight_kg || p.gross_weight_kg <= 0).length;
+                const belowNetCount = enrichedPallets.filter(p => {
+                    const detail = palletDetails.find(d => d.pallet_id === p.id);
+                    const netWt = Number(detail?.net_weight_kg || 0);
+                    return p.gross_weight_kg > 0 && p.gross_weight_kg < netWt;
+                }).length;
+
+                return (
                 <Card>
                     <div style={{ ...secHdr }}>Enter Gross Weight per Pallet (KGs)</div>
-                    <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>Enter the gross weight for each pallet. Net weight is auto-calculated from packing specs.</p>
+                    <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>Enter the gross weight for each pallet. Net weight is auto-calculated (item weight × quantity). <strong style={{ color: '#dc2626' }}>Gross weight must be ≥ net weight.</strong></p>
+
+                    {/* Validation summary banner */}
+                    {hasErrors && (
+                        <div style={{
+                            display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 16px', borderRadius: 8,
+                            background: '#fef2f2', border: '1px solid #fecaca', marginBottom: 16,
+                        }}>
+                            <AlertTriangle size={18} style={{ color: '#dc2626', flexShrink: 0, marginTop: 1 }} />
+                            <div style={{ fontSize: 13, color: '#991b1b', lineHeight: 1.5 }}>
+                                <strong>Cannot proceed — please fix the following:</strong>
+                                {emptyCount > 0 && <div>• {emptyCount} pallet{emptyCount > 1 ? 's' : ''} missing gross weight</div>}
+                                {belowNetCount > 0 && <div>• {belowNetCount} pallet{belowNetCount > 1 ? 's' : ''} with gross weight below net weight</div>}
+                            </div>
+                        </div>
+                    )}
+
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead><tr>
                             <th style={thS}>Pallet</th><th style={thS}>Item</th><th style={{ ...thS, textAlign: 'right' }}>Qty (PCS)</th>
@@ -643,31 +715,53 @@ ${itemRows}
                         <tbody>{enrichedPallets.map(p => {
                             const detail = palletDetails.find(d => d.pallet_id === p.id);
                             const netWt = Number(detail?.net_weight_kg || 0);
+                            const error = weightErrors[p.id];
                             return (
-                                <tr key={p.id}>
+                                <React.Fragment key={p.id}>
+                                <tr style={{ background: error ? '#fef2f2' : undefined }}>
                                     <td style={{ ...tdS, fontFamily: 'monospace', fontWeight: 700, color: '#1e3a8a' }}>{p.pallet_number}</td>
                                     <td style={tdS}><div style={{ fontWeight: 600 }}>{p.item_name}</div><div style={{ fontSize: 11, color: '#6b7280' }}>{p.item_code}</div></td>
                                     <td style={{ ...tdS, textAlign: 'right', fontFamily: 'monospace', fontWeight: 600 }}>{p.current_qty.toLocaleString()}</td>
                                     <td style={{ ...tdS, textAlign: 'right' }}>{p.container_count}</td>
                                     <td style={{ ...tdS, textAlign: 'right', fontFamily: 'monospace' }}>{netWt.toFixed(2)}</td>
-                                    <td style={{ ...tdS, textAlign: 'right', background: '#fffbeb' }}>
+                                    <td style={{ ...tdS, textAlign: 'right', background: error ? '#fef2f2' : '#fffbeb' }}>
                                         <input type="number" step="0.01" value={p.gross_weight_kg || ''} onChange={e => handleWeightChange(p.id, parseFloat(e.target.value) || 0)}
-                                            style={{ ...inp, width: 120, textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, padding: '6px 10px' }} placeholder="0.00" />
+                                            style={{
+                                                ...inp, width: 120, textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, padding: '6px 10px',
+                                                borderColor: error ? '#dc2626' : '#d1d5db',
+                                                boxShadow: error ? '0 0 0 2px rgba(220,38,38,0.15)' : undefined,
+                                            }} placeholder="0.00" />
                                     </td>
                                 </tr>
+                                {error && (
+                                    <tr><td colSpan={6} style={{ padding: '2px 12px 6px', fontSize: 11, color: '#dc2626', fontWeight: 600, borderBottom: '1px solid #fecaca' }}>
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><AlertTriangle size={12} /> {error}</span>
+                                    </td></tr>
+                                )}
+                                </React.Fragment>
                             );
                         })}</tbody>
                     </table>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16 }}>
                         <button onClick={() => setStep('REVIEW')} style={{ padding: '10px 24px', borderRadius: 8, background: 'white', color: '#374151', border: '1px solid #d1d5db', fontWeight: 600, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
                             <ChevronLeft size={16} /> Back
                         </button>
-                        <button onClick={() => setStep('DISPATCH')} style={{ padding: '10px 24px', borderRadius: 8, background: '#1e3a8a', color: 'white', border: 'none', fontWeight: 700, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
-                            Next: Invoice & Shipping <ChevronRight size={16} />
-                        </button>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                            {hasErrors && <span style={{ fontSize: 12, color: '#dc2626', fontWeight: 600 }}>Fix errors above to continue</span>}
+                            <button onClick={() => { if (!hasErrors) setStep('DISPATCH'); }} disabled={hasErrors}
+                                style={{
+                                    padding: '10px 24px', borderRadius: 8, background: hasErrors ? '#9ca3af' : '#1e3a8a', color: 'white',
+                                    border: 'none', fontWeight: 700, fontSize: 14, cursor: hasErrors ? 'not-allowed' : 'pointer',
+                                    display: 'flex', alignItems: 'center', gap: 8, opacity: hasErrors ? 0.7 : 1,
+                                    transition: 'all 0.2s',
+                                }}>
+                                Next: Invoice & Shipping <ChevronRight size={16} />
+                            </button>
+                        </div>
                     </div>
                 </Card>
-            )}
+                );
+            })()}
 
             {/* ═══ STEP: DISPATCH (SAP references captured here) ═══ */}
             {step === 'DISPATCH' && (

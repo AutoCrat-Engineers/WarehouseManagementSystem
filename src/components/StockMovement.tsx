@@ -44,6 +44,7 @@ import { createPackingFromMovementApproval, createPackingFromMovementRejection }
 import { notifyOnRequestCreated, notifyOnRequestDecision } from '../utils/notifications/notificationService';
 import { calculatePalletImpact } from './packing-engine/packingEngineService';
 import type { PalletImpact } from './packing-engine/packingEngineService';
+import { useSessionPersistence } from '../hooks/useSessionPersistence';
 
 // ============================================================================
 // TYPES
@@ -336,6 +337,34 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   const [referenceType, setReferenceType] = useState<string>('');
   const [referenceId, setReferenceId] = useState<string>('');
 
+  // ── SESSION PERSISTENCE (stock movement form) ──
+  const {
+    patchSession: patchSmSession,
+    completeSession: completeSmSession,
+    abandonSession: abandonSmSession,
+  } = useSessionPersistence(
+    'stock_movement_form',
+    undefined,
+    undefined,
+    {
+      onRecover: (data, isNew) => {
+        if (!isNew && data && data.showModal) {
+          // Restore modal form state
+          setShowModal(true);
+          if (data.selectedItem) setSelectedItem(data.selectedItem);
+          if (data.stockType) setStockType(data.stockType);
+          if (data.selectedWarehouse) setSelectedWarehouse(data.selectedWarehouse);
+          if (data.quantity) setQuantity(data.quantity);
+          if (data.boxCount) setBoxCount(data.boxCount);
+          if (data.note) setNote(data.note);
+          if (data.referenceType) setReferenceType(data.referenceType);
+          if (data.referenceId) setReferenceId(data.referenceId);
+          if (data.selectedCategory) setSelectedCategory(data.selectedCategory);
+        }
+      },
+    }
+  );
+
   // Supervisor review modal state
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [reviewMovement, setReviewMovement] = useState<MovementRecord | null>(null);
@@ -361,15 +390,28 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   const searchRef = useRef<HTMLDivElement>(null);
   const PAGE_SIZE = 20;
   const [displayCount, setDisplayCount] = useState(PAGE_SIZE);
+  const [totalDbCount, setTotalDbCount] = useState(0);
+  const realtimeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ============================================================================
   // FETCH MOVEMENTS FOR MAIN PAGE
   // ============================================================================
 
-  const fetchMovements = useCallback(async () => {
-    setLoading(true);
+  /** Fetch a page of movements from the server. When `append` is true the new
+   *  rows are added to the existing state ("Load More"); otherwise the list is
+   *  replaced (initial load / refresh). */
+  const fetchMovements = useCallback(async (append = false, offset = 0) => {
+    if (!append) setLoading(true);
     try {
-      // STEP 1: Fetch headers (must be first — everything depends on it)
+      // STEP 0 — lightweight count query (only on first load / refresh)
+      if (!append) {
+        const { count } = await supabase
+          .from('inv_movement_headers')
+          .select('id', { count: 'exact', head: true });
+        setTotalDbCount(count ?? 0);
+      }
+
+      // STEP 1: Fetch headers — paginated (only PAGE_SIZE rows at a time)
       const { data: headers, error: headErr } = await supabase
         .from('inv_movement_headers')
         .select(`
@@ -382,7 +424,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
           destination_warehouse:destination_warehouse_id ( warehouse_name, warehouse_code )
         `)
         .order('created_at', { ascending: false })
-        .limit(200);
+        .range(offset, offset + PAGE_SIZE - 1);
       if (headErr) throw headErr;
 
       const headerIds = (headers || []).map((h: any) => h.id);
@@ -472,14 +514,38 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
           reference_document_number: h.reference_document_number || null,
         };
       });
-      setMovements(records);
+
+      if (append) {
+        setMovements(prev => [...prev, ...records]);
+      } else {
+        setMovements(records);
+      }
     } catch (err) { console.error('Error fetching movements:', err); }
     finally { setLoading(false); }
   }, [supabase]);
 
-  useEffect(() => { fetchMovements(); }, [fetchMovements]);
+  // Fetch summary counts separately (lightweight, no enrichment)
+  const [summaryCounts, setSummaryCounts] = useState({ total: 0, pending: 0, completed: 0, rejected: 0 });
+  const fetchSummaryCounts = useCallback(async () => {
+    try {
+      const [totalR, pendingR, approvedR, rejectedR] = await Promise.all([
+        supabase.from('inv_movement_headers').select('id', { count: 'exact', head: true }),
+        supabase.from('inv_movement_headers').select('id', { count: 'exact', head: true }).eq('status', 'PENDING_APPROVAL'),
+        supabase.from('inv_movement_headers').select('id', { count: 'exact', head: true }).eq('status', 'APPROVED'),
+        supabase.from('inv_movement_headers').select('id', { count: 'exact', head: true }).eq('status', 'REJECTED'),
+      ]);
+      setSummaryCounts({
+        total: totalR.count ?? 0,
+        pending: pendingR.count ?? 0,
+        completed: approvedR.count ?? 0,
+        rejected: rejectedR.count ?? 0,
+      });
+    } catch { /* non-critical */ }
+  }, [supabase]);
 
-  // Real-time subscription: auto-refresh on approval/status changes
+  useEffect(() => { fetchMovements(); fetchSummaryCounts(); }, [fetchMovements, fetchSummaryCounts]);
+
+  // Real-time subscription: debounced auto-refresh on approval/status changes
   useEffect(() => {
     const channel = supabase
       .channel('stock-movements-realtime')
@@ -487,16 +553,21 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
         'postgres_changes',
         { event: '*', schema: 'public', table: 'inv_movement_headers' },
         () => {
-          // Auto-refresh when any movement header is inserted, updated, or deleted
-          fetchMovements();
+          // Debounce: avoid rapid-fire refetches when multiple changes occur
+          if (realtimeDebounce.current) clearTimeout(realtimeDebounce.current);
+          realtimeDebounce.current = setTimeout(() => {
+            fetchMovements();
+            fetchSummaryCounts();
+          }, 1000);
         }
       )
       .subscribe();
 
     return () => {
+      if (realtimeDebounce.current) clearTimeout(realtimeDebounce.current);
       supabase.removeChannel(channel);
     };
-  }, [supabase, fetchMovements]);
+  }, [supabase, fetchMovements, fetchSummaryCounts]);
 
   // Fetch current logged-in user's full_name for print slip Verified By
   useEffect(() => {
@@ -637,6 +708,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
 
   const handleSelectItem = (item: ItemResult) => {
     setSelectedItem(item);
+    patchSmSession({ selectedItem: item });
     setSearchQuery(item.part_number || item.item_code);
     setShowDropdown(false);
     fetchWarehouseStocks(item.item_code);
@@ -679,8 +751,8 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
     setPalletImpact(null); setAdjustmentAcknowledged(false);
   };
 
-  const openModal = () => { resetForm(); setShowModal(true); };
-  const closeModal = () => { setShowModal(false); resetForm(); };
+  const openModal = () => { resetForm(); setShowModal(true); patchSmSession({ showModal: true }); };
+  const closeModal = () => { setShowModal(false); resetForm(); abandonSmSession(); };
 
   // ============================================================================
   // SUBMIT REQUEST (PENDING — No Stock Movement) or IMMEDIATE for REJECTION_DISPOSAL
@@ -799,7 +871,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
 
       setFormMessage({ type: 'success', text: `Request ${movNum} submitted for approval.` });
       showToast('success', 'Request Submitted', `Movement ${movNum} has been submitted for supervisor approval.`);
-      fetchMovements();
+      fetchMovements(); fetchSummaryCounts();
 
       // ── NOTIFICATION: Notify supervisors (L2/L3) about new request ──
       notifyOnRequestCreated(
@@ -810,7 +882,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
         header.id,
       ).catch(err => console.error('Notification send failed (non-blocking):', err));
 
-      setTimeout(() => closeModal(), 1500);
+      setTimeout(() => { closeModal(); completeSmSession(); }, 1500);
     } catch (err: any) {
       console.error('Submit error:', err);
       setFormMessage({ type: 'error', text: err.message || 'Failed to submit request.' });
@@ -1083,7 +1155,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
       }
 
       setShowReviewModal(false);
-      fetchMovements();
+      fetchMovements(); fetchSummaryCounts();
 
       // Show success toast
       const movNum = reviewMovement.movement_number;
@@ -1144,14 +1216,16 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
     return matchesSearch && matchesFilter && matchesStatus && matchesStockType && matchesDateFrom && matchesDateTo;
   });
 
-  const displayedMovements = filteredMovements.slice(0, displayCount);
-  const hasMore = displayCount < filteredMovements.length;
+  // With server-side pagination, display all fetched rows that pass client-side filters.
+  // "Load More" fetches the next page from the server.
+  const displayedMovements = filteredMovements;
+  const hasMore = movements.length < totalDbCount;
 
-  // Summary counts
-  const totalMovements = movements.length;
-  const pendingCount = movements.filter(m => m.status === 'PENDING_APPROVAL').length;
-  const completedCount = movements.filter(m => ['APPROVED', 'COMPLETED'].includes(m.status)).length;
-  const rejectedCount = movements.filter(m => m.status === 'REJECTED').length;
+  // Summary counts from lightweight server query
+  const totalMovements = summaryCounts.total;
+  const pendingCount = summaryCounts.pending;
+  const completedCount = summaryCounts.completed;
+  const rejectedCount = summaryCounts.rejected;
 
   // All active reason codes (no reason_type filtering needed)
   const filteredReasonCodes = reasonCodes;
@@ -1892,10 +1966,10 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                     color: 'var(--enterprise-gray-500)',
                     margin: 0,
                   }}>
-                    Showing {displayedMovements.length} of {filteredMovements.length} movements
+                    Showing {movements.length} of {totalDbCount} movements
                   </p>
-                  <button className="load-more-btn" onClick={() => setDisplayCount(prev => prev + PAGE_SIZE)}>
-                    Load More ({Math.min(PAGE_SIZE, filteredMovements.length - displayCount)} more)
+                  <button className="load-more-btn" onClick={() => fetchMovements(true, movements.length)}>
+                    Load More
                   </button>
                 </div>
               )}
@@ -1912,7 +1986,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                     color: 'var(--enterprise-gray-500)',
                     margin: 0,
                   }}>
-                    Showing all {filteredMovements.length} movements
+                    Showing all {movements.length} movements
                   </p>
                 </div>
               )}

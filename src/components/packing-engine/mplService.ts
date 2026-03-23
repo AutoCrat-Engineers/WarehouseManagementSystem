@@ -292,6 +292,22 @@ export async function createMasterPackingList(input: {
 }): Promise<MasterPackingList> {
     const userId = await getCurrentUserId();
 
+    // ══════════════════════════════════════════════════════════════
+    // IDEMPOTENCY GUARD — prevent duplicate MPLs for the same PL
+    // If an MPL already exists for this packing_list_id, return it.
+    // ══════════════════════════════════════════════════════════════
+    const { data: existingMpls } = await supabase
+        .from('master_packing_lists')
+        .select('*')
+        .eq('packing_list_id', input.packing_list_id)
+        .neq('status', 'CANCELLED')
+        .limit(1);
+
+    if (existingMpls && existingMpls.length > 0) {
+        console.log(`[createMasterPackingList] MPL ${existingMpls[0].mpl_number} already exists for PL ${input.packing_list_id}. Returning existing.`);
+        return existingMpls[0];
+    }
+
     // 1. Generate MPL number via database sequence
     const { data: mplNumData, error: seqErr } = await supabase.rpc('generate_mpl_number');
     if (seqErr) throw seqErr;

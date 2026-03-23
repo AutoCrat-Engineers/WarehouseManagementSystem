@@ -8,7 +8,7 @@
  */
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Printer, Eye, XCircle, ChevronLeft, ChevronRight, ChevronDown, Package, FileText, Truck, AlertCircle, CheckCircle2, Clock, RefreshCw, Hash, Box, Loader2, Scale, Edit3, AlertTriangle, Settings, X, Info, ClipboardList } from 'lucide-react';
-import { fetchMasterPackingLists, confirmMpl, markMplPrinted, cancelMpl, fetchMplPallets, fetchDispatchAuditLog } from './mplService';
+import { fetchMasterPackingLists, createMasterPackingList, confirmMpl, markMplPrinted, cancelMpl, fetchMplPallets, fetchDispatchAuditLog } from './mplService';
 import type { MasterPackingList, MplPallet, MplStatus, DispatchAuditEntry } from './mplService';
 import { getSupabaseClient } from '../../utils/supabase/client';
 import * as svc from './packingEngineService';
@@ -20,6 +20,7 @@ import {
     FilterBar as SharedFilterBar, ActionBar,
     SearchBox, RefreshButton, StatusFilter, DateRangeFilter,
 } from '../ui/SharedComponents';
+import { useSessionPersistence } from '../../hooks/useSessionPersistence';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 interface Props { accessToken?: string; userRole?: UserRole; userPerms?: Record<string, boolean>; onNavigate?: (view: string, data?: any) => void; }
@@ -31,6 +32,8 @@ interface EnrichedPallet {
     spec: PackingSpec | null;
     containers: Array<{ packing_id: string; quantity: number; container_type: string; is_adjustment: boolean; operator: string }>;
     gross_weight_kg: number;
+    net_weight_kg: number;
+    item_weight: number;
 }
 
 type WizardStep = 'REVIEW' | 'WEIGHTS' | 'DISPATCH';
@@ -84,12 +87,46 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
     const [enrichedPallets, setEnrichedPallets] = useState<EnrichedPallet[]>([]);
     const [palletDetails, setPalletDetails] = useState<any[]>([]);
     const [plData, setPlData] = useState<any>(null);
-    const [dispatchForm, setDispatchForm] = useState({ invoice_number: '', invoice_date: '', purchase_order_number: '', purchase_order_date: '', ship_via: '', vendor_number: '', mode_of_transport: '' });
+    const [dispatchForm, setDispatchForm] = useState({ invoice_number: '', invoice_date: '', purchase_order_number: '', purchase_order_date: '', ship_via: '', mode_of_transport: '' });
     const [wizardLoading, setWizardLoading] = useState(false);
     const [saving, setSaving] = useState(false);
 
     // Summary
     const [summary, setSummary] = useState({ total: 0, pending: 0, printed: 0, dispatched: 0 });
+
+    // ── SESSION PERSISTENCE (packing list wizard) ──
+    const {
+        patchSession: patchMplSession,
+        completeSession: completeMplSession,
+        isRecovering: mplSessionRecovering,
+        wasRecovered: mplSessionRecovered,
+    } = useSessionPersistence(
+        'packing_list_wizard',
+        undefined,
+        'mpl',
+        {
+            onRecover: (data, isNew) => {
+                if (!isNew && data) {
+                    // Restore wizard state: we store the MPL id + step + dispatch form + gross weights
+                    if (data.wizardStep) setWizardStep(data.wizardStep);
+                    if (data.dispatchForm) setDispatchForm(data.dispatchForm);
+                    // wizardMpl and enrichedPallets will be restored after mpls load
+                    // Store recovered data in a ref for later hydration
+                    recoveredSessionRef.current = data;
+                }
+            },
+        }
+    );
+    const recoveredSessionRef = useRef<Record<string, any> | null>(null);
+
+    // Helper: update a dispatch form field and persist to session
+    const updateDispatchField = useCallback((field: string, value: string) => {
+        setDispatchForm(prev => {
+            const updated = { ...prev, [field]: value };
+            patchMplSession({ dispatchForm: updated });
+            return updated;
+        });
+    }, [patchMplSession]);
 
     // Actions dropdown
     const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
@@ -151,16 +188,31 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
     useEffect(() => { loadMpls(); }, [loadMpls]);
     useEffect(() => { loadSummary(); }, [loadSummary]);
 
+    // ── Restore wizard from recovered session after MPLs load ──
+    useEffect(() => {
+        if (recoveredSessionRef.current && mpls.length > 0) {
+            const data = recoveredSessionRef.current;
+            if (data.wizardMplId) {
+                const mpl = mpls.find(m => m.id === data.wizardMplId);
+                if (mpl && mpl.status === 'DRAFT') {
+                    handleOpenWizard(mpl);
+                }
+            }
+            recoveredSessionRef.current = null;
+        }
+    }, [mpls]);
+
     // ─── Open inline wizard for a PENDING MPL ───
     const handleOpenWizard = async (mpl: MasterPackingList) => {
         setActiveDropdown(null);
         setWizardMpl(mpl); setWizardStep('REVIEW'); setWizardLoading(true);
+        patchMplSession({ wizardMplId: mpl.id, wizardStep: 'REVIEW' });
         try {
             const plId = mpl.packing_list_id;
             let data = await svc.fetchPackingListData(plId);
             if (!data) { data = await svc.upsertPackingListData(plId, {}); await svc.autoPopulatePalletDetails(plId, data.id); }
             setPlData(data);
-            const mot = data.mode_of_transport || ''; setDispatchForm({ invoice_number: data.invoice_number || '', invoice_date: data.invoice_date || '', purchase_order_number: data.purchase_order_number || '', purchase_order_date: data.purchase_order_date || '', ship_via: data.ship_via || '', vendor_number: data.vendor_number || '', mode_of_transport: mot === 'OCEAN' ? 'SEA' : mot });
+            const mot = data.mode_of_transport || ''; setDispatchForm({ invoice_number: data.invoice_number || '', invoice_date: data.invoice_date || '', purchase_order_number: data.purchase_order_number || '', purchase_order_date: data.purchase_order_date || '', ship_via: data.ship_via || '', mode_of_transport: mot === 'OCEAN' ? 'SEA' : mot });
             let details = await svc.fetchPackingListPalletDetails(data.id);
             if (details.length === 0) {
                 details = await svc.autoPopulatePalletDetails(plId, data.id);
@@ -169,7 +221,7 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
             const { data: plItems } = await supabase.from('pack_packing_list_items').select('pallet_id').eq('packing_list_id', plId);
             const palletIds = (plItems || []).map((i: any) => i.pallet_id);
             if (palletIds.length > 0) {
-                const { data: pallets } = await supabase.from('pack_pallets').select('*, items!pack_pallets_item_id_fkey (item_name, master_serial_no, part_number, revision)').in('id', palletIds);
+                const { data: pallets } = await supabase.from('pack_pallets').select('*, items!pack_pallets_item_id_fkey (item_name, master_serial_no, part_number, revision, weight)').in('id', palletIds);
                 const { data: pcJoin } = await supabase.from('pack_pallet_containers').select(`pallet_id, position_sequence, pack_containers!inner (quantity, container_type, is_adjustment, packing_box_id, profiles!pack_containers_created_by_fkey (full_name), packing_boxes:packing_box_id (packing_id))`).in('pallet_id', palletIds).order('position_sequence');
                 const itemCodes = [...new Set((pallets || []).map((p: any) => p.item_code))];
                 const specMap: Record<string, PackingSpec> = {};
@@ -183,7 +235,9 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
                         state: p.state, current_qty: p.current_qty, target_qty: p.target_qty, container_count: p.container_count,
                         spec: specMap[p.item_code] || null,
                         containers: pContainers.map((pc: any) => ({ packing_id: pc.pack_containers?.packing_boxes?.packing_id || '—', quantity: pc.pack_containers?.quantity || 0, container_type: pc.pack_containers?.container_type || '', is_adjustment: pc.pack_containers?.is_adjustment || false, operator: pc.pack_containers?.profiles?.full_name || '—' })),
-                        gross_weight_kg: Number(specMap[p.item_code]?.outer_box_gross_weight_kg || detail?.gross_weight_kg || 0),
+                        item_weight: Number(p.items?.weight || 0),
+                        net_weight_kg: (Number(p.items?.weight || 0) * (p.current_qty || 0)) / 1000,
+                        gross_weight_kg: 0,
                     };
                 });
                 setEnrichedPallets(enriched);
@@ -191,7 +245,10 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
         } catch (err: any) { setError(err.message); } finally { setWizardLoading(false); }
     };
 
-    const handleWeightChange = (palletId: string, weight: number) => { setEnrichedPallets(prev => prev.map(p => p.id === palletId ? { ...p, gross_weight_kg: weight } : p)); };
+    const handleWeightChange = (palletId: string, weight: number) => {
+        setEnrichedPallets(prev => prev.map(p => p.id === palletId ? { ...p, gross_weight_kg: weight } : p));
+        patchMplSession({ grossWeights: { [palletId]: weight } });
+    };
 
     // Save PO/Invoice + weights → confirm MPL
     const handleSaveAndConfirm = async () => {
@@ -202,12 +259,13 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
             await svc.upsertPackingListData(wizardMpl.packing_list_id, { ...dispatchForm, is_finalized: true });
             for (const ep of enrichedPallets) {
                 const detail = palletDetails.find((d: any) => d.pallet_id === ep.id);
-                if (detail) await svc.updatePalletDetail(detail.id, { gross_weight_kg: ep.gross_weight_kg, invoice_number: dispatchForm.invoice_number, po_number: dispatchForm.purchase_order_number });
+                if (detail) await svc.updatePalletDetail(detail.id, { net_weight_kg: ep.net_weight_kg, gross_weight_kg: ep.gross_weight_kg, invoice_number: dispatchForm.invoice_number, po_number: dispatchForm.purchase_order_number });
             }
             // Update MPL with invoice/PO
             await supabase.from('master_packing_lists').update({ invoice_number: dispatchForm.invoice_number, po_number: dispatchForm.purchase_order_number, total_gross_weight_kg: enrichedPallets.reduce((s, p) => s + p.gross_weight_kg, 0), updated_at: new Date().toISOString() }).eq('id', wizardMpl.id);
             await confirmMpl(wizardMpl.id);
             showToast('success', 'Packing List Confirmed', `${wizardMpl.mpl_number} details saved & confirmed — Print is now enabled`);
+            await completeMplSession();
             setWizardMpl(null); loadMpls(true); loadSummary();
         } catch (err: any) { showToast('error', 'Save Failed', err.message); } finally { setSaving(false); }
     };
@@ -249,7 +307,7 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
             expRef: hd?.exporter_ref || '-NIL-',
             expIec: hd?.exporter_iec_code || '0702002747',
             expAd: hd?.exporter_ad_code || '6361504-8400009',
-            vendorNo: hd?.vendor_number || '',
+            vendorNo: hd?.vendor_number || '114395',
             conName: hd?.consignee_name || 'Milano Millworks, LLC',
             conAddr: (hd?.consignee_address || '9223 Industrial Blvd NE Leland\nNC 28451 USA').replace('8223', '9223'),
             conPhone: hd?.consignee_phone || '(910) 443-3075',
@@ -641,7 +699,14 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
                 <div style={{ display: 'flex', alignItems: 'center', gap: 0, marginBottom: 28, background: '#f8fafc', borderRadius: 14, padding: '12px 20px', border: '1px solid #e5e7eb' }}>
                     {steps.map((step, idx) => (
                         <React.Fragment key={step.key}>
-                            <button onClick={() => setWizardStep(step.key)} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderRadius: 10, border: 'none', cursor: 'pointer', background: idx === currentStepIdx ? 'linear-gradient(135deg, var(--enterprise-primary), #2563eb)' : idx < currentStepIdx ? '#e0f2fe' : 'transparent', color: idx === currentStepIdx ? '#fff' : idx < currentStepIdx ? '#1e3a8a' : '#9ca3af', fontWeight: 600, fontSize: 13, transition: 'all 0.2s ease', whiteSpace: 'nowrap' }}>
+                            <button onClick={() => {
+                                // Block jumping to DISPATCH if gross weights are invalid
+                                if (step.key === 'DISPATCH') {
+                                    const hasWeightErrors = enrichedPallets.some(p => !p.gross_weight_kg || p.gross_weight_kg <= 0 || p.gross_weight_kg < p.net_weight_kg);
+                                    if (hasWeightErrors) return;
+                                }
+                                setWizardStep(step.key);
+                            }} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderRadius: 10, border: 'none', cursor: 'pointer', background: idx === currentStepIdx ? 'linear-gradient(135deg, var(--enterprise-primary), #2563eb)' : idx < currentStepIdx ? '#e0f2fe' : 'transparent', color: idx === currentStepIdx ? '#fff' : idx < currentStepIdx ? '#1e3a8a' : '#9ca3af', fontWeight: 600, fontSize: 13, transition: 'all 0.2s ease', whiteSpace: 'nowrap' }}>
                                 <span style={{ width: 22, height: 22, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 800, flexShrink: 0, background: idx === currentStepIdx ? 'rgba(255,255,255,0.25)' : idx < currentStepIdx ? '#1e3a8a' : '#d1d5db', color: idx === currentStepIdx ? '#fff' : idx < currentStepIdx ? '#fff' : '#6b7280' }}>{idx < currentStepIdx ? '✓' : idx + 1}</span>
                                 {step.label}
                             </button>
@@ -798,51 +863,75 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
                     })()}
 
                     {/* ═══════ STEP 2: GROSS WEIGHTS ═══════ */}
-                    {wizardStep === 'WEIGHTS' && (
-                        <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #e5e7eb', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
-                            <div style={{ padding: '18px 24px', borderBottom: '1px solid #e5e7eb', background: '#f8fafc', display: 'flex', alignItems: 'center', gap: 10 }}>
-                                <Scale size={18} style={{ color: '#1e3a8a' }} />
-                                <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: '#111827' }}>Enter Gross Weight per Pallet</h3>
-                                <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 400 }}>(KGs)</span>
-                            </div>
-                            <div style={{ padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                                {enrichedPallets.map(p => {
-                                    const detail = palletDetails.find((d: any) => d.pallet_id === p.id);
-                                    return (
-                                        <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto auto', gap: 16, alignItems: 'center', padding: '14px 16px', borderRadius: 12, border: '1px solid #e5e7eb', background: '#fafbfc', transition: 'all 0.15s ease' }} onMouseEnter={e => e.currentTarget.style.background = '#f0f9ff'} onMouseLeave={e => e.currentTarget.style.background = '#fafbfc'}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                                <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg, #1e3a8a, #2563eb)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Box size={17} style={{ color: '#fff' }} /></div>
+                    {wizardStep === 'WEIGHTS' && (() => {
+                        // Validation
+                        const weightErrors: Record<string, string> = {};
+                        enrichedPallets.forEach(p => {
+                            if (!p.gross_weight_kg || p.gross_weight_kg <= 0) {
+                                weightErrors[p.id] = 'Gross weight is required';
+                            } else if (p.gross_weight_kg < p.net_weight_kg) {
+                                weightErrors[p.id] = `Gross weight (${p.gross_weight_kg.toFixed(2)}) cannot be less than net weight (${p.net_weight_kg.toFixed(2)})`;
+                            }
+                        });
+                        const hasErrors = Object.keys(weightErrors).length > 0;
+                        const emptyCount = enrichedPallets.filter(p => !p.gross_weight_kg || p.gross_weight_kg <= 0).length;
+                        const belowNetCount = enrichedPallets.filter(p => p.gross_weight_kg > 0 && p.gross_weight_kg < p.net_weight_kg).length;
+
+                        return (
+                            <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #e5e7eb', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+                                <div style={{ padding: '18px 24px', borderBottom: '1px solid #e5e7eb', background: '#f8fafc', display: 'flex', alignItems: 'center', gap: 10 }}>
+                                    <Scale size={18} style={{ color: '#1e3a8a' }} />
+                                    <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: '#111827' }}>Enter Gross Weight per Pallet</h3>
+
+                                </div>
+
+
+
+                                <div style={{ padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                    {enrichedPallets.map(p => {
+                                        const error = weightErrors[p.id];
+                                        return (
+                                            <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto auto', gap: 16, alignItems: 'center', padding: '14px 16px', borderRadius: 12, border: '1px solid #e5e7eb', background: '#fafbfc', transition: 'all 0.15s ease' }} onMouseEnter={e => e.currentTarget.style.background = '#f0f9ff'} onMouseLeave={e => e.currentTarget.style.background = '#fafbfc'}>
                                                 <div>
-                                                    <div style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1e3a8a', fontSize: 13 }}>{p.pallet_number}</div>
-                                                    <div style={{ fontSize: 11, color: '#6b7280' }}>{p.master_serial_no || p.item_name} · <span style={{ color: '#9ca3af' }}>{p.item_code}</span></div>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                                        <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg, #1e3a8a, #2563eb)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Box size={17} style={{ color: '#fff' }} /></div>
+                                                        <div>
+                                                            <div style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1e3a8a', fontSize: 13 }}>{p.pallet_number}</div>
+                                                            <div style={{ fontSize: 11, color: '#6b7280' }}>{p.master_serial_no || p.item_name} · <span style={{ color: '#9ca3af' }}>{p.item_code}</span></div>
+                                                        </div>
+                                                    </div>
+                                                    {error && <div style={{ marginTop: 6, marginLeft: 48, fontSize: 11, color: '#dc2626', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}><AlertTriangle size={12} /> {error}</div>}
+                                                </div>
+                                                <div style={{ textAlign: 'center', padding: '0 8px' }}>
+                                                    <div style={{ fontSize: 10, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', marginBottom: 2 }}>Qty (Nos)</div>
+                                                    <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#111827' }}>{p.current_qty.toLocaleString()}</div>
+                                                </div>
+                                                <div style={{ textAlign: 'center', padding: '0 8px' }}>
+                                                    <div style={{ fontSize: 10, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', marginBottom: 2 }}>Boxes (Nos)</div>
+                                                    <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#111827' }}>{p.container_count}</div>
+                                                </div>
+                                                <div style={{ textAlign: 'center', padding: '0 8px' }}>
+                                                    <div style={{ fontSize: 10, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', marginBottom: 2 }}>Net Wt (kg)</div>
+                                                    <div style={{ fontSize: 14, fontWeight: 600, fontFamily: 'monospace', color: '#6b7280' }}>{p.net_weight_kg.toFixed(2)}</div>
+                                                </div>
+                                                <div>
+                                                    <div style={{ fontSize: 10, fontWeight: 600, color: '#d97706', textTransform: 'uppercase', marginBottom: 2 }}>Gross Wt (kg) *</div>
+                                                    <input type="number" step="0.01" value={p.gross_weight_kg || ''} onChange={e => handleWeightChange(p.id, parseFloat(e.target.value) || 0)} style={{ width: 110, padding: '8px 12px', border: '2px solid #fbbf24', borderRadius: 10, fontSize: 14, fontFamily: 'monospace', fontWeight: 700, outline: 'none', textAlign: 'right', background: '#fffbeb', transition: 'border-color 0.15s', boxSizing: 'border-box' }} placeholder="0.00" onFocus={e => e.currentTarget.style.borderColor = '#1e3a8a'} onBlur={e => e.currentTarget.style.borderColor = '#fbbf24'} />
                                                 </div>
                                             </div>
-                                            <div style={{ textAlign: 'center', padding: '0 8px' }}>
-                                                <div style={{ fontSize: 10, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', marginBottom: 2 }}>Qty</div>
-                                                <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#111827' }}>{p.current_qty.toLocaleString()}</div>
-                                            </div>
-                                            <div style={{ textAlign: 'center', padding: '0 8px' }}>
-                                                <div style={{ fontSize: 10, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', marginBottom: 2 }}>Boxes</div>
-                                                <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#111827' }}>{p.container_count}</div>
-                                            </div>
-                                            <div style={{ textAlign: 'center', padding: '0 8px' }}>
-                                                <div style={{ fontSize: 10, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', marginBottom: 2 }}>Net Wt</div>
-                                                <div style={{ fontSize: 14, fontWeight: 600, fontFamily: 'monospace', color: '#6b7280' }}>{Number(detail?.net_weight_kg || 0).toFixed(2)}</div>
-                                            </div>
-                                            <div>
-                                                <div style={{ fontSize: 10, fontWeight: 600, color: '#d97706', textTransform: 'uppercase', marginBottom: 2 }}>Gross Wt *</div>
-                                                <input type="number" step="0.01" value={p.gross_weight_kg || ''} onChange={e => handleWeightChange(p.id, parseFloat(e.target.value) || 0)} style={{ width: 110, padding: '8px 12px', border: '2px solid #fbbf24', borderRadius: 10, fontSize: 14, fontFamily: 'monospace', fontWeight: 700, outline: 'none', textAlign: 'right', background: '#fffbeb', transition: 'border-color 0.15s', boxSizing: 'border-box' }} placeholder="0.00" onFocus={e => e.currentTarget.style.borderColor = '#1e3a8a'} onBlur={e => e.currentTarget.style.borderColor = '#fbbf24'} />
-                                            </div>
-                                        </div>
-                                    );
-                                })}
+                                        );
+                                    })}
+                                </div>
+                                <div style={{ padding: '16px 24px', borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <button onClick={() => setWizardStep('REVIEW')} style={{ padding: '10px 24px', borderRadius: 10, background: 'white', color: '#374151', border: '1px solid #d1d5db', fontWeight: 600, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, transition: 'all 0.15s ease' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = '#fff'}><ChevronLeft size={16} /> Back</button>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                        {hasErrors && <span style={{ fontSize: 12, color: '#dc2626', fontWeight: 600 }}>Add Gross Weight for     above to continue</span>}
+                                        <button onClick={() => { if (!hasErrors) setWizardStep('DISPATCH'); }} disabled={hasErrors} style={{ padding: '10px 24px', borderRadius: 10, background: hasErrors ? '#9ca3af' : 'linear-gradient(135deg, var(--enterprise-primary), #2563eb)', color: 'white', border: 'none', fontWeight: 700, fontSize: 14, cursor: hasErrors ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: hasErrors ? 'none' : '0 2px 8px rgba(30,58,138,0.2)', transition: 'all 0.15s ease', opacity: hasErrors ? 0.7 : 1 }}>Next: Invoice & BPA <ChevronRight size={16} /></button>
+                                    </div>
+                                </div>
                             </div>
-                            <div style={{ padding: '16px 24px', borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between' }}>
-                                <button onClick={() => setWizardStep('REVIEW')} style={{ padding: '10px 24px', borderRadius: 10, background: 'white', color: '#374151', border: '1px solid #d1d5db', fontWeight: 600, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, transition: 'all 0.15s ease' }} onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.backgroundColor = '#fff'}><ChevronLeft size={16} /> Back</button>
-                                <button onClick={() => setWizardStep('DISPATCH')} style={{ padding: '10px 24px', borderRadius: 10, background: 'linear-gradient(135deg, var(--enterprise-primary), #2563eb)', color: 'white', border: 'none', fontWeight: 700, fontSize: 14, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 2px 8px rgba(30,58,138,0.2)', transition: 'all 0.15s ease' }}>Next: Invoice & PO <ChevronRight size={16} /></button>
-                            </div>
-                        </div>
-                    )}
+                        );
+                    })()}
 
                     {/* ═══════ STEP 3: INVOICE & PO ═══════ */}
                     {wizardStep === 'DISPATCH' && (
@@ -850,8 +939,8 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
                             <div style={{ padding: '18px 24px', borderBottom: '1px solid #e5e7eb', background: '#f8fafc', display: 'flex', alignItems: 'center', gap: 10 }}>
                                 <FileText size={18} style={{ color: '#1e3a8a' }} />
                                 <div>
-                                    <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: '#111827' }}>Invoice & PO Details</h3>
-                                    <p style={{ fontSize: 12, color: '#6b7280', margin: 0 }}>Enter the SAP references. Both Invoice # and PO # are required to enable Print.</p>
+                                    <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: '#111827' }}>Invoice & BPA Details</h3>
+                                    <p style={{ fontSize: 12, color: '#6b7280', margin: 0 }}>Enter the SAP references. Both Invoice # and BPA # are required to enable Print.</p>
                                 </div>
                             </div>
                             <div style={{ padding: '20px 24px' }}>
@@ -861,35 +950,34 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                                         <div>
                                             <label style={{ ...lbl, color: '#374151' }}>Invoice Number (SAP) <span style={{ color: '#ef4444' }}>*</span></label>
-                                            <input value={dispatchForm.invoice_number} onChange={e => setDispatchForm({ ...dispatchForm, invoice_number: e.target.value })} style={{ ...inp, borderColor: !dispatchForm.invoice_number ? '#fca5a5' : '#d1d5db', borderRadius: 10, padding: '10px 14px', borderWidth: 2, transition: 'border-color 0.15s' }} placeholder="INV/E/ 252602774" onFocus={e => e.currentTarget.style.borderColor = '#1e3a8a'} onBlur={e => e.currentTarget.style.borderColor = !dispatchForm.invoice_number ? '#fca5a5' : '#d1d5db'} />
+                                            <input value={dispatchForm.invoice_number} onChange={e => updateDispatchField('invoice_number', e.target.value)} style={{ ...inp, borderColor: !dispatchForm.invoice_number ? '#fca5a5' : '#d1d5db', borderRadius: 10, padding: '10px 14px', borderWidth: 2, transition: 'border-color 0.15s' }} placeholder="INV/E/ 252602774" onFocus={e => e.currentTarget.style.borderColor = '#1e3a8a'} onBlur={e => e.currentTarget.style.borderColor = !dispatchForm.invoice_number ? '#fca5a5' : '#d1d5db'} />
                                         </div>
                                         <div>
                                             <label style={{ ...lbl, color: '#374151' }}>Invoice Date</label>
-                                            <input type="date" value={dispatchForm.invoice_date} onChange={e => setDispatchForm({ ...dispatchForm, invoice_date: e.target.value })} style={{ ...inp, borderRadius: 10, padding: '10px 14px', borderWidth: 2 }} />
+                                            <input type="date" value={dispatchForm.invoice_date} onChange={e => updateDispatchField('invoice_date', e.target.value)} style={{ ...inp, borderRadius: 10, padding: '10px 14px', borderWidth: 2 }} />
                                         </div>
                                     </div>
                                 </div>
                                 {/* PO Section */}
                                 <div style={{ marginBottom: 20 }}>
-                                    <div style={{ fontSize: 11, fontWeight: 700, color: '#1e3a8a', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}><FileText size={12} /> Purchase Order Details</div>
+                                    <div style={{ fontSize: 11, fontWeight: 700, color: '#1e3a8a', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}><FileText size={12} /> Blanket Purchase Agreement Details</div>
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                                         <div>
                                             <label style={{ ...lbl, color: '#374151' }}>BPA Number (SAP) <span style={{ color: '#ef4444' }}>*</span></label>
-                                            <input value={dispatchForm.purchase_order_number} onChange={e => setDispatchForm({ ...dispatchForm, purchase_order_number: e.target.value })} style={{ ...inp, borderColor: !dispatchForm.purchase_order_number ? '#fca5a5' : '#d1d5db', borderRadius: 10, padding: '10px 14px', borderWidth: 2, transition: 'border-color 0.15s' }} placeholder="260067798" onFocus={e => e.currentTarget.style.borderColor = '#1e3a8a'} onBlur={e => e.currentTarget.style.borderColor = !dispatchForm.purchase_order_number ? '#fca5a5' : '#d1d5db'} />
+                                            <input value={dispatchForm.purchase_order_number} onChange={e => updateDispatchField('purchase_order_number', e.target.value)} style={{ ...inp, borderColor: !dispatchForm.purchase_order_number ? '#fca5a5' : '#d1d5db', borderRadius: 10, padding: '10px 14px', borderWidth: 2, transition: 'border-color 0.15s' }} placeholder="260067798" onFocus={e => e.currentTarget.style.borderColor = '#1e3a8a'} onBlur={e => e.currentTarget.style.borderColor = !dispatchForm.purchase_order_number ? '#fca5a5' : '#d1d5db'} />
                                         </div>
                                         <div>
                                             <label style={{ ...lbl, color: '#374151' }}>PO Date</label>
-                                            <input type="date" value={dispatchForm.purchase_order_date} onChange={e => setDispatchForm({ ...dispatchForm, purchase_order_date: e.target.value })} style={{ ...inp, borderRadius: 10, padding: '10px 14px', borderWidth: 2 }} />
+                                            <input type="date" value={dispatchForm.purchase_order_date} onChange={e => updateDispatchField('purchase_order_date', e.target.value)} style={{ ...inp, borderRadius: 10, padding: '10px 14px', borderWidth: 2 }} />
                                         </div>
                                     </div>
                                 </div>
                                 {/* Shipping */}
                                 <div style={{ marginBottom: 20 }}>
                                     <div style={{ fontSize: 11, fontWeight: 700, color: '#1e3a8a', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}><Truck size={12} /> Shipping Details</div>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
-                                        <div><label style={{ ...lbl, color: '#374151' }}>Flight Forwarder</label><input value={dispatchForm.ship_via} onChange={e => setDispatchForm({ ...dispatchForm, ship_via: e.target.value })} style={{ ...inp, borderRadius: 10, padding: '10px 14px', borderWidth: 2 }} placeholder="SEAHORSE" /></div>
-                                        <div><label style={{ ...lbl, color: '#374151' }}>Mode of Transport</label><input value={dispatchForm.mode_of_transport} onChange={e => setDispatchForm({ ...dispatchForm, mode_of_transport: e.target.value })} style={{ ...inp, borderRadius: 10, padding: '10px 14px', borderWidth: 2 }} placeholder="SEA / AIR / ROAD" /></div>
-                                        <div><label style={{ ...lbl, color: '#374151' }}>Vendor Number</label><input value={dispatchForm.vendor_number} onChange={e => setDispatchForm({ ...dispatchForm, vendor_number: e.target.value })} style={{ ...inp, borderRadius: 10, padding: '10px 14px', borderWidth: 2 }} placeholder="114395" /></div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                                        <div><label style={{ ...lbl, color: '#374151' }}>Flight Forwarder</label><input value={dispatchForm.ship_via} onChange={e => updateDispatchField('ship_via', e.target.value)} style={{ ...inp, borderRadius: 10, padding: '10px 14px', borderWidth: 2 }} placeholder="SEAHORSE" /></div>
+                                        <div><label style={{ ...lbl, color: '#374151' }}>Mode of Transport</label><input value={dispatchForm.mode_of_transport} onChange={e => updateDispatchField('mode_of_transport', e.target.value)} style={{ ...inp, borderRadius: 10, padding: '10px 14px', borderWidth: 2 }} placeholder="SEA / AIR / ROAD" /></div>
                                     </div>
                                 </div>
                                 {/* Summary Cards */}

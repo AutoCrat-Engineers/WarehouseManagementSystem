@@ -87,6 +87,8 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
 
     const PAGE_SIZE = 20;
     const [displayCount, setDisplayCount] = useState(PAGE_SIZE);
+    const [totalDbCount, setTotalDbCount] = useState(0);
+    const realtimeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Fetch current user name
     useEffect(() => {
@@ -102,13 +104,26 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
         fetchUser();
     }, [supabase]);
 
-    // Fetch packing requests
-    const fetchRequests = useCallback(async () => {
-        setLoading(true);
+    // Fetch packing requests — server-side paginated
+    const fetchRequests = useCallback(async (append = false, offset = 0) => {
+        if (!append) setLoading(true);
         try {
-            const data = await svc.fetchPackingRequests(false);
+            // Lightweight count query (only on first load / refresh)
+            if (!append) {
+                const countResult = await getSupabaseClient()
+                    .from('packing_requests')
+                    .select('id', { count: 'exact', head: true })
+                    .neq('status', 'REJECTED');
+                setTotalDbCount(countResult.count ?? 0);
+            }
+            const data = await svc.fetchPackingRequests(false, PAGE_SIZE, offset);
             // Filter out REJECTED — only show actionable records
-            setRequests(data.filter(r => r.status !== 'REJECTED'));
+            const filtered = data.filter(r => r.status !== 'REJECTED');
+            if (append) {
+                setRequests(prev => [...prev, ...filtered]);
+            } else {
+                setRequests(filtered);
+            }
         } catch (err) {
             console.error('Error fetching packing requests:', err);
         } finally {
@@ -118,13 +133,19 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
 
     useEffect(() => { fetchRequests(); }, [fetchRequests]);
 
-    // Real-time subscription
+    // Real-time subscription — debounced to avoid rapid-fire refetches
     useEffect(() => {
         const channel = supabase
             .channel('sticker-gen-realtime')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'packing_requests' }, () => fetchRequests())
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'packing_requests' }, () => {
+                if (realtimeDebounce.current) clearTimeout(realtimeDebounce.current);
+                realtimeDebounce.current = setTimeout(() => fetchRequests(), 1000);
+            })
             .subscribe();
-        return () => { supabase.removeChannel(channel); };
+        return () => {
+            if (realtimeDebounce.current) clearTimeout(realtimeDebounce.current);
+            supabase.removeChannel(channel);
+        };
     }, [supabase, fetchRequests]);
 
     // ============================================================================
@@ -144,8 +165,9 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
         return matchSearch && matchStatus && matchDateFrom && matchDateTo;
     });
 
-    const displayedRequests = filtered.slice(0, displayCount);
-    const hasMore = displayCount < filtered.length;
+    // With server-side pagination, display all fetched rows that pass client-side filters.
+    const displayedRequests = filtered;
+    const hasMore = requests.length < totalDbCount;
 
     // ============================================================================
     // SUMMARY COUNTS
@@ -384,11 +406,11 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
                         {/* Load More */}
                         {hasMore && (
                             <div style={{ padding: 16, textAlign: 'center', borderTop: '1px solid #f3f4f6' }}>
-                                <button onClick={() => setDisplayCount(c => c + PAGE_SIZE)} style={{
+                                <button onClick={() => fetchRequests(true, requests.length)} style={{
                                     ...btnStyle, background: '#f3f4f6', color: '#374151', border: '1px solid #e5e7eb',
                                     padding: '8px 24px',
                                 }}>
-                                    Show More ({filtered.length - displayCount} remaining)
+                                    Show More ({totalDbCount - requests.length} remaining)
                                 </button>
                             </div>
                         )}

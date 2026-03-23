@@ -215,9 +215,9 @@ function StockDetailModal({ isOpen, onClose, item }: StockDetailModalProps) {
                                     FG Warehouse
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
-                                    <span style={{ color: 'var(--enterprise-gray-500)' }}>Available</span>
+                                    <span style={{ color: 'var(--enterprise-gray-500)' }}>On Hand</span>
                                     <span style={{ fontWeight: 600, color: 'var(--enterprise-success)' }}>
-                                        {(distribution as any)?.productionAvailable ?? item.productionFinishedStock ?? 0}
+                                        {(distribution as any)?.productionOnHand ?? item.productionFinishedStock ?? 0}
                                     </span>
                                 </div>
                             </div>

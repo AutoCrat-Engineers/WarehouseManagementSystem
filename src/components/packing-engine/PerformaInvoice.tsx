@@ -659,7 +659,7 @@ td,th{vertical-align:top}
 <div style="display:flex;justify-content:space-between;align-items:baseline;padding:2px 0">
 <span style="font-size:12px;font-weight:700">Exporter</span>
 <span style="white-space:nowrap; color:#555; font-family:'Courier New';">
-<span style="font-size:11px; font-weight:700; margin-right:2px;"> VENDOR NO : 114395 </span>
+<span style="font-size:11px; font-weight:700; margin-right:2px;"> Vendor No : 114395 </span>
 </span>
 </div>
 <div style="padding:3px 0;line-height:1.5">
@@ -794,8 +794,8 @@ ${rowsHtml}
 </body></html>`);
             w.document.close();
             showToast('success', 'Document Ready', `Proforma Invoice ${pi.proforma_number} generated for printing.`);
-        } catch (err: any) { 
-            setError(err.message); 
+        } catch (err: any) {
+            setError(err.message);
             showToast('error', 'Print Failed', 'Failed to generate Proforma Invoice for printing.');
         }
     };
