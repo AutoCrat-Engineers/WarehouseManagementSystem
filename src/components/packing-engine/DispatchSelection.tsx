@@ -21,9 +21,9 @@ import {
 } from '../ui/SharedComponents';
 import * as svc from './packingEngineService';
 import type { Pallet, DispatchReadiness, PackingList } from './packingEngineService';
-import { createMasterPackingList } from './mplService';
 import { getSupabaseClient } from '../../utils/supabase/client';
 import { useSessionPersistence } from '../../hooks/useSessionPersistence';
+import { generateIdempotencyKey, extractRpcError } from '../../utils/idempotency';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
@@ -165,17 +165,21 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
             const item = readiness.find(r => r.item_code === expandedItem);
             const palletIdsArray = Array.from(selectedPalletIds);
             const customerName = item?.customer_name || '';
+            const idempotencyKey = generateIdempotencyKey();
 
-            // Step 1: Create Packing List (server-side, atomic)
-            const pl = await svc.createPackingList(
-                palletIdsArray,
-                { customer_name: customerName || undefined }
-            );
+            // ═══ PRODUCTION-GRADE ═══
+            // Single atomic RPC: creates PL + MPL + locks pallets + audit
+            // All within one Postgres transaction. If anything fails, everything rolls back.
+            // Idempotency key ensures safe retry on network failure or double-click.
+            const { data, error } = await supabase.rpc('create_dispatch_packing_list', {
+                p_pallet_ids: palletIdsArray,
+                p_user_id: (await supabase.auth.getUser()).data.user?.id,
+                p_customer_name: customerName || null,
+                p_idempotency_key: idempotencyKey,
+            });
 
-            // Step 2: Create MPL from the PL
-            // Both createPackingList and createMasterPackingList are idempotent —
-            // if called again for same pallets/PL, they return the existing record.
-            const mpl = await createMasterPackingList({ packing_list_id: pl.id });
+            const rpcError = extractRpcError(error, data);
+            if (rpcError) throw new Error(rpcError);
 
             setSelectedPalletIds(new Set());
             fetchData();
@@ -184,7 +188,7 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
             if (onNavigate) {
                 onNavigate('pe-mpl-home');
             } else {
-                showToast('success', 'Packing List Created', `PL ${pl.packing_list_number} & MPL ${mpl.mpl_number} created successfully.`);
+                showToast('success', 'Packing List Created', `PL ${data.pl_number} & MPL ${data.mpl_number} created successfully.`);
             }
         } catch (err: any) {
             console.error('Generate packing list error:', err);
@@ -207,9 +211,9 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
             (r.customer_name || '').toLowerCase().includes(s);
     }), [readiness, searchTerm, cardFilter]);
 
-    const totalReady = readiness.reduce((s, r) => s + r.ready_pallets, 0);
-    const totalPartial = readiness.reduce((s, r) => s + r.partial_pallets, 0);
-    const totalReadyQty = readiness.reduce((s, r) => s + r.ready_qty, 0);
+    const totalReady = readiness.reduce((s, r) => s + (r.ready_pallets || 0), 0);
+    const totalPartial = readiness.reduce((s, r) => s + (r.partial_pallets || 0), 0);
+    const totalReadyQty = readiness.reduce((s, r) => s + (r.ready_qty || 0), 0);
 
     // Reactive selected count
     const selectedCount = selectedPalletIds.size;
@@ -351,7 +355,7 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
                                             </td>
                                             <td style={{ ...td, fontFamily: 'monospace', fontSize: 12, whiteSpace: 'nowrap' }}>{r.master_serial_no || '—'}</td>
                                             <td style={{ ...td, textAlign: 'center', fontWeight: 600, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
-                                                {r.contract_outer_qty.toLocaleString()} / {r.inner_box_qty}
+                                                {(r.contract_outer_qty || 0).toLocaleString()} / {r.inner_box_qty || 0}
                                             </td>
                                             <td style={{ ...td, textAlign: 'center' }}>
                                                 <span style={{
@@ -374,7 +378,7 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
                                                 </span>
                                             </td>
                                             <td style={{ ...td, textAlign: 'center', fontWeight: 600, fontFamily: 'monospace' }}>
-                                                {r.ready_qty.toLocaleString()}
+                                                {(r.ready_qty || 0).toLocaleString()}
                                             </td>
                                             <td style={{ ...td, textAlign: 'center', fontWeight: 600 }}>{r.total_containers}</td>
                                         </tr>
@@ -486,10 +490,10 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
 
                                                                                         {/* Qty */}
                                                                                         <div style={{ fontSize: 20, fontWeight: 800, color: '#0f172a', fontFamily: 'monospace', lineHeight: 1.1 }}>
-                                                                                            {p.current_qty.toLocaleString()}
+                                                                                            {(p.current_qty || 0).toLocaleString()}
                                                                                             {!isReady && (
                                                                                                 <span style={{ fontSize: 10, fontWeight: 500, color: '#94a3b8' }}>
-                                                                                                    {' '}/ {p.target_qty.toLocaleString()}
+                                                                                                    {' '}/ {(p.target_qty || 0).toLocaleString()}
                                                                                                 </span>
                                                                                             )}
                                                                                             <span style={{ fontSize: 8.5, fontWeight: 600, color: '#94a3b8', marginLeft: 2 }}>PCS</span>

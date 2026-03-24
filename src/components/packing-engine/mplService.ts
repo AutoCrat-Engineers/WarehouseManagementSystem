@@ -21,6 +21,7 @@
  */
 
 import { getSupabaseClient } from '../../utils/supabase/client';
+import { generateIdempotencyKey, extractRpcError } from '../../utils/idempotency';
 
 const supabase = getSupabaseClient();
 
@@ -597,7 +598,7 @@ export async function markMplPrinted(mplId: string): Promise<void> {
         updated_at: new Date().toISOString(),
         updated_by: userId,
     };
-    
+
     // Only change status to PRINTED if it's currently CONFIRMED or PRINTED
     // If it's already DISPATCHED, leave the status as DISPATCHED
     if (mpl.status === 'CONFIRMED' || mpl.status === 'PRINTED') {
@@ -687,448 +688,95 @@ export async function cancelMpl(mplId: string, reason?: string): Promise<void> {
 /**
  * Create a Performa Invoice from selected MPLs.
  * PI groups multiple MPLs into one outbound shipment.
+ *
+ * ═══ PRODUCTION-GRADE ═══
+ * Now uses atomic RPC: create_proforma_invoice
+ * All validation, junction creation, MPL linking, and audit logging
+ * happen inside a single Postgres transaction.
  */
 export async function createPerformaInvoice(mplIds: string[], meta?: {
     customer_name?: string;
     customer_code?: string;
-}): Promise<any> {
+}, shipmentNumber?: string): Promise<any> {
     const userId = await getCurrentUserId();
+    const idempotencyKey = generateIdempotencyKey();
 
-    // Generate PI number
-    const { data: piNumData, error: seqErr } = await supabase.rpc('generate_pi_number');
-    if (seqErr) throw seqErr;
-    const piNumber = piNumData as string;
-
-    // Fetch MPLs
-    const { data: mpls, error: mplErr } = await supabase
-        .from('master_packing_lists')
-        .select('*')
-        .in('id', mplIds)
-        .in('status', ['CONFIRMED', 'PRINTED']);
-
-    if (mplErr) throw mplErr;
-    if (!mpls || mpls.length === 0) throw new Error('No valid MPLs found');
-
-    // Aggregate totals
-    const totalPallets = mpls.reduce((s, m) => s + m.total_pallets, 0);
-    const totalQty = mpls.reduce((s, m) => s + m.total_quantity, 0);
-    const totalGross = mpls.reduce((s, m) => s + Number(m.total_gross_weight_kg || 0), 0);
-
-    // Create PI header
-    const { data: pi, error: piErr } = await supabase
-        .from('pack_proforma_invoices')
-        .insert({
-            proforma_number: piNumber,
-            customer_name: meta?.customer_name || mpls[0].item_name || null,
-            customer_code: meta?.customer_code || null,
-            total_amount: 0,
-            currency_code: 'USD',
-            status: 'DRAFT',
-            total_invoices: mpls.length,
-            total_pallets: totalPallets,
-            total_quantity: totalQty,
-            created_by: userId,
-        })
-        .select()
-        .single();
-
-    if (piErr) throw piErr;
-
-    // Create PI ↔ MPL junction records
-    for (let i = 0; i < mpls.length; i++) {
-        const mpl = mpls[i];
-        await supabase.from('proforma_invoice_mpls').insert({
-            proforma_id: pi.id,
-            mpl_id: mpl.id,
-            mpl_number: mpl.mpl_number,
-            invoice_number: mpl.invoice_number,
-            po_number: mpl.po_number,
-            item_code: mpl.item_code,
-            total_pallets: mpl.total_pallets,
-            total_quantity: mpl.total_quantity,
-            total_gross_weight_kg: Number(mpl.total_gross_weight_kg || 0),
-            line_number: i + 1,
-        });
-
-        // Link MPL to PI
-        await supabase
-            .from('master_packing_lists')
-            .update({
-                proforma_invoice_id: pi.id,
-                updated_at: new Date().toISOString(),
-                updated_by: userId,
-            })
-            .eq('id', mpl.id);
-    }
-
-    // Audit log
-    await logDispatchAudit({
-        entity_type: 'PROFORMA_INVOICE',
-        entity_id: pi.id,
-        entity_number: piNumber,
-        action: 'CREATED',
-        to_status: 'DRAFT',
-        performed_by: userId,
-        metadata: {
-            mpl_count: mpls.length,
-            total_pallets: totalPallets,
-            total_quantity: totalQty,
-            mpl_numbers: mpls.map(m => m.mpl_number),
-        },
+    const { data, error } = await supabase.rpc('create_proforma_invoice', {
+        p_mpl_ids: mplIds,
+        p_user_id: userId,
+        p_customer_name: meta?.customer_name || null,
+        p_customer_code: meta?.customer_code || null,
+        p_shipment_number: shipmentNumber || null,
+        p_idempotency_key: idempotencyKey,
     });
 
-    return pi;
+    const rpcError = extractRpcError(error, data);
+    if (rpcError) throw new Error(rpcError);
+
+    // Return PI-like object for frontend compatibility
+    return {
+        id: data.id,
+        proforma_number: data.proforma_number,
+        total_pallets: data.total_pallets,
+        total_quantity: data.total_quantity,
+    };
 }
 
 /**
  * Approve Performa Invoice: DRAFT/CONFIRMED → STOCK_MOVED
  * Triggers automatic stock movement: FG Warehouse → In Transit Warehouse
+ *
+ * ═══ PRODUCTION-GRADE ═══
+ * Now uses atomic RPC: approve_proforma_invoice
+ * All stock deductions, credits, ledger entries, pallet state transitions,
+ * MPL status updates, and audit logging happen inside a single Postgres
+ * transaction with SELECT FOR UPDATE locking.
+ *
+ * Properties:
+ *   ✓ Fully atomic (all-or-nothing)
+ *   ✓ Idempotent (safe to retry — server checks PI status)
+ *   ✓ Race-condition free (SELECT FOR UPDATE on stock rows)
+ *   ✓ Validates stock availability before deduction
  */
 export async function approvePerformaInvoice(piId: string): Promise<void> {
     const userId = await getCurrentUserId();
-    const correlationId = self.crypto?.randomUUID?.() || (Math.random().toString(36).substring(2) + Date.now().toString(36));
+    const idempotencyKey = generateIdempotencyKey();
 
-    // 1. Fetch PI
-    const { data: pi, error: piErr } = await supabase
-        .from('pack_proforma_invoices')
-        .select('*')
-        .eq('id', piId)
-        .single();
-
-    if (piErr || !pi) throw new Error('Performa Invoice not found');
-    if (pi.status !== 'DRAFT' && pi.status !== 'CONFIRMED') throw new Error(`PI must be DRAFT or CONFIRMED to approve, current: ${pi.status}`);
-
-    // 2. Fetch linked MPLs
-    const { data: piMpls } = await supabase
-        .from('proforma_invoice_mpls')
-        .select('*, master_packing_lists!inner (*)')
-        .eq('proforma_id', piId);
-
-    if (!piMpls || piMpls.length === 0) throw new Error('No MPLs linked to this PI');
-
-    // 3. Find FG and In Transit warehouses
-    // Warehouse codes match DB_CODE_MAP in StockMovement.tsx
-    const { data: warehouses } = await supabase
-        .from('inv_warehouses')
-        .select('id, warehouse_code, warehouse_name')
-        .in('warehouse_code', ['WH-PROD-FLOOR', 'WH-INTRANSIT']);
-
-    const fgWarehouse = warehouses?.find((w: any) =>
-        w.warehouse_code === 'WH-PROD-FLOOR'
-    );
-    const transitWarehouse = warehouses?.find((w: any) =>
-        w.warehouse_code === 'WH-INTRANSIT'
-    );
-
-    if (!fgWarehouse || !transitWarehouse) {
-        throw new Error('FG or In Transit warehouse not found. Please configure warehouses.');
-    }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // ARCHITECTURE: No inv_movement_headers or inv_movement_lines created.
-    //
-    // Movement records (inv_movement_headers) are ONLY for the Stock
-    // Movement approval workflow (Production → FG). Downstream dispatch
-    // flows use the Proforma Invoice itself as the transaction document.
-    //
-    // Stock traceability is maintained through:
-    //   1. inv_stock_ledger   → Immutable ledger (debit/credit per warehouse)
-    //   2. dispatch_audit_log → Cross-entity dispatch audit trail
-    //   3. pack_pallet_state_log → Pallet lifecycle tracking
-    //
-    // Reference chain: PI → MPL → Packing List → Pallets → Containers
-    // ══════════════════════════════════════════════════════════════════════
-
-    // 4. AGGREGATE stock quantities by item_code across all MPLs
-    //    A single PI may contain multiple MPLs for the same item_code.
-    //    We aggregate FIRST, then do ONE deduction + ONE increment per item.
-    //    This ensures:
-    //      - No multiple read-modify-write on the same warehouse_stock row
-    //      - Exactly 1 ledger entry per item per warehouse (clean journal)
-    //      - Correct before/after quantities in the ledger
-
-    const itemAgg: Record<string, { totalQty: number; mplNumbers: string[] }> = {};
-    for (const piMpl of piMpls) {
-        const mpl = piMpl.master_packing_lists;
-        const itemCode = mpl.item_code;
-        if (!itemAgg[itemCode]) {
-            itemAgg[itemCode] = { totalQty: 0, mplNumbers: [] };
-        }
-        itemAgg[itemCode].totalQty += mpl.total_quantity;
-        itemAgg[itemCode].mplNumbers.push(mpl.mpl_number);
-    }
-
-    // 4b. Execute ONE stock transfer per unique item_code
-    for (const [itemCode, { totalQty, mplNumbers }] of Object.entries(itemAgg)) {
-        const mplRef = mplNumbers.join(', ');
-
-        // ── DEDUCT from FG Warehouse (single read-modify-write per item) ──
-        const { data: srcStock } = await supabase
-            .from('inv_warehouse_stock')
-            .select('id, quantity_on_hand')
-            .eq('warehouse_id', fgWarehouse.id)
-            .eq('item_code', itemCode)
-            .eq('is_active', true)
-            .single();
-
-        if (srcStock) {
-            const newSrcQty = Math.max(0, srcStock.quantity_on_hand - totalQty);
-            await supabase.from('inv_warehouse_stock').update({
-                quantity_on_hand: newSrcQty,
-                last_issue_date: new Date().toISOString(),
-                updated_by: userId,
-            }).eq('id', srcStock.id);
-
-            await supabase.from('inv_stock_ledger').insert({
-                warehouse_id: fgWarehouse.id,
-                item_code: itemCode,
-                transaction_type: 'DISPATCH_OUT',
-                quantity_change: -totalQty,
-                quantity_before: srcStock.quantity_on_hand,
-                quantity_after: newSrcQty,
-                reference_type: 'PROFORMA_INVOICE',
-                reference_id: piId,
-                notes: `OUT: ${totalQty} units | PI ${pi.proforma_number} | MPL: ${mplRef} | FG → In Transit`,
-                created_by: userId,
-            });
-        }
-
-        // ── INCREMENT In Transit Warehouse (single read-modify-write per item) ──
-        const { data: dstStock } = await supabase
-            .from('inv_warehouse_stock')
-            .select('id, quantity_on_hand')
-            .eq('warehouse_id', transitWarehouse.id)
-            .eq('item_code', itemCode)
-            .eq('is_active', true)
-            .single();
-
-        if (dstStock) {
-            const newDstQty = dstStock.quantity_on_hand + totalQty;
-            await supabase.from('inv_warehouse_stock').update({
-                quantity_on_hand: newDstQty,
-                last_receipt_date: new Date().toISOString(),
-                updated_by: userId,
-            }).eq('id', dstStock.id);
-
-            await supabase.from('inv_stock_ledger').insert({
-                warehouse_id: transitWarehouse.id,
-                item_code: itemCode,
-                transaction_type: 'DISPATCH_IN',
-                quantity_change: totalQty,
-                quantity_before: dstStock.quantity_on_hand,
-                quantity_after: newDstQty,
-                reference_type: 'PROFORMA_INVOICE',
-                reference_id: piId,
-                notes: `IN: ${totalQty} units | PI ${pi.proforma_number} | MPL: ${mplRef} | FG → In Transit`,
-                created_by: userId,
-            });
-        } else {
-            // No stock record exists in transit — create one
-            await supabase.from('inv_warehouse_stock').insert({
-                warehouse_id: transitWarehouse.id,
-                item_code: itemCode,
-                quantity_on_hand: totalQty,
-                last_receipt_date: new Date().toISOString(),
-                created_by: userId,
-            });
-
-            await supabase.from('inv_stock_ledger').insert({
-                warehouse_id: transitWarehouse.id,
-                item_code: itemCode,
-                transaction_type: 'DISPATCH_IN',
-                quantity_change: totalQty,
-                quantity_before: 0,
-                quantity_after: totalQty,
-                reference_type: 'PROFORMA_INVOICE',
-                reference_id: piId,
-                notes: `IN: ${totalQty} units | PI ${pi.proforma_number} | MPL: ${mplRef} | FG → In Transit`,
-                created_by: userId,
-            });
-        }
-    }
-
-    // 5. Update MPL and pallet statuses
-    for (const piMpl of piMpls) {
-        const mpl = piMpl.master_packing_lists;
-
-        // Update MPL status to DISPATCHED
-        await supabase
-            .from('master_packing_lists')
-            .update({
-                status: 'DISPATCHED',
-                dispatched_at: new Date().toISOString(),
-                dispatched_by: userId,
-                updated_at: new Date().toISOString(),
-                updated_by: userId,
-            })
-            .eq('id', mpl.id);
-
-        // Update pallets to DISPATCHED
-        const { data: mplPallets } = await supabase
-            .from('master_packing_list_pallets')
-            .select('pallet_id')
-            .eq('mpl_id', mpl.id)
-            .eq('status', 'ACTIVE');
-
-        for (const mp of (mplPallets || [])) {
-            await supabase
-                .from('pack_pallets')
-                .update({
-                    state: 'DISPATCHED',
-                    dispatched_at: new Date().toISOString(),
-                    updated_at: new Date().toISOString(),
-                    updated_by: userId,
-                })
-                .eq('id', mp.pallet_id);
-
-            await supabase.from('pack_pallet_state_log').insert({
-                pallet_id: mp.pallet_id,
-                from_state: 'LOCKED',
-                to_state: 'DISPATCHED',
-                trigger_type: 'DISPATCH_EXECUTED',
-                metadata: {
-                    proforma_number: pi.proforma_number,
-                },
-                performed_by: userId,
-            });
-        }
-
-        // Audit: MPL dispatched
-        await logDispatchAudit({
-            entity_type: 'MASTER_PACKING_LIST',
-            entity_id: mpl.id,
-            entity_number: mpl.mpl_number,
-            action: 'DISPATCHED',
-            from_status: mpl.status,
-            to_status: 'DISPATCHED',
-            performed_by: userId,
-            metadata: { proforma_number: pi.proforma_number },
-            correlation_id: correlationId,
-        });
-    }
-
-    // 6. Update PI status (no stock_movement_id — PI is the reference doc itself)
-    await supabase
-        .from('pack_proforma_invoices')
-        .update({
-            status: 'STOCK_MOVED',
-            stock_moved_at: new Date().toISOString(),
-            stock_moved_by: userId,
-            updated_at: new Date().toISOString(),
-        })
-        .eq('id', piId);
-
-    // 7. Audit: PI approved & dispatched
-    // (Email is sent by the frontend via the send-dispatch-email Edge Function)
-    await logDispatchAudit({
-        entity_type: 'PROFORMA_INVOICE',
-        entity_id: piId,
-        entity_number: pi.proforma_number,
-        action: 'STOCK_MOVED',
-        from_status: pi.status,
-        to_status: 'STOCK_MOVED',
-        performed_by: userId,
-        metadata: {
-            source_warehouse: fgWarehouse.warehouse_name,
-            dest_warehouse: transitWarehouse.warehouse_name,
-            total_quantity: pi.total_quantity,
-            total_pallets: pi.total_pallets,
-        },
-        correlation_id: correlationId,
+    const { data, error } = await supabase.rpc('approve_proforma_invoice', {
+        p_pi_id: piId,
+        p_user_id: userId,
+        p_idempotency_key: idempotencyKey,
     });
+
+    const rpcError = extractRpcError(error, data);
+    if (rpcError) throw new Error(rpcError);
+
+    // If already processed, that's fine — idempotent
+    if (data?.already_processed) {
+        console.log(`[approvePerformaInvoice] PI already approved (idempotent return)`);
+    }
 }
 
 
 /**
  * Cancel a Proforma Invoice (DRAFT only).
- * 
- * Key behaviour:
- *   - MPLs are UN-LINKED (proforma_invoice_id → null) so they can be reused.
- *   - MPL status is NOT changed — stays CONFIRMED/PRINTED.
- *   - Pallet allocations (master_packing_list_pallets) are NOT touched.
- *   - Pallet states (pack_pallets.state) are NOT touched — remain LOCKED.
- *   - Junction rows (proforma_invoice_mpls) are deleted to prevent orphan refs.
- *   - Audit log entry is created.
+ *
+ * ═══ PRODUCTION-GRADE ═══
+ * Now uses atomic RPC: cancel_proforma_invoice
+ * MPL unlinking, junction deletion, status update, and audit logging
+ * all happen atomically in a single Postgres transaction.
  */
 export async function cancelPerformaInvoice(piId: string, reason?: string): Promise<void> {
     const userId = await getCurrentUserId();
 
-    // 1. Fetch & validate PI
-    const { data: pi, error: piErr } = await supabase
-        .from('pack_proforma_invoices')
-        .select('*')
-        .eq('id', piId)
-        .single();
+    const { data, error } = await supabase.rpc('cancel_proforma_invoice', {
+        p_pi_id: piId,
+        p_user_id: userId,
+        p_reason: reason || null,
+    });
 
-    if (piErr || !pi) throw new Error('Proforma Invoice not found');
-    if (pi.status !== 'DRAFT') throw new Error(`Only DRAFT Proforma Invoices can be cancelled (current: ${pi.status})`);
-
-    // 2. Fetch linked MPLs via junction table
-    const { data: piMpls } = await supabase
-        .from('proforma_invoice_mpls')
-        .select('mpl_id, mpl_number')
-        .eq('proforma_id', piId);
-
-    const mplIds = (piMpls || []).map((m: any) => m.mpl_id);
-    const mplNumbers = (piMpls || []).map((m: any) => m.mpl_number);
-
-    // 3. Clear proforma_invoice_id on each linked MPL (makes them reusable)
-    if (mplIds.length > 0) {
-        const { error: clearErr } = await supabase
-            .from('master_packing_lists')
-            .update({
-                proforma_invoice_id: null
-            })
-            .in('id', mplIds);
-        if (clearErr) throw new Error(`Failed to clear MPL links: ${clearErr.message}`);
-    }
-
-    // 4. Delete PI ↔ MPL junction rows (clean up)
-    const { error: junctionErr } = await supabase
-        .from('proforma_invoice_mpls')
-        .delete()
-        .eq('proforma_id', piId);
-    if (junctionErr) throw new Error(`Failed to delete junction rows: ${junctionErr.message}`);
-
-    // 5. Cancel the PI itself — try with optional columns first, fallback to minimal update
-    const { error: fullUpdateErr } = await supabase
-        .from('pack_proforma_invoices')
-        .update({
-            status: 'CANCELLED',
-            cancelled_at: new Date().toISOString(),
-            cancellation_reason: reason || null,
-            updated_at: new Date().toISOString(),
-        })
-        .eq('id', piId);
-
-    if (fullUpdateErr) {
-        // Fallback: some columns may not exist — try minimal update
-        const { error: minUpdateErr } = await supabase
-            .from('pack_proforma_invoices')
-            .update({
-                status: 'CANCELLED',
-            })
-            .eq('id', piId);
-        if (minUpdateErr) throw new Error(`Failed to cancel PI: ${minUpdateErr.message}`);
-    }
-
-    // 6. Audit log (non-blocking)
-    try {
-        await logDispatchAudit({
-            entity_type: 'PROFORMA_INVOICE',
-            entity_id: piId,
-            entity_number: pi.proforma_number,
-            action: 'CANCELLED',
-            from_status: 'DRAFT',
-            to_status: 'CANCELLED',
-            performed_by: userId,
-            metadata: {
-                reason: reason || null,
-                released_mpl_count: mplIds.length,
-                released_mpl_numbers: mplNumbers,
-            },
-        });
-    } catch { /* non-blocking */ }
+    const rpcError = extractRpcError(error, data);
+    if (rpcError) throw new Error(rpcError);
 }
 
 // ============================================================================

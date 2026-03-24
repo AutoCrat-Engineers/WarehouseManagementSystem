@@ -313,9 +313,12 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
     const handleCreatePI = async () => {
         setCreating(true); setError(null);
         try {
-            const pi = await createPerformaInvoice(pickedMpls.map(p => p.mpl.id), { customer_name: pickedMpls[0]?.mpl.item_name || undefined });
-            // Update shipment number on the PI
-            await supabase.from('pack_proforma_invoices').update({ shipment_number: shipmentNumber, updated_at: new Date().toISOString() }).eq('id', pi.id);
+            // Atomic RPC: creates PI, links MPLs, sets shipment number — all in one transaction
+            const pi = await createPerformaInvoice(
+                pickedMpls.map(p => p.mpl.id),
+                { customer_name: pickedMpls[0]?.mpl.item_name || undefined },
+                shipmentNumber || undefined,
+            );
             setSuccessMsg(`Performa Invoice ${pi.proforma_number} created for shipment ${shipmentNumber}`);
             setStep('LIST'); setPickedMpls([]); await loadPIs();
             setTimeout(() => setSuccessMsg(null), 5000);

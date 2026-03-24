@@ -8,7 +8,8 @@
  */
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Printer, Eye, XCircle, ChevronLeft, ChevronRight, ChevronDown, Package, FileText, Truck, AlertCircle, CheckCircle2, Clock, RefreshCw, Hash, Box, Loader2, Scale, Edit3, AlertTriangle, Settings, X, Info, ClipboardList } from 'lucide-react';
-import { fetchMasterPackingLists, createMasterPackingList, confirmMpl, markMplPrinted, cancelMpl, fetchMplPallets, fetchDispatchAuditLog } from './mplService';
+import { fetchMasterPackingLists, cancelMpl, fetchMplPallets, fetchDispatchAuditLog } from './mplService';
+import { generateIdempotencyKey, extractRpcError } from '../../utils/idempotency';
 import type { MasterPackingList, MplPallet, MplStatus, DispatchAuditEntry } from './mplService';
 import { getSupabaseClient } from '../../utils/supabase/client';
 import * as svc from './packingEngineService';
@@ -256,14 +257,32 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
         if (!dispatchForm.invoice_number || !dispatchForm.purchase_order_number) { setError('Invoice Number and BPA Number are required'); return; }
         setSaving(true); setError(null);
         try {
-            await svc.upsertPackingListData(wizardMpl.packing_list_id, { ...dispatchForm, is_finalized: true });
-            for (const ep of enrichedPallets) {
-                const detail = palletDetails.find((d: any) => d.pallet_id === ep.id);
-                if (detail) await svc.updatePalletDetail(detail.id, { net_weight_kg: ep.net_weight_kg, gross_weight_kg: ep.gross_weight_kg, invoice_number: dispatchForm.invoice_number, po_number: dispatchForm.purchase_order_number });
-            }
-            // Update MPL with invoice/PO
-            await supabase.from('master_packing_lists').update({ invoice_number: dispatchForm.invoice_number, po_number: dispatchForm.purchase_order_number, total_gross_weight_kg: enrichedPallets.reduce((s, p) => s + p.gross_weight_kg, 0), updated_at: new Date().toISOString() }).eq('id', wizardMpl.id);
-            await confirmMpl(wizardMpl.id);
+            const idempotencyKey = generateIdempotencyKey();
+            const palletWeights = enrichedPallets.map(ep => ({
+                pallet_id: ep.id,
+                net_weight_kg: ep.net_weight_kg,
+                gross_weight_kg: ep.gross_weight_kg,
+            }));
+
+            // ═══ PRODUCTION-GRADE ═══
+            // Single atomic RPC: saves PL data + pallet weights + MPL update + confirm
+            // All within one Postgres transaction. If anything fails, everything rolls back.
+            const { data, error } = await supabase.rpc('confirm_mpl_with_data', {
+                p_mpl_id: wizardMpl.id,
+                p_user_id: (await supabase.auth.getUser()).data.user?.id,
+                p_invoice_number: dispatchForm.invoice_number,
+                p_invoice_date: dispatchForm.invoice_date || null,
+                p_purchase_order_number: dispatchForm.purchase_order_number,
+                p_purchase_order_date: dispatchForm.purchase_order_date || null,
+                p_ship_via: dispatchForm.ship_via || null,
+                p_mode_of_transport: dispatchForm.mode_of_transport || null,
+                p_pallet_weights: palletWeights,
+                p_idempotency_key: idempotencyKey,
+            });
+
+            const rpcError = extractRpcError(error, data);
+            if (rpcError) throw new Error(rpcError);
+
             showToast('success', 'Packing List Confirmed', `${wizardMpl.mpl_number} details saved & confirmed — Print is now enabled`);
             await completeMplSession();
             setWizardMpl(null); loadMpls(true); loadSummary();
@@ -274,8 +293,15 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
     const handlePrintMpl = async (mpl: MasterPackingList) => {
         try {
             const bt = await svc.getPackingListFullBacktrack(mpl.packing_list_id);
-            // DO DATABASE UPDATE FIRST to avoid window.print() blocking the JS event loop and crashing fetch
-            await markMplPrinted(mpl.id);
+            // ═══ PRODUCTION-GRADE ═══
+            // Atomic RPC: marks printed + increments print_count in single SQL statement
+            // Fixes read-modify-write race condition on print_count
+            const { data, error } = await supabase.rpc('mark_mpl_printed', {
+                p_mpl_id: mpl.id,
+                p_user_id: (await supabase.auth.getUser()).data.user?.id,
+            });
+            const rpcError = extractRpcError(error, data);
+            if (rpcError) throw new Error(rpcError);
 
             // Execute all network requests BEFORE opening the print popup
             await loadMpls(true);
