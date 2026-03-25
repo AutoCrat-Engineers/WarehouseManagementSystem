@@ -20,6 +20,7 @@ import {
     SummaryCard, SummaryCardsGrid,
     FilterBar as SharedFilterBar, ActionBar,
     SearchBox, RefreshButton, StatusFilter, DateRangeFilter,
+    ExportCSVButton,
 } from '../ui/SharedComponents';
 import { useSessionPersistence } from '../../hooks/useSessionPersistence';
 
@@ -1107,6 +1108,40 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
                     onDateToChange={setDateTo}
                 />
                 <ActionBar>
+                    <ExportCSVButton onClick={async () => {
+                        try {
+                            // Fetch ALL records (no pagination) for export
+                            const { data: allMpls } = await fetchMasterPackingLists({
+                                status: statusFilter === 'ALL' ? undefined : statusFilter,
+                                search: search || undefined,
+                                limit: 10000,
+                                offset: 0,
+                            });
+                            const XLSX = await import('xlsx');
+                            const headers = ['MPL #', 'MSN', 'Item Code', 'Item Name', 'BPA #', 'Invoice #', 'Pallets', 'Quantity', 'Net Weight (kg)', 'Gross Weight (kg)', 'Status', 'Created'];
+                            const rows = allMpls.map(m => [
+                                m.mpl_number,
+                                (m as any).master_serial_no || '',
+                                m.item_code || '',
+                                m.item_name || '',
+                                m.po_number || '',
+                                m.invoice_number || '',
+                                m.total_pallets,
+                                m.total_quantity,
+                                m.total_net_weight_kg || 0,
+                                m.total_gross_weight_kg || 0,
+                                m.status,
+                                new Date(m.created_at).toLocaleDateString(),
+                            ]);
+                            const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+                            ws['!cols'] = headers.map((h, i) => ({ wch: Math.max(h.length, ...rows.map(r => String(r[i]).length)) + 2 }));
+                            const wb = XLSX.utils.book_new();
+                            XLSX.utils.book_append_sheet(wb, ws, 'Packing Lists');
+                            XLSX.writeFile(wb, `packing_lists_${new Date().toISOString().split('T')[0]}.xlsx`);
+                        } catch (err: any) {
+                            console.error('[MPL Export] Error:', err);
+                        }
+                    }} />
                     <RefreshButton onClick={handleRefresh} loading={refreshing} />
                 </ActionBar>
             </SharedFilterBar>
@@ -1125,8 +1160,8 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
                                         <th style={{ ...thS, minWidth: 100 }}>MSN</th>
                                         <th style={{ ...thS, minWidth: 100 }}>BPA #</th>
                                         <th style={{ ...thS, minWidth: 100 }}>Invoice #</th>
-                                        <th style={{ ...thS, textAlign: 'center', minWidth: 70 }}>Pallets</th>
-                                        <th style={{ ...thS, textAlign: 'center', minWidth: 70 }}>Qty</th>
+                                        <th style={{ ...thS, textAlign: 'center', minWidth: 70 }}>Pallets (Nos)</th>
+                                        <th style={{ ...thS, textAlign: 'center', minWidth: 70 }}>Qty (Nos)</th>
                                         <th style={{ ...thS, textAlign: 'center', minWidth: 90 }}>Status</th>
                                         <th style={{ ...thS, minWidth: 90 }}>Created</th>
                                         <th style={{ ...thS, textAlign: 'center', minWidth: 150 }}>Actions</th>
@@ -1244,10 +1279,10 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}><div><h2 style={{ fontSize: 22, fontWeight: 800, color: '#111827', margin: '0 0 8px' }}>{selectedMpl.mpl_number}</h2><StatusBadge status={selectedMpl.status} /></div><button onClick={() => setShowDetail(false)} style={{ padding: 8, borderRadius: 8, border: '1px solid #e5e7eb', backgroundColor: '#fff', cursor: 'pointer' }}><XCircle size={18} style={{ color: '#6b7280' }} /></button></div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, padding: 16, backgroundColor: '#f9fafb', borderRadius: 12, marginBottom: 24, fontSize: 13 }}>
                         <div><span style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.3px' }}>MSN</span><div style={{ fontWeight: 600, marginTop: 2 }}>{selectedMpl.item_code}</div></div>
-                        <div><span style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.3px' }}>PO #</span><div style={{ fontWeight: 600, marginTop: 2 }}>{selectedMpl.po_number || '—'}</div></div>
+                        <div><span style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.3px' }}>BPA #</span><div style={{ fontWeight: 600, marginTop: 2 }}>{selectedMpl.po_number || '—'}</div></div>
                         <div><span style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.3px' }}>Invoice #</span><div style={{ fontWeight: 600, marginTop: 2 }}>{selectedMpl.invoice_number || '—'}</div></div>
-                        <div><span style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.3px' }}>Pallets</span><div style={{ fontWeight: 700, marginTop: 2, color: '#1e3a8a' }}>{selectedMpl.total_pallets}</div></div>
-                        <div><span style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.3px' }}>Qty</span><div style={{ fontWeight: 700, marginTop: 2, fontFamily: 'monospace' }}>{selectedMpl.total_quantity.toLocaleString()}</div></div>
+                        <div><span style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.3px' }}>Pallets (Nos)</span><div style={{ fontWeight: 700, marginTop: 2, color: '#1e3a8a' }}>{selectedMpl.total_pallets}</div></div>
+                        <div><span style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.3px' }}>Qty (Nos)</span><div style={{ fontWeight: 700, marginTop: 2, fontFamily: 'monospace' }}>{selectedMpl.total_quantity.toLocaleString()}</div></div>
                         <div><span style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.3px' }}>Gross Wt</span><div style={{ fontWeight: 700, marginTop: 2, fontFamily: 'monospace' }}>{Number(selectedMpl.total_gross_weight_kg).toFixed(2)} kg</div></div>
                     </div>
                     <h3 style={{ fontSize: 15, fontWeight: 700, color: '#111827', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}><Package size={16} style={{ color: '#1e3a8a' }} />Pallet Breakdown</h3>
