@@ -10,8 +10,6 @@
  *   6. Approve → Enter email addresses → Send approval notification → Stock movement FG→Transit
  */
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { jsPDF } from 'jspdf';
-import html2canvas from 'html2canvas';
 import { Search, Truck, CheckCircle2, Package, Plus, Loader2, XCircle, Eye, AlertCircle, AlertTriangle, RefreshCw, ChevronLeft, ChevronRight, Hash, ArrowRight, Mail, Send, FileText, ShieldCheck, Anchor, Printer, ChevronDown, X, Settings, Stamp, Clock, MessageSquare, User, Calendar, Info } from 'lucide-react';
 import { getSupabaseClient } from '../../utils/supabase/client';
 import { fetchMasterPackingLists, createPerformaInvoice, approvePerformaInvoice, cancelPerformaInvoice } from './mplService';
@@ -639,181 +637,121 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
         setApproveTarget(pi); setApprovalEmails('');
     };
 
-    const handleApproveSubmit = async () => {
-        if (!approveTarget) return;
-        if (!approvalEmails.trim()) { setError('Please enter at least one email address'); return; }
-        setApproving(true); setError(null);
+    // ─── GENERATE PI PDF VIA PUPPETEER SERVICE & UPLOAD TO STORAGE ───
+    const PDF_SERVICE_URL = import.meta.env.VITE_PDF_SERVICE_URL || 'http://localhost:3001';
+
+    const generatePIPdfAndUpload = async (pi: PIRecord): Promise<boolean> => {
         try {
-            // 1. Approve PI & move stock (this is the critical path)
-            await approvePerformaInvoice(approveTarget.id);
-
-            // 2. Fetch MPL details for the email template
-            const emails = approvalEmails.split(',').map(e => e.trim()).filter(Boolean);
-            let mplDetails: any[] = [];
+            // 1. Pre-fetch the company logo as base64 data-URI
+            let logoDataUri = '';
             try {
-                const { data: piMplData } = await supabase
-                    .from('proforma_invoice_mpls')
-                    .select('mpl_number, item_code, invoice_number, po_number, total_pallets, total_quantity')
-                    .eq('proforma_id', approveTarget.id)
-                    .order('line_number');
-                mplDetails = piMplData || [];
-            } catch { /* non-blocking */ }
+                const logoRes = await fetch('/logo.png');
+                if (logoRes.ok) {
+                    const blob = await logoRes.blob();
+                    logoDataUri = await new Promise<string>((resolve) => {
+                        const reader = new FileReader();
+                        reader.onloadend = () => resolve(reader.result as string);
+                        reader.readAsDataURL(blob);
+                    });
+                }
+            } catch (_) { /* fallback to text */ }
+            const logoHtml = logoDataUri
+                ? `<img src="${logoDataUri}" alt="AUTOCRAT ENGINEERS" style="height:34px;object-fit:contain" />`
+                : `<span style="font-size:11px;font-weight:800">AUTOCRAT<br>ENGINEERS</span>`;
 
-            // 2.5 Generate PDF payload
-            let pdfBase64 = null;
-            try {
-                pdfBase64 = await generatePIPdfBase64(approveTarget);
-            } catch (e) {
-                console.warn('Silent failure generating PDF via html2canvas:', e);
+            // 2. Fetch PI data (same queries as handlePrintPI)
+            const { data: piMplData } = await supabase.from('proforma_invoice_mpls').select('*').eq('proforma_id', pi.id).order('line_number');
+            const mplIds = (piMplData || []).map((m: any) => m.mpl_id);
+            const { data: mplFull } = await supabase.from('master_packing_lists').select('*, pack_packing_lists!master_packing_lists_packing_list_id_fkey (packing_list_number)').in('id', mplIds);
+            const { data: mplPallets } = await supabase.from('master_packing_list_pallets').select('*').in('mpl_id', mplIds).eq('status', 'ACTIVE').order('line_number');
+            const plId = mplFull?.[0]?.packing_list_id;
+            let plData: any = null;
+            if (plId) { const { data: pld } = await supabase.from('pack_packing_list_data').select('*').eq('packing_list_id', plId).single(); plData = pld; }
+            const uniqueItemCodes = [...new Set((mplPallets || []).map((p: any) => p.item_code))];
+            let itemsLookup: Record<string, { part_number: string; standard_cost: number; master_serial_no: string }> = {};
+            if (uniqueItemCodes.length > 0) {
+                const { data: itemsData } = await supabase.from('items').select('item_code, part_number, standard_cost, master_serial_no').in('item_code', uniqueItemCodes);
+                for (const itm of (itemsData || [])) { itemsLookup[itm.item_code] = { part_number: itm.part_number || itm.item_code, standard_cost: itm.standard_cost || 0, master_serial_no: itm.master_serial_no || '' }; }
             }
-
-            // 3. Send dispatch email via Edge Function (non-blocking)
-            let emailSent = false;
-            try {
-                const { data: { session } } = await supabase.auth.getSession();
-                const res = await fetch(
-                    `https://sugvmurszfcneaeyoagv.supabase.co/functions/v1/send-dispatch-email`,
-                    {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${session?.access_token || ''}`,
-                        },
-                        body: JSON.stringify({
-                            to: emails,
-                            proforma_number: approveTarget.proforma_number,
-                            shipment_number: approveTarget.shipment_number || '',
-                            total_pallets: approveTarget.total_pallets,
-                            total_quantity: approveTarget.total_quantity,
-                            total_invoices: approveTarget.total_invoices,
-                            pdf_base64: pdfBase64,
-                            mpls: mplDetails.map(m => ({
-                                mpl_number: m.mpl_number,
-                                item_code: m.item_code,
-                                invoice_number: m.invoice_number || '',
-                                po_number: m.po_number || '',
-                                total_pallets: m.total_pallets || 0,
-                                total_quantity: m.total_quantity || 0,
-                            })),
-                        }),
-                    }
-                );
-                const result = await res.json();
-                emailSent = result.success === true;
-                if (!emailSent) console.warn('Email send failed:', result.error);
-            } catch (emailErr: any) {
-                console.warn('Email dispatch failed (non-blocking):', emailErr.message);
+            const itemMapGroup = new Map<string, { po: string; partNo: string; desc: string; msn: string; qty: number; rate: number; amount: number }>();
+            for (const p of (mplPallets || [])) {
+                const mpl = mplFull?.find((m: any) => m.id === p.mpl_id);
+                const itemInfo = itemsLookup[p.item_code] || { part_number: p.item_code, standard_cost: 0, master_serial_no: '' };
+                const key = `${mpl?.po_number || ''}_${itemInfo.part_number}`;
+                if (itemMapGroup.has(key)) { const e = itemMapGroup.get(key)!; e.qty += p.quantity; e.amount += (itemInfo.standard_cost * p.quantity); }
+                else { itemMapGroup.set(key, { po: mpl?.po_number || '', partNo: itemInfo.part_number, desc: p.item_name || p.item_code, msn: itemInfo.master_serial_no || '', qty: p.quantity, rate: itemInfo.standard_cost, amount: itemInfo.standard_cost * p.quantity }); }
             }
+            const itemRows = Array.from(itemMapGroup.values());
+            const totalAmount = itemRows.reduce((s, r) => s + r.amount, 0);
+            const piDate = new Date(pi.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+            const freightForwarder = plData?.ship_via || '';
+            const transportMode = (() => { const t = plData?.mode_of_transport || 'SEA'; return t === 'OCEAN' ? 'SEA' : t; })();
+            const originCountry = (plData?.country_of_origin || 'INDIA').toUpperCase();
+            const loadingPort = (plData?.port_of_loading || 'BANGALORE, INDIA').replace(/BANGALORE, ICD/i, 'BANGALORE, INDIA').toUpperCase();
+            const dischargePort = (plData?.port_of_discharge || 'CHARLESTON, USA').toUpperCase();
+            const numToWords = (n: number): string => { const ones=['','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten','Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen','Seventeen','Eighteen','Nineteen']; const tens=['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety']; if(n===0)return'Zero'; const convert=(num:number):string=>{if(num<20)return ones[num];if(num<100)return tens[Math.floor(num/10)]+(num%10?' '+ones[num%10]:'');if(num<1000)return ones[Math.floor(num/100)]+' Hundred'+(num%100?' '+convert(num%100):'');if(num<100000)return convert(Math.floor(num/1000))+' Thousand'+(num%1000?' '+convert(num%1000):'');if(num<10000000)return convert(Math.floor(num/100000))+' Lakh'+(num%100000?' '+convert(num%100000):'');return convert(Math.floor(num/10000000))+' Crore'+(num%10000000?' '+convert(num%10000000):'');}; const intPart=Math.floor(n); const decPart=Math.round((n-intPart)*100); let w='USD : '+convert(intPart); if(decPart>0)w+=' and '+convert(decPart)+' Cents'; return w+' Only'; };
+            const formatDescText = (text: string, extMsn: string) => { let out = text; const match = out.match(/\s*(\([^)]+\))\s*$/); if (match) { const safeStr = match[1].replace(/-/g, '&#8209;'); out = out.replace(/\s*(\([^)]+\))\s*$/, ` <span class="mono" style="white-space:nowrap;display:inline-block">${safeStr}</span>`); } if (extMsn) { const safeExt = extMsn.replace(/-/g, '&#8209;'); out += ` <span class="mono" style="white-space:nowrap;display:inline-block">(${safeExt})</span>`; } return out; };
+            const rowsHtml = itemRows.map((r, i) => `<tr><td class="br c4 ctr" style="padding:2px 4px">${i + 1}</td><td class="br c4" style="padding:2px 4px">${r.po}</td><td class="br c4" style="font-size:14px;font-weight:800;padding:2px 4px">${r.partNo}</td><td class="br c4" style="padding:2px 4px"><div style="font-size:12px">${formatDescText(r.desc, r.msn)}</div></td><td class="br c4 rgt mono" style="padding:2px 4px">${r.qty.toLocaleString()}</td><td class="br c4 rgt mono" style="padding:2px 4px"><div style="display:flex;justify-content:space-between"><span>$</span><span>${r.rate.toFixed(2)}</span></div></td><td class="c4 rgt mono" style="padding:2px 4px"><div style="display:flex;justify-content:space-between"><span>$</span><span><b>${r.amount.toFixed(2)}</b></span></div></td></tr>`).join('');
+            const nowStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ', ' + new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
 
-            const emailMsg = emailSent
-                ? ` — Email sent to ${emails.length} recipient(s)`
-                : ` — Email notification pending (check Resend setup)`;
-            showToast('success', 'Dispatched Successfully', `${approveTarget.proforma_number} approved — Stock moved to In Transit${emailMsg}`);
-            setSuccessMsg(`${approveTarget.proforma_number} approved — Stock moved to In Transit${emailMsg}`);
-            setApproveTarget(null); setStep('LIST'); loadPIs();
-            setTimeout(() => setSuccessMsg(null), 6000);
-        } catch (err: any) { setError(err.message); } finally { setApproving(false); }
-    };
-
-    const totalPickedPallets = pickedMpls.reduce((s, p) => s + p.mpl.total_pallets, 0);
-    const totalPickedQty = pickedMpls.reduce((s, p) => s + p.mpl.total_quantity, 0);
-    const totalPickedWeight = pickedMpls.reduce((s, p) => s + Number(p.mpl.total_gross_weight_kg || 0), 0);
-
-    // ─── PRINT PI (exact match to enterprise document) ───
-
-    const buildPIHTML = async (pi: PIRecord) => {
-
-
-        const fullHtml = `
+            // 3. Build the exact same print-ready HTML as handlePrintPI
+            const piHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+@page{size:A4 portrait;margin:6mm}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{font-family:Calibri,'Segoe UI',Verdana,Geneva,sans-serif;color:#000;font-size:11px;line-height:1.2;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+b{font-weight:700}
+table{border-collapse:collapse;width:100%}
+td,th{vertical-align:top}
+.outer{border:1.5px solid #000;display:flex;flex-direction:column;min-height:calc(100vh - 40px)}
+.grow{flex:1}
+.bb{border-bottom:1px solid #000}
+.br{border-right:1px solid #000}
+.bt{border-top:1px solid #000}
+.c4{padding:3px 5px}
+.ctr{text-align:center}
+.rgt{text-align:right}
+.sm{font-size:9px;color:#555}
+.lbl{font-size:11px;font-weight:700}
+.mono{font-family:'Courier New',monospace}
+.wm{position:fixed;top:46%;left:50%;transform:translate(-50%,-50%) rotate(-35deg);font-size:56px;font-weight:900;color:rgba(0,0,0,.035);letter-spacing:10px;text-transform:uppercase;pointer-events:none;z-index:0;white-space:nowrap}
+@media print{.no-print{display:none!important}}
+</style></head><body>
 <div class="wm">AUTOCRAT ENGINEERS</div>
-
 <table><tr>
 <td class="c4" style="font-size:9px">${nowStr}</td>
 <td class="c4 ctr" style="font-size:9px">PI-${pi.proforma_number}</td>
 <td class="c4 rgt" style="font-size:9px"></td>
 </tr></table>
-
 <div class="outer">
-
-<!-- ═══ LOGO + TITLE ═══ -->
 <table><tr style="position:relative">
-<td class="bb c4" style="padding:6px 8px;width:30%"><img src="/logo.png" alt="AUTOCRAT ENGINEERS" style="height:34px;object-fit:contain" onerror="this.outerHTML='<span style=font-size:11px;font-weight:800>AUTOCRAT<br>ENGINEERS</span>'" /></td>
+<td class="bb c4" style="padding:6px 8px;width:30%">${logoHtml}</td>
 <td class="bb c4" style="padding:8px;width:70%"><div style="position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;pointer-events:none"><span style="font-size:20px;font-weight:800;letter-spacing:5px;text-transform:uppercase;font-style:italic">PROFORMA INVOICE</span></div></td>
 </tr></table>
-
-<!-- ═══ COMPANY + CODES ═══ -->
 <table>
 <colgroup><col style="width:40%"/><col style="width:20%"/><col style="width:40%"/></colgroup>
-<tr>
-<td class="bb br c4" rowspan="4" style="vertical-align:top;padding:4px 6px">
-<div style="display:flex;justify-content:space-between;align-items:baseline;padding:2px 0">
-<span style="font-size:12px;font-weight:700">Exporter</span>
-<span style="white-space:nowrap; color:#555; font-family:'Courier New';">
-<span style="font-size:11px; font-weight:700; margin-right:2px;"> Vendor No : 114395 </span>
-</span>
-</div>
-<div style="padding:3px 0;line-height:1.5">
-<div style="font-size:13px;font-weight:800">AUTOCRAT ENGINEERS</div>
-<div style="font-size:12px">264 KIADB Hi tech Defence Aerospace Park, Phase-2,</div>
-<div style="font-size:12px">Road No 10&amp; 17, Polanahalli,</div>
-<div style="font-size:12px">Devanahalli-562135</div>
-<div style="font-size:12px">GSTIN : 29ABLPK6831H1ZB</div>
-</div>
-</td>
+<tr><td class="bb br c4" rowspan="4" style="vertical-align:top;padding:4px 6px"><div style="display:flex;justify-content:space-between;align-items:baseline;padding:2px 0"><span style="font-size:12px;font-weight:700">Exporter</span><span style="white-space:nowrap;color:#555;font-family:'Courier New'"><span style="font-size:11px;font-weight:700;margin-right:2px"> Vendor No : 114395 </span></span></div><div style="padding:3px 0;line-height:1.5"><div style="font-size:13px;font-weight:800">AUTOCRAT ENGINEERS</div><div style="font-size:12px">264 KIADB Hi tech Defence Aerospace Park, Phase-2,</div><div style="font-size:12px">Road No 10&amp; 17, Polanahalli,</div><div style="font-size:12px">Devanahalli-562135</div><div style="font-size:12px">GSTIN : 29ABLPK6831H1ZB</div></div></td>
 <td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Proforma Invoice No & Date :</td>
 <td class="bb c4" style="padding:4px 6px"><div style="font-size:13px;font-weight:700">${pi.proforma_number}</div><div style="font-size:12px;color:#333;margin-top:1px">${piDate}</div></td>
 </tr>
-<tr>
-<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">IEC Code No :</td>
-<td class="bb c4" style="font-size:13px;padding:4px 6px;font-family:'Courier New',monospace">0702002747</td>
-</tr>
-<tr>
-<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">AD Code No :</td>
-<td class="bb c4" style="font-size:13px;padding:4px 6px;font-family:'Courier New',monospace">6361504-8400009</td>
-</tr>
-<tr>
-<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Terms of Delivery & Payment :</td>
-<td class="bb c4" style="font-size:13px;padding:4px 6px">DDP</td>
-</tr>
-
-<!-- ═══ CONSIGNEE + BUYER ═══ -->
-<tr>
-<td class="bb br c4" rowspan="2" style="vertical-align:top;padding:4px 6px">
-<div style="font-size:12px;font-weight:700;padding:2px 0">Consignee</div>
-<div style="padding:3px 0;line-height:1.5">
-<div style="font-size:13px;font-weight:700">MILANO MILLWORKS,<span style="font-size:11px;font-weight:400"> LLC</span></div>
-<div style="font-size:11px">9223 INDUSTRIAL BLVD NE,</div>
-<div style="font-size:11px">LELAND, NC, 28451, USA</div>
-</div>
-</td>
+<tr><td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">IEC Code No :</td><td class="bb c4" style="font-size:13px;padding:4px 6px;font-family:'Courier New',monospace">0702002747</td></tr>
+<tr><td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">AD Code No :</td><td class="bb c4" style="font-size:13px;padding:4px 6px;font-family:'Courier New',monospace">6361504-8400009</td></tr>
+<tr><td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Terms of Delivery & Payment :</td><td class="bb c4" style="font-size:13px;padding:4px 6px">DDP</td></tr>
+<tr><td class="bb br c4" rowspan="2" style="vertical-align:top;padding:4px 6px"><div style="font-size:12px;font-weight:700;padding:2px 0">Consignee</div><div style="padding:3px 0;line-height:1.5"><div style="font-size:13px;font-weight:700">MILANO MILLWORKS,<span style="font-size:11px;font-weight:400"> LLC</span></div><div style="font-size:11px">9223 INDUSTRIAL BLVD NE,</div><div style="font-size:11px">LELAND, NC, 28451, USA</div></div></td>
 <td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Buyer Details:</td>
 <td class="bb c4" style="font-size:13px;padding:4px 6px"><div style="font-weight:700">PASSLER, DAVID</div><div style="font-size:11px;color:#333;margin-top:2px">+1 919-271-7169</div><div style="font-size:11px;color:#333;margin-top:1px">DAVIDPASSLER@OPWGLOBAL.COM</div></td>
 </tr>
-<tr>
-<td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Bill To :</td>
-<td class="bb c4" style="font-size:12px;padding:4px 6px">OPW FUELING COMPONENTS LLC <br>3250 US HIGHWAY 70, SMITHFIELD 275577, USA</td>
-</tr>
+<tr><td class="bb br c4" style="font-size:12px;font-weight:700;padding:4px 6px">Bill To :</td><td class="bb c4" style="font-size:12px;padding:4px 6px">OPW FUELING COMPONENTS LLC <br>3250 US HIGHWAY 70, SMITHFIELD 275577, USA</td></tr>
 </table>
-
-<!-- ═══ TRANSPORT ROW ═══ -->
-<table>
-<colgroup><col style="width:20%"/><col style="width:20%"/><col style="width:20%"/><col style="width:20%"/><col style="width:20%"/></colgroup>
-<tr>
-<td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Freight Forwarder</span><br/><span style="font-size:13px;font-weight:700">${freightForwarder}</span></td>
+<table><colgroup><col style="width:20%"/><col style="width:20%"/><col style="width:20%"/><col style="width:20%"/><col style="width:20%"/></colgroup>
+<tr><td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Freight Forwarder</span><br/><span style="font-size:13px;font-weight:700">${freightForwarder}</span></td>
 <td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Mode of Transport</span><br/><span style="font-size:13px;font-weight:700">${transportMode}</span></td>
 <td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Country of Origin</span><br/><span style="font-size:13px;font-weight:700">${originCountry}</span></td>
 <td class="bb br c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Port of Loading</span><br/><span style="font-size:13px;font-weight:700">${loadingPort}</span></td>
 <td class="bb c4" style="padding:5px 6px"><span style="font-size:12px;font-weight:700">Port of Discharge</span><br/><span style="font-size:13px;font-weight:700">${dischargePort}</span></td>
-</tr>
-</table>
-
-<!-- ═══ DESCRIPTION HEADER ═══ -->
+</tr></table>
 <table><tr><td class="bb c4 ctr" style="padding:3px;font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:1px">PRECISION MACHINED COMPONENTS<br/><span style="font-weight:700;font-size:10px">(OTHERS FUELING COMPONENTS)</span></td></tr></table>
-
-<!-- ═══ ITEMS TABLE ═══ -->
 <div class="grow" style="overflow:hidden;display:flex;flex-direction:column;border-bottom:1px solid #000">
-<table>
-<colgroup><col style="width:5%"/><col style="width:10%"/><col style="width:12%"/><col style="width:33%"/><col style="width:12%"/><col style="width:12%"/><col style="width:16%"/></colgroup>
+<table><colgroup><col style="width:5%"/><col style="width:10%"/><col style="width:12%"/><col style="width:33%"/><col style="width:12%"/><col style="width:12%"/><col style="width:16%"/></colgroup>
 <tr style="background:#f5f5f5;line-height:1.5">
 <td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">SL NO</td>
 <td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">BPA NO.</td>
@@ -825,33 +763,16 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
 </tr>
 ${rowsHtml}
 </table>
-<div style="flex:1;display:flex">
-<div style="width:5%;border-right:1px solid #000"></div>
-<div style="width:10%;border-right:1px solid #000"></div>
-<div style="width:12%;border-right:1px solid #000"></div>
-<div style="width:33%;border-right:1px solid #000"></div>
-<div style="width:12%;border-right:1px solid #000"></div>
-<div style="width:12%;border-right:1px solid #000"></div>
-<div style="width:16%"></div>
+<div style="flex:1;display:flex"><div style="width:5%;border-right:1px solid #000"></div><div style="width:10%;border-right:1px solid #000"></div><div style="width:12%;border-right:1px solid #000"></div><div style="width:33%;border-right:1px solid #000"></div><div style="width:12%;border-right:1px solid #000"></div><div style="width:12%;border-right:1px solid #000"></div><div style="width:16%"></div></div>
 </div>
-</div>
-
-<!-- ═══ TOTAL ROW ═══ -->
-<table>
-<colgroup><col style="width:5%"/><col style="width:10%"/><col style="width:12%"/><col style="width:33%"/><col style="width:12%"/><col style="width:12%"/><col style="width:16%"/></colgroup>
-<tr style="font-weight:700">
-<td class="bb br c4" colspan="4" style="font-size:12px;padding:5px 6px"><b>Total</b>&nbsp;&nbsp;&mdash;&nbsp;&nbsp;<span style="font-weight:600;font-size:11px;color:#333">${numToWords(totalAmount)}</span></td>
+<table><colgroup><col style="width:5%"/><col style="width:10%"/><col style="width:12%"/><col style="width:33%"/><col style="width:12%"/><col style="width:12%"/><col style="width:16%"/></colgroup>
+<tr style="font-weight:700"><td class="bb br c4" colspan="4" style="font-size:12px;padding:5px 6px"><b>Total</b>&nbsp;&nbsp;&mdash;&nbsp;&nbsp;<span style="font-weight:600;font-size:11px;color:#333">${numToWords(totalAmount)}</span></td>
 <td class="bb br c4 rgt mono" style="font-size:12px;padding:5px 6px"></td>
 <td class="bb br c4 rgt mono" style="font-size:12px;padding:5px 6px"></td>
 <td class="bb c4 rgt mono" style="font-size:12px;padding:5px 6px"><div style="display:flex;justify-content:space-between"><span>$</span><span><b>${totalAmount.toFixed(2)}</b></span></div></td>
-</tr>
-</table>
-
-<!-- ═══ CODES + NOTES + DECLARATION + SIGNATORY (single section) ═══ -->
-<table>
-<colgroup><col style="width:60%"/><col style="width:40%"/></colgroup>
-<tr>
-<td class="bt c4" style="padding:4px 6px;vertical-align:top">
+</tr></table>
+<table><colgroup><col style="width:60%"/><col style="width:40%"/></colgroup>
+<tr><td class="bt c4" style="padding:4px 6px;vertical-align:top">
 <div style="font-size:11px"><b>ITC HS CODE:</b> 84139190</div>
 <div style="font-size:11px"><b>HTS US Code:</b> 8413919085</div>
 <div style="font-size:11px"><b>DBK CODE :</b> 8413B</div>
@@ -865,72 +786,109 @@ ${rowsHtml}
 <td class="c4 rgt" style="padding:4px 6px;vertical-align:bottom">
 <div style="font-size:12px;font-weight:700">for AUTOCRAT ENGINEERS</div>
 <div style="font-size:10px;font-weight:400;font-style:italic">Authorised Signatory</div>
-</td>
-</tr>
-</table>
-
-</div><!-- /outer -->
-
-<!-- ═══ FOOTER ═══ -->
+</td></tr></table>
+</div>
 <table style="margin-top:3px"><tr>
 <td class="c4" style="font-size:8px;color:#777">PI#: ${pi.proforma_number}</td>
 <td class="c4 ctr" style="font-size:8px;color:#777">Printed: ${nowStr}</td>
 <td class="c4 rgt" style="font-size:8px;color:#777">System-generated proforma invoice</td>
-</tr></table>`;
+</tr></table>
+</body></html>`;
 
-        return fullHtml;
+            // 4. Send HTML to Puppeteer service → receive PDF as raw binary
+            console.log(`📄 Sending HTML to Puppeteer service (${PDF_SERVICE_URL})...`);
+            const pdfRes = await fetch(`${PDF_SERVICE_URL}/api/generate-pdf`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ html: piHtml }),
+            });
 
-    };
+            if (!pdfRes.ok) {
+                const errBody = await pdfRes.text();
+                throw new Error(`PDF service error (${pdfRes.status}): ${errBody}`);
+            }
 
-    const generatePIPdfBase64 = async (pi: PIRecord): Promise<string | null> => {
-        try {
-            const htmlString = await buildPIHTML(pi);
-            const containerDiv = document.createElement('div');
-            containerDiv.style.position = 'absolute';
-            containerDiv.style.left = '-9999px';
-            containerDiv.style.top = '-9999px';
-            containerDiv.style.width = '794px';
-            containerDiv.style.backgroundColor = '#fff';
+            // Receive as ArrayBuffer → Uint8Array (binary-safe, no conversion)
+            const pdfArrayBuffer = await pdfRes.arrayBuffer();
+            const pdfUint8 = new Uint8Array(pdfArrayBuffer);
+            console.log(`✅ PDF received from Puppeteer: ${Math.round(pdfUint8.length / 1024)} KB`);
 
-            const style = `
-            <style>
-            * { margin:0; padding:0; box-sizing:border-box; }
-            .pdf-body { font-family: Calibri, 'Segoe UI', Verdana, sans-serif; color: #000; font-size: 11px; line-height: 1.2; padding: 24px; }
-            b { font-weight: 700; }
-            table { border-collapse: collapse; width: 100%; }
-            td, th { vertical-align: top; }
-            .outer { border: 1.5px solid #000; display: flex; flex-direction: column; min-height: 1000px; }
-            .grow { flex: 1; }
-            .bb { border-bottom: 1px solid #000; }
-            .br { border-right: 1px solid #000; }
-            .bt { border-top: 1px solid #000; }
-            .c4 { padding: 3px 5px; }
-            .ctr { text-align: center; }
-            .rgt { text-align: right; }
-            .mono { font-family: 'Courier New', monospace; }
-            .wm { position: absolute; top: 46%; left: 50%; transform: translate(-50%, -50%) rotate(-35deg); font-size: 56px; font-weight: 900; color: rgba(0,0,0,0.035); letter-spacing: 10px; text-transform: uppercase; pointer-events: none; z-index: 0; white-space: nowrap; }
-            </style>
-            `;
-            containerDiv.innerHTML = style + '<div class="pdf-body">' + htmlString + '</div>';
-            document.body.appendChild(containerDiv);
+            // 5. Upload raw binary to Supabase Storage
+            const piNum = pi.proforma_number;
+            const storagePath = `${piNum}/${piNum}.pdf`;
+            const { error: upErr } = await supabase.storage
+                .from('pi-documents')
+                .upload(storagePath, pdfUint8, {
+                    contentType: 'application/pdf',
+                    upsert: true,
+                });
 
-            await new Promise(r => setTimeout(r, 800)); // wait for images
-
-            const canvas = await html2canvas(containerDiv, { scale: 2, useCORS: true });
-            document.body.removeChild(containerDiv);
-
-            const imgData = canvas.toDataURL('image/png');
-            const pdf = new jsPDF('p', 'mm', 'a4');
-            const pdfWidth = pdf.internal.pageSize.getWidth();
-            const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-
-            pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-            return pdf.output('datauristring');
-        } catch (err) {
-            console.error('PDF Generation Error:', err);
-            return null;
+            if (upErr) {
+                console.error('❌ Storage upload error:', upErr.message);
+                return false;
+            }
+            console.log(`💾 PDF stored: ${storagePath} (${Math.round(pdfUint8.length / 1024)} KB)`);
+            return true;
+        } catch (err: any) {
+            console.error('❌ PDF generation/upload failed:', err.message);
+            return false;
         }
     };
+
+    const handleApproveSubmit = async () => {
+        if (!approveTarget) return;
+        if (!approvalEmails.trim()) { setError('Please enter at least one email address'); return; }
+        setApproving(true); setError(null);
+        try {
+            // 1. Approve PI & move stock (critical path — atomic RPC)
+            await approvePerformaInvoice(approveTarget.id);
+
+            // 2. Generate PI PDF & upload to storage (same HTML as Print)
+            const pdfUploaded = await generatePIPdfAndUpload(approveTarget);
+
+            // 3. Send dispatch email via Edge Function (non-blocking)
+            const emails = approvalEmails.split(',').map(e => e.trim()).filter(Boolean);
+            let emailSent = false;
+            try {
+                const { data: { session } } = await supabase.auth.getSession();
+                const res = await fetch(
+                    `https://sugvmurszfcneaeyoagv.supabase.co/functions/v1/send-dispatch-email`,
+                    {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${session?.access_token || ''}`,
+                        },
+                        body: JSON.stringify({
+                            pi_id: approveTarget.id,
+                            to: emails,
+                        }),
+                    }
+                );
+                const result = await res.json();
+                emailSent = result.success === true;
+                if (!emailSent) console.warn('Email send failed:', result.error);
+            } catch (emailErr: any) {
+                console.warn('Email dispatch failed (non-blocking):', emailErr.message);
+            }
+
+            const emailMsg = emailSent
+                ? ` — Email sent to ${emails.length} recipient(s)`
+                : pdfUploaded
+                    ? ` — Email notification pending`
+                    : ` — Email notification pending (PDF generation issue)`;
+            showToast('success', 'Dispatched Successfully', `${approveTarget.proforma_number} approved — Stock moved to In Transit${emailMsg}`);
+            setSuccessMsg(`${approveTarget.proforma_number} approved — Stock moved to In Transit${emailMsg}`);
+            setApproveTarget(null); setStep('LIST'); loadPIs();
+            setTimeout(() => setSuccessMsg(null), 6000);
+        } catch (err: any) { setError(err.message); } finally { setApproving(false); }
+    };
+
+    const totalPickedPallets = pickedMpls.reduce((s, p) => s + p.mpl.total_pallets, 0);
+    const totalPickedQty = pickedMpls.reduce((s, p) => s + p.mpl.total_quantity, 0);
+    const totalPickedWeight = pickedMpls.reduce((s, p) => s + Number(p.mpl.total_gross_weight_kg || 0), 0);
+
+    // ─── PRINT PI (exact match to enterprise document) ───
 
     const handlePrintPI = async (pi: PIRecord) => {
         try {

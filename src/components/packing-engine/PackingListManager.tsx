@@ -64,7 +64,7 @@ function StatusBadge({ status }: { status: string }) {
 export function PackingListManager({ accessToken, userRole, userPerms = {} }: PackingListManagerProps) {
     const supabase = getSupabaseClient();
     const hasPerms = Object.keys(userPerms).length > 0;
-    const canConfirm = userRole === 'L3' || (hasPerms ? userPerms['dispatch.edit'] === true : userRole === 'L2');
+    const canConfirm = userRole === 'L3' || (hasPerms ? userPerms['packing.dispatch.edit'] === true : userRole === 'L2');
 
     const [tab, setTab] = useState<TabKey>('packing-lists');
     const [packingLists, setPackingLists] = useState<PackingList[]>([]);

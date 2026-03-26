@@ -46,7 +46,7 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
 
     // RBAC
     const hasPerms = Object.keys(userPerms).length > 0;
-    const canCreate = userRole === 'L3' || (hasPerms ? userPerms['dispatch.create'] === true : userRole === 'L2');
+    const canCreate = userRole === 'L3' || (hasPerms ? userPerms['packing.dispatch.create'] === true : userRole === 'L2');
 
     const [readiness, setReadiness] = useState<DispatchReadiness[]>([]);
     const [pallets, setPallets] = useState<Pallet[]>([]);
