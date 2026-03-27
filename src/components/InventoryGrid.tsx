@@ -34,7 +34,7 @@ import {
     SummaryCard, SummaryCardsGrid,
     FilterBar as SharedFilterBar, ActionBar,
     SearchBox, StatusFilter, RefreshButton, ExportCSVButton, ClearFiltersButton,
-    ActionButton,
+    ActionButton, sharedThStyle, sharedTdStyle, Pagination
 } from './ui/SharedComponents';
 import { useAllItemsStockDashboard, useItemStockDistribution } from '../hooks/useInventory';
 import type { ItemStockDashboard, ItemStockDistribution, StockStatus } from '../types/inventory';
@@ -351,7 +351,7 @@ function StockDetailModal({ isOpen, onClose, item }: StockDetailModalProps) {
                                 color: 'var(--enterprise-gray-500)',
                                 marginTop: '8px',
                             }}>
-                                = US Warehouse + In Transit + S&V Warehouse − Reserved (Next Month)
+                                = US Warehouse + S&V Warehouse − Reserved (Next Month)
                             </p>
                         </div>
                     </>
@@ -413,8 +413,8 @@ export function InventoryGrid() {
     const [selectedItem, setSelectedItem] = useState<ItemStockDashboard | null>(null);
     const [showDetailModal, setShowDetailModal] = useState(false);
 
-    // Pagination state - show 20 items at a time
-    const [displayCount, setDisplayCount] = useState(20);
+    // Pagination state
+    const [page, setPage] = useState(0);
     const ITEMS_PER_PAGE = 20;
 
     // Handle refresh
@@ -508,23 +508,15 @@ export function InventoryGrid() {
         return result;
     }, [items, searchTerm, statusFilter, activeStatusFilter, sortField, sortDirection]);
 
-    // Paginated items - only show displayCount items
+    // Paginated items
     const displayedItems = useMemo(() => {
-        return filteredItems.slice(0, displayCount);
-    }, [filteredItems, displayCount]);
+        return filteredItems.slice(page * ITEMS_PER_PAGE, (page + 1) * ITEMS_PER_PAGE);
+    }, [filteredItems, page]);
 
-    // Check if there are more items to load
-    const hasMoreItems = displayCount < filteredItems.length;
-
-    // Reset display count when filters change
+    // Reset display page when filters change
     useEffect(() => {
-        setDisplayCount(ITEMS_PER_PAGE);
+        setPage(0);
     }, [searchTerm, statusFilter, activeStatusFilter, cardFilter]);
-
-    // Handle load more
-    const handleLoadMore = () => {
-        setDisplayCount(prev => prev + ITEMS_PER_PAGE);
-    };
 
     // Handle export
     const handleExport = useCallback(() => {
@@ -808,50 +800,12 @@ export function InventoryGrid() {
                             </table>
                         </div>
 
-                        {/* Load More Button - Outside scrollable area */}
-                        {hasMoreItems && (
-                            <div style={{
-                                padding: '20px',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                alignItems: 'center',
-                                gap: '12px',
-                                borderTop: '1px solid var(--table-border)',
-                                position: 'relative',
-                                zIndex: 10,
-                                backgroundColor: 'white',
-                            }}>
-                                <p style={{
-                                    fontSize: '13px',
-                                    color: 'var(--enterprise-gray-500)',
-                                    margin: 0,
-                                }}>
-                                    Showing {displayedItems.length} of {filteredItems.length} items
-                                </p>
-                                <Button
-                                    variant="primary"
-                                    onClick={handleLoadMore}
-                                >
-                                    Load More ({Math.min(ITEMS_PER_PAGE, filteredItems.length - displayedItems.length)} more)
-                                </Button>
-                            </div>
-                        )}
-
-                        {/* Show total when all loaded */}
-                        {!hasMoreItems && displayedItems.length > 0 && (
-                            <div style={{
-                                padding: '16px',
-                                textAlign: 'center',
-                                borderTop: '1px solid var(--table-border)',
-                            }}>
-                                <p style={{
-                                    fontSize: '13px',
-                                    color: 'var(--enterprise-gray-500)',
-                                }}>
-                                    Showing all {filteredItems.length} items
-                                </p>
-                            </div>
-                        )}
+                        <Pagination
+                            page={page}
+                            pageSize={ITEMS_PER_PAGE}
+                            totalCount={filteredItems.length}
+                            onPageChange={setPage}
+                        />
                     </>
                 )}
             </Card>

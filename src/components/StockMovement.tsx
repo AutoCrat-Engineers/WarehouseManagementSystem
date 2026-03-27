@@ -34,10 +34,8 @@ import {
 } from 'lucide-react';
 import { Card, Button, Badge, Modal, LoadingSpinner, EmptyState, ModuleLoader } from './ui/EnterpriseUI';
 import {
-  SummaryCard, SummaryCardsGrid,
-  FilterBar, ActionBar,
-  SearchBox, StatusFilter, DateRangeFilter,
-  ExportCSVButton, ClearFiltersButton, AddButton,
+  SummaryCard, SummaryCardsGrid, SearchBox, FilterBar, ActionBar, ActionButton, RefreshButton,
+  StatusFilter, AddButton, ExportCSVButton, DateRangeFilter, ClearFiltersButton, Pagination
 } from './ui/SharedComponents';
 import { getSupabaseClient } from '../utils/supabase/client';
 import { createPackingFromMovementApproval, createPackingFromMovementRejection } from './packing/packingService';
@@ -389,7 +387,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
 
   const searchRef = useRef<HTMLDivElement>(null);
   const PAGE_SIZE = 20;
-  const [displayCount, setDisplayCount] = useState(PAGE_SIZE);
+  const [page, setPage] = useState(0);
   const [totalDbCount, setTotalDbCount] = useState(0);
   const realtimeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -397,14 +395,12 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   // FETCH MOVEMENTS FOR MAIN PAGE
   // ============================================================================
 
-  /** Fetch a page of movements from the server. When `append` is true the new
-   *  rows are added to the existing state ("Load More"); otherwise the list is
-   *  replaced (initial load / refresh). */
-  const fetchMovements = useCallback(async (append = false, offset = 0) => {
-    if (!append) setLoading(true);
+  /** Fetch a page of movements from the server. */
+  const fetchMovements = useCallback(async (offset = 0) => {
+    setLoading(true);
     try {
       // STEP 0 — lightweight count query (only on first load / refresh)
-      if (!append) {
+      if (offset === 0) {
         const { count } = await supabase
           .from('inv_movement_headers')
           .select('id', { count: 'exact', head: true });
@@ -515,11 +511,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
         };
       });
 
-      if (append) {
-        setMovements(prev => [...prev, ...records]);
-      } else {
-        setMovements(records);
-      }
+      setMovements(records);
     } catch (err) { console.error('Error fetching movements:', err); }
     finally { setLoading(false); }
   }, [supabase]);
@@ -543,7 +535,8 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
     } catch { /* non-critical */ }
   }, [supabase]);
 
-  useEffect(() => { fetchMovements(); fetchSummaryCounts(); }, [fetchMovements, fetchSummaryCounts]);
+  useEffect(() => { fetchMovements(page * PAGE_SIZE); }, [fetchMovements, page]);
+  useEffect(() => { fetchSummaryCounts(); }, [fetchSummaryCounts]);
 
   // Real-time subscription: debounced auto-refresh on approval/status changes
   useEffect(() => {
@@ -712,9 +705,15 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
     setSearchQuery(item.part_number || item.item_code);
     setShowDropdown(false);
     fetchWarehouseStocks(item.item_code);
-    setSelectedWarehouse(''); setStockType(''); setSelectedRoute(null);
+    
+    // Apply user-requested defaults automatically
+    setStockType('STOCK_IN');
+    setSelectedWarehouse('PW');
+    setReferenceType('WORK_ORDER');
+    setReferenceId('AE/WO/D/');
+    
     setQuantity(0); setNote(''); setFormMessage(null);
-    setSelectedCategory(''); setReferenceType(''); setReferenceId('');
+    setSelectedCategory(''); 
     setBoxCount(0); setInnerBoxQty(0); setPackingSpecError(null);
   };
 
@@ -1872,7 +1871,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
             overflow: 'hidden', boxShadow: 'var(--shadow-sm)',
             opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto',
           }}>
-            <div className="table-responsive" style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 380px)', overflowY: 'auto' }}>
+            <div className="table-responsive" style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                 <colgroup>
                   <col style={{ width: '12%' }} />
@@ -1884,7 +1883,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                   <col style={{ width: '14%' }} />
                   <col style={{ width: '11%' }} />
                 </colgroup>
-                <thead style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--enterprise-gray-50)' }}>
+                <thead style={{ background: 'var(--enterprise-gray-50)' }}>
                   <tr>
                     <th style={thStyle}>Movement #</th>
                     <th style={thStyle}>Date</th>
@@ -1950,50 +1949,32 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                 </tbody>
               </table>
 
-              {/* Load More — inside the scrollable area so it only shows at the bottom */}
-              {hasMore && (
-                <div style={{
-                  padding: '20px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  gap: '10px',
-                  borderTop: '1px solid var(--enterprise-gray-200)',
-                  background: 'white',
-                }}>
-                  <p style={{
-                    fontSize: '13px',
-                    color: 'var(--enterprise-gray-500)',
-                    margin: 0,
-                  }}>
-                    Showing {movements.length} of {totalDbCount} movements
-                  </p>
-                  <button className="load-more-btn" onClick={() => fetchMovements(true, movements.length)}>
-                    Load More
-                  </button>
-                </div>
-              )}
-
-              {/* Show total when all loaded */}
-              {!hasMore && displayedMovements.length > 0 && (
-                <div style={{
-                  padding: '14px',
-                  textAlign: 'center',
-                  borderTop: '1px solid var(--enterprise-gray-200)',
-                }}>
-                  <p style={{
-                    fontSize: '13px',
-                    color: 'var(--enterprise-gray-500)',
-                    margin: 0,
-                  }}>
-                    Showing all {movements.length} movements
-                  </p>
-                </div>
+              {filteredMovements.length > 0 && (
+                <Pagination
+                  page={page}
+                  pageSize={PAGE_SIZE}
+                  totalCount={totalDbCount}
+                  onPageChange={setPage}
+                />
               )}
             </div>
           </div>
         </>
       )}
+
+      {/* Results Summary */}
+      <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          fontSize: '12px',
+          color: 'var(--enterprise-gray-600)',
+          marginTop: '16px'
+      }}>
+          <span>
+              Total Records: {totalDbCount}
+          </span>
+      </div>
 
       {/* ─── NEW MOVEMENT MODAL ─── */}
       <Modal isOpen={showModal} onClose={closeModal} title="New Stock Movement" maxWidth="780px">
@@ -2026,12 +2007,20 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                 placeholder="Type to search..." style={{ ...mInputStyle, paddingLeft: '38px' }} />
               <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
               {searching && <Loader2 size={16} style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', color: '#3b82f6', animation: 'spin 1s linear infinite' }} />}
-              {showDropdown && searchResults.length > 0 && (
-                <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', boxShadow: '0 10px 25px rgba(0,0,0,0.12)', marginTop: '4px', maxHeight: '200px', overflowY: 'auto' }}>
+            </div>
+            {showDropdown && searchResults.length > 0 && (
+              <>
+                <style>{`
+                  @keyframes smDropdownSlideIn {
+                    from { opacity: 0; transform: translateY(-6px); }
+                    to { opacity: 1; transform: translateY(0); }
+                  }
+                `}</style>
+                <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', marginTop: '4px', animation: 'smDropdownSlideIn 0.35s cubic-bezier(0.4, 0, 0.2, 1)' }}>
                   {searchResults.map(item => (
                     <button key={item.id} onClick={() => handleSelectItem(item)} style={{
-                      width: '100%', padding: '8px 14px', border: 'none', background: 'none', textAlign: 'left',
-                      cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '1px',
+                      width: '100%', padding: '10px 14px', border: 'none', background: 'none', textAlign: 'left',
+                      cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '2px',
                       borderBottom: '1px solid #f3f4f6', transition: 'background 0.15s',
                     }}
                       onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#f0f9ff'; }}
@@ -2044,8 +2033,8 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                     </button>
                   ))}
                 </div>
-              )}
-            </div>
+              </>
+            )}
           </div>
 
           {/* Item Details + Stock (after selection) */}
@@ -2142,14 +2131,20 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div>
                   <label style={mLabelStyle}>Select Warehouse *</label>
-                  <select value={selectedWarehouse} onChange={e => setSelectedWarehouse(e.target.value as LocationCode)} style={mSelectStyle}>
-                    <option value="">Choose warehouse...</option>
-                    {getWarehousesForStockType(stockType).map(code => (
-                      <option key={code} value={code}>
-                        {code === 'CUSTOMER' ? 'Customer' : `${LOCATIONS[code as LocationCode]?.name || code} (${code})`}
-                      </option>
-                    ))}
-                  </select>
+                  {stockType === 'STOCK_IN' ? (
+                    <div style={{ padding: '0 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '13px', backgroundColor: '#f9fafb', color: '#111827', display: 'flex', alignItems: 'center', height: '42px', fontWeight: 500, userSelect: 'none' }}>
+                      FG Warehouse (PW)
+                    </div>
+                  ) : (
+                    <select value={selectedWarehouse} onChange={e => setSelectedWarehouse(e.target.value as LocationCode)} style={mSelectStyle}>
+                      <option value="">Choose warehouse...</option>
+                      {getWarehousesForStockType(stockType).map(code => (
+                        <option key={code} value={code}>
+                          {code === 'CUSTOMER' ? 'Customer' : `${LOCATIONS[code as LocationCode]?.name || code} (${code})`}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
                 <div>
                   <label style={mLabelStyle}>Movement Route</label>

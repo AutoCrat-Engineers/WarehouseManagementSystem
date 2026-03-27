@@ -834,7 +834,7 @@ export default function App() {
                         </button>
                       )}
 
-                      {/* Traceability */}
+                      {/* Traceability
                       {canAccessViewLocal('pe-traceability') && (
                         <button
                           onClick={() => handleNavigation('pe-traceability')}
@@ -853,7 +853,7 @@ export default function App() {
                           <Eye size={15} strokeWidth={currentView === 'pe-traceability' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-traceability' ? 1 : 0.6 }} />
                           <span>Traceability</span>
                         </button>
-                      )}
+                      )} */}
                     </div>
                   </div>
                 );

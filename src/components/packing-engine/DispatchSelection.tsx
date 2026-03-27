@@ -17,7 +17,7 @@ import {
 import { Card, Modal, EmptyState, ModuleLoader } from '../ui/EnterpriseUI';
 import {
     SummaryCard, SummaryCardsGrid, SearchBox, FilterBar, ActionBar,
-    ActionButton, RefreshButton,
+    ActionButton, RefreshButton, Pagination
 } from '../ui/SharedComponents';
 import * as svc from './packingEngineService';
 import type { Pallet, DispatchReadiness, PackingList } from './packingEngineService';
@@ -70,6 +70,8 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
         toastTimer.current = setTimeout(() => setToast(null), duration);
     }, []);
     const [refreshing, setRefreshing] = useState(false);
+    const [page, setPage] = useState(0);
+    const PAGE_SIZE = 15;
 
     // ── OPTIONAL SESSION PERSISTENCE for form state (graceful — no-ops if migration not run) ──
     const { patchSession } = useSessionPersistence(
@@ -211,6 +213,14 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
             (r.customer_name || '').toLowerCase().includes(s);
     }), [readiness, searchTerm, cardFilter]);
 
+    useEffect(() => {
+        setPage(0);
+    }, [searchTerm, cardFilter]);
+
+    const displayedRecords = useMemo(() => {
+        return filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+    }, [filtered, page]);
+
     const totalReady = readiness.reduce((s, r) => s + (r.ready_pallets || 0), 0);
     const totalPartial = readiness.reduce((s, r) => s + (r.partial_pallets || 0), 0);
     const totalReadyQty = readiness.reduce((s, r) => s + (r.ready_qty || 0), 0);
@@ -327,15 +337,15 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
                                     <th style={{ ...th, width: 32, padding: '10px 6px' }} />
                                     <th style={th}>Item</th>
                                     <th style={th}>MSN</th>
-                                    <th style={{ ...th, textAlign: 'center' }}>Pallet Qty / Inner Box Qty</th>
+                                    <th style={{ ...th, textAlign: 'center' }}>Pallet Qty</th>
                                     <th style={{ ...th, textAlign: 'center' }}>Ready</th>
                                     <th style={{ ...th, textAlign: 'center' }}>Partial</th>
                                     <th style={{ ...th, textAlign: 'center' }}>Ready Qty</th>
-                                    <th style={{ ...th, textAlign: 'center' }}>Inner Box Qty</th>
+                                    <th style={{ ...th, textAlign: 'center' }}>Total Containers</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {filtered.map(r => (
+                                {displayedRecords.map(r => (
                                     <React.Fragment key={r.item_code}>
                                         <tr
                                             style={{ cursor: 'pointer', transition: 'background 0.15s' }}
@@ -355,7 +365,7 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
                                             </td>
                                             <td style={{ ...td, fontFamily: 'monospace', fontSize: 12, whiteSpace: 'nowrap' }}>{r.master_serial_no || '—'}</td>
                                             <td style={{ ...td, textAlign: 'center', fontWeight: 600, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
-                                                {(r.contract_outer_qty || 0).toLocaleString()} / {r.inner_box_qty || 0}
+                                                {(r.contract_outer_qty || 0).toLocaleString()}
                                             </td>
                                             <td style={{ ...td, textAlign: 'center' }}>
                                                 <span style={{
@@ -545,7 +555,30 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
                         </table>
                     </div>
                 )}
+                {filtered.length > 0 && (
+                    <Pagination
+                        page={page}
+                        pageSize={PAGE_SIZE}
+                        totalCount={filtered.length}
+                        onPageChange={setPage}
+                    />
+                )}
             </Card>
+
+            {/* Results Summary */}
+            <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                fontSize: '12px',
+                color: 'var(--enterprise-gray-600)',
+                marginTop: '16px'
+            }}>
+                <span>
+                    Showing {filtered.length} of {readiness.length} items
+                    {(searchTerm || cardFilter !== 'ALL') && ' (filtered)'}
+                </span>
+            </div>
 
 
 

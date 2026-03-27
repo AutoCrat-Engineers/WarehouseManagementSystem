@@ -15,12 +15,12 @@ import { getSupabaseClient } from '../../utils/supabase/client';
 import * as svc from './packingEngineService';
 import QRCode from 'qrcode';
 import type { PackingSpec } from './packingEngineService';
-import { Card, Button, Badge, EmptyState, ModuleLoader } from '../ui/EnterpriseUI';
+import { Card, Button, Badge, EmptyState, ModuleLoader, Modal, Label, Input } from '../ui/EnterpriseUI';
 import {
     SummaryCard, SummaryCardsGrid,
     FilterBar as SharedFilterBar, ActionBar,
     SearchBox, RefreshButton, StatusFilter, DateRangeFilter,
-    ExportCSVButton,
+    ExportCSVButton, Pagination,
 } from '../ui/SharedComponents';
 import { useSessionPersistence } from '../../hooks/useSessionPersistence';
 
@@ -57,7 +57,7 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
     const [dateFrom, setDateFrom] = useState('');
     const [dateTo, setDateTo] = useState('');
     const [page, setPage] = useState(0);
-    const pageSize = 25;
+    const pageSize = 20;
 
     // Toast notification (same pattern as ItemMaster/StockMovement)
     const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; title: string; text: string } | null>(null);
@@ -482,7 +482,8 @@ td,th{vertical-align:top}
 
 <table><tr><td class="bb c4 ctr" style="padding:5px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:1px">${D.itemHdr}<br/><span style="font-weight:700;font-size:9px">${D.itemSub}</span></td></tr></table>
 
-<table>
+<div class="grow" style="overflow:hidden;border-bottom:1px solid #000">
+<table style="table-layout:fixed;width:100%">
 <colgroup><col style="width:5%"/><col style="width:15%"/><col style="width:22%"/><col style="width:14%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
 <tr style="background:#f5f5f5">
 <th class="bb br c4 lbl ctr">SL NO</th>
@@ -496,14 +497,12 @@ td,th{vertical-align:top}
 <th class="bb c4 lbl rgt">Gross Wt (kg)</th>
 </tr>
 ${itemRows}
+<tr><td class="br" style="height:2000px"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td></td></tr>
 </table>
-<table style="flex:1">
-<colgroup><col style="width:5%"/><col style="width:15%"/><col style="width:22%"/><col style="width:14%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
-<tr><td class="br" style="height:100%"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td></td></tr>
-</table>
+</div>
 
 
-<table>
+<table style="table-layout:fixed;width:100%">
 <colgroup><col style="width:5%"/><col style="width:15%"/><col style="width:22%"/><col style="width:14%"/><col style="width:6%"/><col style="width:12%"/><col style="width:12%"/><col style="width:14%"/></colgroup>
 <tr style="background:#f5f5f5">
 <td class="bt br c4"></td>
@@ -1230,48 +1229,163 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
                                 ))}</tbody>
                             </table>
                         </div>
-                        {totalPages > 1 && <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderTop: '1px solid var(--table-border)', fontSize: 13, color: 'var(--enterprise-gray-600)' }}><span>Showing {page * pageSize + 1}–{Math.min((page + 1) * pageSize, totalCount)} of {totalCount}</span><div style={{ display: 'flex', gap: 4 }}><button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #d1d5db', backgroundColor: page === 0 ? '#f9fafb' : '#fff', cursor: page === 0 ? 'default' : 'pointer', opacity: page === 0 ? 0.5 : 1 }}><ChevronLeft size={14} /></button><span style={{ padding: '6px 12px', fontWeight: 600 }}>{page + 1} / {totalPages}</span><button onClick={() => setPage(Math.min(totalPages - 1, page + 1))} disabled={page >= totalPages - 1} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #d1d5db', backgroundColor: page >= totalPages - 1 ? '#f9fafb' : '#fff', cursor: page >= totalPages - 1 ? 'default' : 'pointer', opacity: page >= totalPages - 1 ? 0.5 : 1 }}><ChevronRight size={14} /></button></div></div>}
+                        {mpls.length > 0 && (
+                            <Pagination
+                                page={page}
+                                pageSize={pageSize}
+                                totalCount={totalCount}
+                                onPageChange={setPage}
+                            />
+                        )}
                     </>
                 )
                 }
-            </Card >
+            </Card>
+
+            {/* Results Summary */}
+            <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                fontSize: '12px',
+                color: 'var(--enterprise-gray-600)',
+                marginTop: '16px'
+            }}>
+                <span>
+                    Total Records: {totalCount}
+                </span>
+            </div>
 
             {/* Cancel Modal — Type-to-confirm (matches delete pattern) */}
-            {
-                cancelTarget && <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}><div style={{ backgroundColor: '#fff', borderRadius: 16, padding: 28, width: 500, maxWidth: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }} onCopy={e => e.preventDefault()}>
-                    {/* Warning Banner */}
-                    <div style={{ background: 'linear-gradient(135deg, rgba(220,38,38,0.05) 0%, rgba(220,38,38,0.1) 100%)', border: '1px solid rgba(220,38,38,0.2)', borderRadius: 10, padding: 16, display: 'flex', gap: 12, alignItems: 'flex-start', marginBottom: 20 }}>
-                        <AlertTriangle size={24} style={{ color: '#dc2626', flexShrink: 0, marginTop: 2 }} />
+            {cancelTarget && (
+                <Modal isOpen={!!cancelTarget} onClose={() => { setCancelTarget(null); setCancelReason(''); setCancelConfirmInput(''); }} title="Cancel Packing List" maxWidth="500px">
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', userSelect: 'none' }} onCopy={e => e.preventDefault()}>
+                        {/* Warning Banner */}
+                        <div style={{
+                            background: 'linear-gradient(135deg, rgba(220,38,38,0.05) 0%, rgba(220,38,38,0.1) 100%)',
+                            border: '1px solid rgba(220,38,38,0.2)',
+                            borderRadius: 'var(--border-radius-md)',
+                            padding: '16px',
+                            display: 'flex',
+                            gap: '12px',
+                            alignItems: 'flex-start',
+                        }}>
+                            <AlertTriangle size={24} style={{ color: 'var(--enterprise-error)', flexShrink: 0 }} />
+                            <div>
+                                <p style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-error)', marginBottom: '4px' }}>
+                                    This action cannot be undone
+                                </p>
+                                <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--enterprise-gray-600)' }}>
+                                    This will cancel <strong>{cancelTarget.mpl_number}</strong> and release <strong>{cancelTarget.total_pallets} pallet(s)</strong> back to READY state.
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* MPL Info */}
+                        <div style={{
+                            background: 'var(--enterprise-gray-50)',
+                            borderRadius: 'var(--border-radius-md)',
+                            padding: '16px',
+                        }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                <div>
+                                    <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', marginBottom: '4px' }}>MPL Number</p>
+                                    <p style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-primary)', fontFamily: 'monospace' }}>{cancelTarget.mpl_number}</p>
+                                </div>
+                                <div>
+                                    <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', marginBottom: '4px' }}>Status</p>
+                                    <div><StatusBadge status={cancelTarget.status} /></div>
+                                </div>
+                                <div>
+                                    <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', marginBottom: '4px' }}>Pallets</p>
+                                    <p style={{ fontWeight: 'var(--font-weight-semibold)' }}>{cancelTarget.total_pallets}</p>
+                                </div>
+                                <div>
+                                    <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', marginBottom: '4px' }}>Total Qty</p>
+                                    <p style={{ fontWeight: 'var(--font-weight-semibold)' }}>{cancelTarget.total_quantity.toLocaleString()} PCS</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Type MPL Number to confirm */}
                         <div>
-                            <p style={{ fontWeight: 700, color: '#dc2626', margin: '0 0 4px', fontSize: 15 }}>Cancel Packing List</p>
-                            <p style={{ fontSize: 13, color: '#6b7280', margin: 0 }}>This will cancel <strong>{cancelTarget.mpl_number}</strong> and release <strong>{cancelTarget.total_pallets} pallet(s)</strong> back to READY state. This action cannot be undone.</p>
+                            <Label required>Type MPL Number to confirm</Label>
+                            <input 
+                                type="text" 
+                                value={cancelConfirmInput} 
+                                onChange={e => setCancelConfirmInput(e.target.value)} 
+                                placeholder={`Enter "${cancelTarget.mpl_number}" to confirm`} 
+                                onPaste={e => e.preventDefault()} 
+                                onCopy={e => e.preventDefault()} 
+                                onCut={e => e.preventDefault()} 
+                                onDrop={e => e.preventDefault()} 
+                                onContextMenu={e => e.preventDefault()} 
+                                autoComplete="off" 
+                                style={{
+                                    width: '100%',
+                                    padding: '8px 12px',
+                                    fontSize: 'var(--font-size-base)',
+                                    fontWeight: 'var(--font-weight-normal)',
+                                    color: 'var(--foreground)',
+                                    backgroundColor: 'var(--background)',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: 'var(--border-radius-md)',
+                                    outline: 'none',
+                                    transition: 'all var(--transition-fast)',
+                                    boxSizing: 'border-box'
+                                }} 
+                            />
+                            <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '6px' }}>
+                                Must match exactly: <strong>{cancelTarget.mpl_number}</strong>
+                            </p>
+                        </div>
+
+                        {/* Reason */}
+                        <div>
+                            <Label required>Reason for cancellation</Label>
+                            <textarea 
+                                value={cancelReason} 
+                                onChange={e => setCancelReason(e.target.value)} 
+                                placeholder="Please provide the reason for cancelling this packing list..." 
+                                rows={3} 
+                                style={{
+                                    width: '100%',
+                                    padding: '8px 12px',
+                                    fontSize: 'var(--font-size-base)',
+                                    color: 'var(--foreground)',
+                                    backgroundColor: 'var(--background)',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: 'var(--border-radius-md)',
+                                    outline: 'none',
+                                    resize: 'vertical',
+                                    fontFamily: 'inherit',
+                                    transition: 'all var(--transition-fast)',
+                                    boxSizing: 'border-box'
+                                }} 
+                            />
+                        </div>
+
+                        {/* Actions */}
+                        <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', marginTop: '8px' }}>
+                            <Button 
+                                variant="secondary" 
+                                onClick={() => { setCancelTarget(null); setCancelReason(''); setCancelConfirmInput(''); }} 
+                                style={{ flex: 1 }}
+                            >
+                                Keep
+                            </Button>
+                            <Button 
+                                variant="danger" 
+                                disabled={cancelling || cancelConfirmInput.trim() !== cancelTarget.mpl_number || !cancelReason.trim()}
+                                onClick={handleCancelConfirm} 
+                                style={{ flex: 1, gap: '8px' }}
+                            >
+                                {cancelling ? <><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Cancelling...</> : <><XCircle size={16} /> Cancel Packing List</>}
+                            </Button>
                         </div>
                     </div>
-                    {/* MPL Info */}
-                    <div style={{ background: '#f9fafb', borderRadius: 8, padding: 14, marginBottom: 16, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: 13 }}>
-                        <div><span style={{ color: '#6b7280', fontSize: 11, textTransform: 'uppercase', fontWeight: 700 }}>MPL Number</span><div style={{ fontWeight: 700, color: '#1e3a8a', fontFamily: 'monospace' }}>{cancelTarget.mpl_number}</div></div>
-                        <div><span style={{ color: '#6b7280', fontSize: 11, textTransform: 'uppercase', fontWeight: 700 }}>Status</span><div><StatusBadge status={cancelTarget.status} /></div></div>
-                        <div><span style={{ color: '#6b7280', fontSize: 11, textTransform: 'uppercase', fontWeight: 700 }}>Pallets</span><div style={{ fontWeight: 600 }}>{cancelTarget.total_pallets}</div></div>
-                        <div><span style={{ color: '#6b7280', fontSize: 11, textTransform: 'uppercase', fontWeight: 700 }}>Total Qty</span><div style={{ fontWeight: 600 }}>{cancelTarget.total_quantity.toLocaleString()} PCS</div></div>
-                    </div>
-                    {/* Type MPL Number to confirm */}
-                    <div style={{ marginBottom: 14 }}>
-                        <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 6 }}>Type MPL Number to confirm <span style={{ color: '#dc2626' }}>*</span></label>
-                        <input type="text" value={cancelConfirmInput} onChange={e => setCancelConfirmInput(e.target.value)} onPaste={e => e.preventDefault()} onCopy={e => e.preventDefault()} onCut={e => e.preventDefault()} onDrop={e => e.preventDefault()} onContextMenu={e => e.preventDefault()} autoComplete="off" placeholder={`Enter "${cancelTarget.mpl_number}" to confirm`} style={{ width: '100%', padding: '10px 14px', border: `1px solid ${cancelConfirmInput.trim() === cancelTarget.mpl_number ? '#16a34a' : '#d1d5db'}`, borderRadius: 8, fontSize: 14, fontFamily: 'monospace', fontWeight: 600, outline: 'none', boxSizing: 'border-box', transition: 'border-color 200ms' }} />
-                        <p style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>Must match exactly: <strong style={{ color: '#374151' }}>{cancelTarget.mpl_number}</strong></p>
-                    </div>
-                    {/* Reason */}
-                    <div style={{ marginBottom: 20 }}>
-                        <label style={{ fontSize: 12, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 6 }}>Reason for cancellation <span style={{ color: '#dc2626' }}>*</span></label>
-                        <textarea value={cancelReason} onChange={e => setCancelReason(e.target.value)} placeholder="Please provide the reason for cancelling this packing list..." rows={3} style={{ width: '100%', padding: '10px 14px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13, resize: 'vertical', outline: 'none', boxSizing: 'border-box' }} />
-                    </div>
-                    {/* Actions */}
-                    <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-                        <button onClick={() => { setCancelTarget(null); setCancelReason(''); setCancelConfirmInput(''); }} style={{ padding: '10px 20px', borderRadius: 8, border: '1px solid #d1d5db', backgroundColor: '#fff', cursor: 'pointer', fontWeight: 600, fontSize: 14 }}>Keep</button>
-                        <button onClick={handleCancelConfirm} disabled={cancelling || cancelConfirmInput.trim() !== cancelTarget.mpl_number || !cancelReason.trim()} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', backgroundColor: (cancelling || cancelConfirmInput.trim() !== cancelTarget.mpl_number || !cancelReason.trim()) ? '#e5e7eb' : '#dc2626', color: (cancelling || cancelConfirmInput.trim() !== cancelTarget.mpl_number || !cancelReason.trim()) ? '#9ca3af' : '#fff', cursor: (cancelling || cancelConfirmInput.trim() !== cancelTarget.mpl_number || !cancelReason.trim()) ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', gap: 6, transition: 'all 200ms' }}>{cancelling ? <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Cancelling...</> : <><XCircle size={14} /> Cancel Packing List</>}</button>
-                    </div>
-                </div></div>
-            }
+                </Modal>
+            )}
 
             {/* Detail Slideout */}
             {

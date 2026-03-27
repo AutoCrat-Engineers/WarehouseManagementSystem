@@ -351,7 +351,7 @@ html,body{font-family:Arial,Helvetica,sans-serif;color:#000;font-size:9px;line-h
 b{font-weight:700}
 table{border-collapse:collapse;width:100%}
 td,th{vertical-align:top}
-.outer{border:1.5px solid #000;display:flex;flex-direction:column;min-height:calc(100vh - 12mm)}
+.outer{border:1.5px solid #000;display:flex;flex-direction:column;height:calc(100vh - 12mm)}
 .grow{flex:1}
 .bb{border-bottom:1px solid #000}
 .br{border-right:1px solid #000}
@@ -451,8 +451,9 @@ td,th{vertical-align:top}
 <!-- ═══ ITEM DESCRIPTION ═══ -->
 <table><tr><td class="bb c4 ctr" style="padding:5px;font-weight:800;font-size:10px;text-transform:uppercase;letter-spacing:1px">${D.itemHdr}<br/><span style="font-weight:700;font-size:9px">${D.itemSub}</span></td></tr></table>
 
-<!-- ═══ ITEMS TABLE ═══ -->
-<table>
+<!-- ═══ ITEMS TABLE with vertical column lines ═══ -->
+<div class="grow" style="overflow:hidden;border-bottom:1px solid #000">
+<table style="table-layout:fixed;width:100%">
 <colgroup><col style="width:5%"/><col style="width:14%"/><col style="width:20%"/><col style="width:6%"/><col style="width:11%"/><col style="width:6%"/><col style="width:11%"/><col style="width:12%"/><col style="width:15%"/></colgroup>
 <tr style="background:#f5f5f5">
 <th class="bb br c4 lbl ctr">SL NO</th>
@@ -466,13 +467,12 @@ td,th{vertical-align:top}
 <th class="bb c4 lbl rgt">Gross Wt (kg)</th>
 </tr>
 ${itemRows}
+<tr><td class="br" style="height:2000px"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td class="br"></td><td></td></tr>
 </table>
-
-<!-- ═══ SPACER (pushes totals to bottom) ═══ -->
-<div class="grow"></div>
+</div>
 
 <!-- ═══ TOTALS ═══ -->
-<table>
+<table style="table-layout:fixed;width:100%">
 <colgroup><col style="width:5%"/><col style="width:14%"/><col style="width:20%"/><col style="width:6%"/><col style="width:11%"/><col style="width:6%"/><col style="width:11%"/><col style="width:12%"/><col style="width:15%"/></colgroup>
 <tr style="background:#f5f5f5">
 <td class="bt br c4"></td>

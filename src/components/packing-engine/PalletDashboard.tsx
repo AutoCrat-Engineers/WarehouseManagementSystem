@@ -17,7 +17,7 @@ import {
 import { Card, Modal, EmptyState, ModuleLoader, Button } from '../ui/EnterpriseUI';
 import {
     SummaryCard, SummaryCardsGrid, SearchBox, FilterBar, ActionBar,
-    StatusFilter, RefreshButton, ExportCSVButton, DateRangeFilter, ClearFiltersButton,
+    StatusFilter, RefreshButton, ExportCSVButton, DateRangeFilter, ClearFiltersButton, Pagination,
 } from '../ui/SharedComponents';
 import * as svc from './packingEngineService';
 import type { Pallet, PalletState, PackContainer } from './packingEngineService';
@@ -107,8 +107,8 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
     const [palletContainers, setPalletContainers] = useState<PackContainer[]>([]);
     const [loadingContainers, setLoadingContainers] = useState(false);
     const [selectedPallet, setSelectedPallet] = useState<Pallet | null>(null);
-    const [displayCount, setDisplayCount] = useState(20);
-    const ITEMS_PER_PAGE = 20;
+    const [page, setPage] = useState(0);
+    const PAGE_SIZE = 20;
 
     // Date range filter
     const [dateFrom, setDateFrom] = useState('');
@@ -204,11 +204,12 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
         });
     }, [pallets, searchTerm, stateFilter, allContainerMap, dateFrom, dateTo]);
 
-    // Reset display count when search/filter changes
-    useEffect(() => { setDisplayCount(ITEMS_PER_PAGE); }, [searchTerm, stateFilter, dateFrom, dateTo]);
+    // Reset page when search/filter changes
+    useEffect(() => { setPage(0); }, [searchTerm, stateFilter, dateFrom, dateTo]);
 
-    const visiblePallets = useMemo(() => filtered.slice(0, displayCount), [filtered, displayCount]);
-    const hasMore = displayCount < filtered.length;
+    const visiblePallets = useMemo(() => {
+        return filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+    }, [filtered, page]);
 
     // ────── Counts ──────
     const counts = useMemo(() => ({
@@ -544,53 +545,32 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
                             </tbody>
                         </table>
 
-                        {/* Load More Button - Outside scrollable area */}
-                        {hasMore && (
-                            <div style={{
-                                padding: '20px',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                alignItems: 'center',
-                                gap: '12px',
-                                borderTop: '1px solid var(--table-border, #e5e7eb)',
-                                position: 'relative',
-                                zIndex: 10,
-                                backgroundColor: 'white',
-                            }}>
-                                <p style={{
-                                    fontSize: '13px',
-                                    color: 'var(--enterprise-gray-500, #6b7280)',
-                                    margin: 0,
-                                }}>
-                                    Showing {visiblePallets.length} of {filtered.length} pallets
-                                </p>
-                                <Button
-                                    variant="primary"
-                                    onClick={() => setDisplayCount(prev => prev + ITEMS_PER_PAGE)}
-                                >
-                                    Load More ({Math.min(ITEMS_PER_PAGE, filtered.length - displayCount)} more)
-                                </Button>
-                            </div>
-                        )}
-
-                        {/* Show total when all loaded */}
-                        {!hasMore && visiblePallets.length > 0 && (
-                            <div style={{
-                                padding: '16px',
-                                textAlign: 'center',
-                                borderTop: '1px solid var(--table-border, #e5e7eb)',
-                            }}>
-                                <p style={{
-                                    fontSize: '13px',
-                                    color: 'var(--enterprise-gray-500, #6b7280)',
-                                }}>
-                                    Showing all {filtered.length} pallets
-                                </p>
-                            </div>
+                        {filtered.length > 0 && (
+                            <Pagination
+                                page={page}
+                                pageSize={PAGE_SIZE}
+                                totalCount={filtered.length}
+                                onPageChange={setPage}
+                            />
                         )}
                     </div>
                 )}
             </Card>
+
+            {/* Results Summary */}
+            <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                fontSize: '12px',
+                color: 'var(--enterprise-gray-600)',
+                marginTop: '16px'
+            }}>
+                <span>
+                    Showing {filtered.length} of {pallets.length} items
+                    {(searchTerm || stateFilter !== 'ALL' || dateFrom || dateTo) && ' (filtered)'}
+                </span>
+            </div>
 
             <style>{`
                 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }

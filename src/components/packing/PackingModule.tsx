@@ -23,7 +23,7 @@ import {
     SummaryCard, SummaryCardsGrid,
     FilterBar, ActionBar,
     SearchBox, StatusFilter, DateRangeFilter,
-    ExportCSVButton, RefreshButton,
+    ExportCSVButton, RefreshButton, Pagination
 } from '../ui/SharedComponents';
 import { Printer, CheckCircle2, Clock, PackageOpen, X, XCircle, AlertTriangle, Info } from 'lucide-react';
 import { PackingDetail } from './PackingDetail';
@@ -86,7 +86,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
     const [currentUserName, setCurrentUserName] = useState('');
 
     const PAGE_SIZE = 20;
-    const [displayCount, setDisplayCount] = useState(PAGE_SIZE);
+    const [page, setPage] = useState(0);
     const [totalDbCount, setTotalDbCount] = useState(0);
     const realtimeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -105,11 +105,11 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
     }, [supabase]);
 
     // Fetch packing requests — server-side paginated
-    const fetchRequests = useCallback(async (append = false, offset = 0) => {
-        if (!append) setLoading(true);
+    const fetchRequests = useCallback(async (offset = 0) => {
+        setLoading(true);
         try {
             // Lightweight count query (only on first load / refresh)
-            if (!append) {
+            if (offset === 0) {
                 const countResult = await getSupabaseClient()
                     .from('packing_requests')
                     .select('id', { count: 'exact', head: true })
@@ -119,11 +119,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
             const data = await svc.fetchPackingRequests(false, PAGE_SIZE, offset);
             // Filter out REJECTED — only show actionable records
             const filtered = data.filter(r => r.status !== 'REJECTED');
-            if (append) {
-                setRequests(prev => [...prev, ...filtered]);
-            } else {
-                setRequests(filtered);
-            }
+            setRequests(filtered);
         } catch (err) {
             console.error('Error fetching packing requests:', err);
         } finally {
@@ -131,7 +127,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
         }
     }, []);
 
-    useEffect(() => { fetchRequests(); }, [fetchRequests]);
+    useEffect(() => { fetchRequests(page * PAGE_SIZE); }, [fetchRequests, page]);
 
     // Real-time subscription — debounced to avoid rapid-fire refetches
     useEffect(() => {
@@ -139,7 +135,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
             .channel('sticker-gen-realtime')
             .on('postgres_changes', { event: '*', schema: 'public', table: 'packing_requests' }, () => {
                 if (realtimeDebounce.current) clearTimeout(realtimeDebounce.current);
-                realtimeDebounce.current = setTimeout(() => fetchRequests(), 1000);
+                realtimeDebounce.current = setTimeout(() => fetchRequests(page * PAGE_SIZE), 1000);
             })
             .subscribe();
         return () => {
@@ -167,7 +163,6 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
 
     // With server-side pagination, display all fetched rows that pass client-side filters.
     const displayedRequests = filtered;
-    const hasMore = requests.length < totalDbCount;
 
     // ============================================================================
     // SUMMARY COUNTS
@@ -302,7 +297,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
             <FilterBar>
                 <SearchBox
                     value={searchTerm}
-                    onChange={v => { setSearchTerm(v); setDisplayCount(PAGE_SIZE); }}
+                    onChange={v => { setSearchTerm(v); setPage(0); }}
                     placeholder="Search movement #, item, part #, MSN..."
                 />
 
@@ -313,7 +308,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
 
                 <StatusFilter
                     value={statusFilter}
-                    onChange={v => { setStatusFilter(v); setDisplayCount(PAGE_SIZE); }}
+                    onChange={v => { setStatusFilter(v); setPage(0); }}
                     options={[
                         { value: 'ALL', label: 'All Status' },
                         { value: 'APPROVED', label: 'Pending' },
@@ -325,7 +320,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
 
                 <ActionBar>
                     <ExportCSVButton onClick={handleExport} />
-                    <RefreshButton onClick={() => { fetchRequests().then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); }} loading={loading} />
+                    <RefreshButton onClick={() => { fetchRequests(page * PAGE_SIZE).then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); }} loading={loading} />
                 </ActionBar>
             </FilterBar>
 
@@ -403,25 +398,31 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
                             </table>
                         </div>
 
-                        {/* Load More */}
-                        {hasMore && (
-                            <div style={{ padding: 16, textAlign: 'center', borderTop: '1px solid #f3f4f6' }}>
-                                <button onClick={() => fetchRequests(true, requests.length)} style={{
-                                    ...btnStyle, background: '#f3f4f6', color: '#374151', border: '1px solid #e5e7eb',
-                                    padding: '8px 24px',
-                                }}>
-                                    Show More ({totalDbCount - requests.length} remaining)
-                                </button>
-                            </div>
-                        )}
-                        {!hasMore && displayedRequests.length > 0 && (
-                            <div style={{ padding: 10, textAlign: 'center', fontSize: 12, color: '#9ca3af', borderTop: '1px solid #f3f4f6' }}>
-                                Showing all {displayedRequests.length} record{displayedRequests.length !== 1 ? 's' : ''}
-                            </div>
+                        {displayedRequests.length > 0 && (
+                            <Pagination
+                                page={page}
+                                pageSize={PAGE_SIZE}
+                                totalCount={totalDbCount}
+                                onPageChange={setPage}
+                            />
                         )}
                     </>
                 )}
             </Card>
+
+            {/* Results Summary */}
+            <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                fontSize: '12px',
+                color: 'var(--enterprise-gray-600)',
+                marginTop: '16px'
+            }}>
+                <span>
+                    Total Records: {totalDbCount}
+                </span>
+            </div>
 
             {/* Spinner CSS */}
             <style>{`

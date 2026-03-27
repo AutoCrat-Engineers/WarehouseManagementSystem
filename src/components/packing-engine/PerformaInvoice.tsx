@@ -18,7 +18,7 @@ import { Card, ModuleLoader } from '../ui/EnterpriseUI';
 import {
     SummaryCardsGrid, SummaryCard, FilterBar, SearchBox, ActionBar, AddButton,
     RefreshButton, DateRangeFilter, ExportCSVButton, StatusFilter,
-    sharedThStyle, sharedTdStyle,
+    sharedThStyle, sharedTdStyle, Pagination
 } from '../ui/SharedComponents';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
@@ -85,6 +85,10 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
         cancelled: pis.filter(p => p.status === 'CANCELLED').length,
     }), [pis]);
 
+    // Pagination
+    const [page, setPage] = useState(0);
+    const PAGE_SIZE = 20;
+
     // Filtered PIs
     const filteredPIs = useMemo(() => {
         let result = pis;
@@ -101,6 +105,15 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
         }
         return result;
     }, [pis, statusFilter, searchTerm, dateFrom, dateTo]);
+
+    const displayedPIs = useMemo(() => {
+        return filteredPIs.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+    }, [filteredPIs, page]);
+
+    // Reset to page 0 when filters change
+    useEffect(() => {
+        setPage(0);
+    }, [statusFilter, searchTerm, dateFrom, dateTo]);
 
     // Create flow
     const [shipmentNumber, setShipmentNumber] = useState('');
@@ -751,21 +764,30 @@ td,th{vertical-align:top}
 </tr></table>
 <table><tr><td class="bb c4 ctr" style="padding:3px;font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:1px">PRECISION MACHINED COMPONENTS<br/><span style="font-weight:700;font-size:10px">(OTHERS FUELING COMPONENTS)</span></td></tr></table>
 <div class="grow" style="overflow:hidden;display:flex;flex-direction:column;border-bottom:1px solid #000">
-<table><colgroup><col style="width:5%"/><col style="width:10%"/><col style="width:12%"/><col style="width:33%"/><col style="width:12%"/><col style="width:12%"/><col style="width:16%"/></colgroup>
+<table style="table-layout:fixed;width:100%;word-break:break-word"><colgroup><col style="width:5%"/><col style="width:10%"/><col style="width:12%"/><col style="width:33%"/><col style="width:12%"/><col style="width:12%"/><col style="width:16%"/></colgroup>
 <tr style="background:#f5f5f5;line-height:1.5">
 <td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">SL NO</td>
 <td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">BPA NO.</td>
 <td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">PART NO.</td>
 <td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">DESCRIPTION</td>
-<td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle;white-space:nowrap">QTY in pallet (Nos)</td>
+<td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle;">QTY (Nos)</td>
 <td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">RATE (USD)</td>
 <td class="bb ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">AMOUNT (USD)</td>
 </tr>
 ${rowsHtml}
+<table style="flex:1;table-layout:fixed;width:100%;height:100%;border-collapse:collapse;border-top:none;border-bottom:none"><colgroup><col style="width:5%"/><col style="width:10%"/><col style="width:12%"/><col style="width:33%"/><col style="width:12%"/><col style="width:12%"/><col style="width:16%"/></colgroup>
+<tr>
+<td class="br"></td>
+<td class="br"></td>
+<td class="br"></td>
+<td class="br"></td>
+<td class="br"></td>
+<td class="br"></td>
+<td></td>
+</tr>
 </table>
-<div style="flex:1;display:flex"><div style="width:5%;border-right:1px solid #000"></div><div style="width:10%;border-right:1px solid #000"></div><div style="width:12%;border-right:1px solid #000"></div><div style="width:33%;border-right:1px solid #000"></div><div style="width:12%;border-right:1px solid #000"></div><div style="width:12%;border-right:1px solid #000"></div><div style="width:16%"></div></div>
 </div>
-<table><colgroup><col style="width:5%"/><col style="width:10%"/><col style="width:12%"/><col style="width:33%"/><col style="width:12%"/><col style="width:12%"/><col style="width:16%"/></colgroup>
+<table style="table-layout:fixed;width:100%;word-break:break-word"><colgroup><col style="width:5%"/><col style="width:10%"/><col style="width:12%"/><col style="width:33%"/><col style="width:12%"/><col style="width:12%"/><col style="width:16%"/></colgroup>
 <tr style="font-weight:700"><td class="bb br c4" colspan="4" style="font-size:12px;padding:5px 6px"><b>Total</b>&nbsp;&nbsp;&mdash;&nbsp;&nbsp;<span style="font-weight:600;font-size:11px;color:#333">${numToWords(totalAmount)}</span></td>
 <td class="bb br c4 rgt mono" style="font-size:12px;padding:5px 6px"></td>
 <td class="bb br c4 rgt mono" style="font-size:12px;padding:5px 6px"></td>
@@ -1102,32 +1124,33 @@ td,th{vertical-align:top}
 
 <!-- ═══ ITEMS TABLE ═══ -->
 <div class="grow" style="overflow:hidden;display:flex;flex-direction:column;border-bottom:1px solid #000">
-<table>
+<table style="table-layout:fixed;width:100%;word-break:break-word">
 <colgroup><col style="width:5%"/><col style="width:10%"/><col style="width:12%"/><col style="width:33%"/><col style="width:12%"/><col style="width:12%"/><col style="width:16%"/></colgroup>
 <tr style="background:#f5f5f5;line-height:1.5">
 <td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">SL NO</td>
 <td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">BPA NO.</td>
 <td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">PART NO.</td>
 <td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">DESCRIPTION</td>
-<td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle;white-space:nowrap">QTY in pallet (Nos)</td>
+<td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle;">QTY (Nos)</td>
 <td class="bb br ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">RATE (USD)</td>
 <td class="bb ctr" style="font-size:13px;font-weight:700;padding:1px 2px;vertical-align:middle">AMOUNT (USD)</td>
 </tr>
 ${rowsHtml}
+<table style="flex:1;table-layout:fixed;width:100%;height:100%;border-collapse:collapse;border-top:none;border-bottom:none"><colgroup><col style="width:5%"/><col style="width:10%"/><col style="width:12%"/><col style="width:33%"/><col style="width:12%"/><col style="width:12%"/><col style="width:16%"/></colgroup>
+<tr>
+<td class="br"></td>
+<td class="br"></td>
+<td class="br"></td>
+<td class="br"></td>
+<td class="br"></td>
+<td class="br"></td>
+<td></td>
+</tr>
 </table>
-<div style="flex:1;display:flex">
-<div style="width:5%;border-right:1px solid #000"></div>
-<div style="width:10%;border-right:1px solid #000"></div>
-<div style="width:12%;border-right:1px solid #000"></div>
-<div style="width:33%;border-right:1px solid #000"></div>
-<div style="width:12%;border-right:1px solid #000"></div>
-<div style="width:12%;border-right:1px solid #000"></div>
-<div style="width:16%"></div>
-</div>
 </div>
 
 <!-- ═══ TOTAL ROW ═══ -->
-<table>
+<table style="table-layout:fixed;width:100%;word-break:break-word">
 <colgroup><col style="width:5%"/><col style="width:10%"/><col style="width:12%"/><col style="width:33%"/><col style="width:12%"/><col style="width:12%"/><col style="width:16%"/></colgroup>
 <tr style="font-weight:700">
 <td class="bb br c4" colspan="4" style="font-size:12px;padding:5px 6px"><b>Total</b>&nbsp;&nbsp;&mdash;&nbsp;&nbsp;<span style="font-weight:600;font-size:11px;color:#333">${numToWords(totalAmount)}</span></td>
@@ -1325,7 +1348,7 @@ ${rowsHtml}
                                             <th style={{ ...th, textAlign: 'center' }}>Actions</th>
                                         </tr>
                                     </thead>
-                                    <tbody>{filteredPIs.map((pi, idx) => (
+                                    <tbody>{displayedPIs.map((pi, idx) => (
                                         <tr key={pi.id}
                                             style={{ backgroundColor: idx % 2 === 0 ? 'white' : 'var(--table-stripe, #fafbfc)', borderBottom: '1px solid var(--table-border, #f3f4f6)', transition: 'background-color var(--transition-fast, 150ms)', cursor: 'pointer' }}
                                             onClick={() => handleViewDetail(pi)}
@@ -1390,6 +1413,29 @@ ${rowsHtml}
                                 </table>
                             </div>
                         )}
+                        
+                        {filteredPIs.length > 0 && (
+                            <Pagination
+                                page={page}
+                                pageSize={PAGE_SIZE}
+                                totalCount={filteredPIs.length}
+                                onPageChange={setPage}
+                            />
+                        )}
+                    </div>
+
+                    {/* Results Summary */}
+                    <div style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        fontSize: '12px',
+                        color: 'var(--enterprise-gray-600)',
+                        marginTop: '16px'
+                    }}>
+                        <span>
+                            Showing {filteredPIs.length} items
+                        </span>
                     </div>
                 </>
             )}
