@@ -104,30 +104,46 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
         fetchUser();
     }, [supabase]);
 
-    // Fetch packing requests — server-side paginated
-    const fetchRequests = useCallback(async (offset = 0) => {
+    // Fetch packing requests — server-side paginated with filters
+    const fetchRequests = useCallback(async (offset = 0, statusOverride?: string) => {
         setLoading(true);
         try {
-            // Lightweight count query (only on first load / refresh)
-            if (offset === 0) {
-                const countResult = await getSupabaseClient()
-                    .from('packing_requests')
-                    .select('id', { count: 'exact', head: true })
-                    .neq('status', 'REJECTED');
-                setTotalDbCount(countResult.count ?? 0);
+            const activeStatus = statusOverride ?? statusFilter;
+
+            // Build count query that respects current status filter
+            let countQuery = getSupabaseClient()
+                .from('packing_requests')
+                .select('id', { count: 'exact', head: true })
+                .neq('status', 'REJECTED');
+            if (activeStatus !== 'ALL') {
+                countQuery = countQuery.eq('status', activeStatus);
             }
-            const data = await svc.fetchPackingRequests(false, PAGE_SIZE, offset);
-            // Filter out REJECTED — only show actionable records
-            const filtered = data.filter(r => r.status !== 'REJECTED');
-            setRequests(filtered);
+            const countResult = await countQuery;
+            setTotalDbCount(countResult.count ?? 0);
+
+            // Fetch data with server-side status filter
+            let dataQuery = getSupabaseClient()
+                .from('packing_requests')
+                .select('*')
+                .neq('status', 'REJECTED');
+            if (activeStatus !== 'ALL') {
+                dataQuery = dataQuery.eq('status', activeStatus);
+            }
+            const { data, error: fetchErr } = await dataQuery
+                .order('created_at', { ascending: false })
+                .range(offset, offset + PAGE_SIZE - 1);
+            if (fetchErr) throw fetchErr;
+            setRequests(data || []);
         } catch (err) {
             console.error('Error fetching packing requests:', err);
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [statusFilter]);
 
     useEffect(() => { fetchRequests(page * PAGE_SIZE); }, [fetchRequests, page]);
+    // Reset to page 0 when status filter changes
+    useEffect(() => { setPage(0); }, [statusFilter]);
 
     // Real-time subscription — debounced to avoid rapid-fire refetches
     useEffect(() => {
@@ -145,33 +161,28 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
     }, [supabase, fetchRequests]);
 
     // ============================================================================
-    // FILTERING
+    // SUMMARY COUNTS — Independent backend aggregates (NEVER from paginated array)
     // ============================================================================
 
-    const filtered = requests.filter(r => {
-        const matchSearch = !searchTerm ||
-            r.movement_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            r.item_code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            r.item_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            r.part_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            r.master_serial_no?.toLowerCase().includes(searchTerm.toLowerCase());
-        const matchStatus = statusFilter === 'ALL' || r.status === statusFilter;
-        const matchDateFrom = !dateFrom || (r.created_at && r.created_at >= dateFrom);
-        const matchDateTo = !dateTo || (r.created_at && r.created_at <= dateTo + 'T23:59:59');
-        return matchSearch && matchStatus && matchDateFrom && matchDateTo;
-    });
-
-    // With server-side pagination, display all fetched rows that pass client-side filters.
-    const displayedRequests = filtered;
-
-    // ============================================================================
-    // SUMMARY COUNTS
-    // ============================================================================
-
-    const awaitingStickerCount = requests.filter(r => r.status === 'APPROVED').length;
-    const inProgressCount = requests.filter(r => ['PACKING_IN_PROGRESS', 'PARTIALLY_TRANSFERRED'].includes(r.status)).length;
-    const completedCount = requests.filter(r => r.status === 'COMPLETED').length;
-    const totalCount = requests.length;
+    const [summaryCounts, setSummaryCounts] = useState({ total: 0, awaiting: 0, inProgress: 0, completed: 0 });
+    const fetchSummaryCounts = useCallback(async () => {
+        try {
+            const sb = getSupabaseClient();
+            const [totalR, awaitingR, inProgressR, completedR] = await Promise.all([
+                sb.from('packing_requests').select('id', { count: 'exact', head: true }).neq('status', 'REJECTED'),
+                sb.from('packing_requests').select('id', { count: 'exact', head: true }).eq('status', 'APPROVED'),
+                sb.from('packing_requests').select('id', { count: 'exact', head: true }).in('status', ['PACKING_IN_PROGRESS', 'PARTIALLY_TRANSFERRED']),
+                sb.from('packing_requests').select('id', { count: 'exact', head: true }).eq('status', 'COMPLETED'),
+            ]);
+            setSummaryCounts({
+                total: totalR.count ?? 0,
+                awaiting: awaitingR.count ?? 0,
+                inProgress: inProgressR.count ?? 0,
+                completed: completedR.count ?? 0,
+            });
+        } catch { /* non-critical */ }
+    }, []);
+    useEffect(() => { fetchSummaryCounts(); }, [fetchSummaryCounts]);
 
     // ============================================================================
     // EXCEL EXPORT
@@ -180,7 +191,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
     const handleExport = () => {
         import('xlsx').then(XLSX => {
             const headers = ['Movement #', 'Item Code', 'MSN', 'Approved Qty', 'Boxes', 'Status', 'Created'];
-            const rows = filtered.map(r => ([
+            const rows = requests.map(r => ([
                 r.movement_number, r.item_code, r.master_serial_no || '',
                 r.total_packed_qty, r.boxes_count || 0,
                 PACKING_STATUS_CONFIG[r.status]?.label || r.status,
@@ -272,22 +283,22 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
             {/* SUMMARY CARDS */}
             <SummaryCardsGrid>
                 <SummaryCard
-                    label="Total Records" value={totalCount}
+                    label="Total Records" value={summaryCounts.total}
                     icon={<PackageOpen size={22} style={{ color: '#1e3a8a' }} />} color="#1e3a8a" bgColor="#eff6ff"
                     isActive={statusFilter === 'ALL'} onClick={() => setStatusFilter('ALL')}
                 />
                 <SummaryCard
-                    label="Awaiting Stickers" value={awaitingStickerCount}
+                    label="Awaiting Stickers" value={summaryCounts.awaiting}
                     icon={<Clock size={22} style={{ color: '#dc2626' }} />} color="#dc2626" bgColor="#fef2f2"
                     isActive={statusFilter === 'APPROVED'} onClick={() => setStatusFilter('APPROVED')}
                 />
                 <SummaryCard
-                    label="In Progress" value={inProgressCount}
+                    label="In Progress" value={summaryCounts.inProgress}
                     icon={<Printer size={22} style={{ color: '#d97706' }} />} color="#d97706" bgColor="#fffbeb"
                     isActive={statusFilter === 'PACKING_IN_PROGRESS'} onClick={() => setStatusFilter('PACKING_IN_PROGRESS')}
                 />
                 <SummaryCard
-                    label="Completed" value={completedCount}
+                    label="Completed" value={summaryCounts.completed}
                     icon={<CheckCircle2 size={22} style={{ color: '#16a34a' }} />} color="#16a34a" bgColor="#f0fdf4"
                     isActive={statusFilter === 'COMPLETED'} onClick={() => setStatusFilter('COMPLETED')}
                 />
@@ -320,7 +331,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
 
                 <ActionBar>
                     <ExportCSVButton onClick={handleExport} />
-                    <RefreshButton onClick={() => { fetchRequests(page * PAGE_SIZE).then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); }} loading={loading} />
+                    <RefreshButton onClick={() => { fetchRequests(page * PAGE_SIZE).then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); fetchSummaryCounts(); }} loading={loading} />
                 </ActionBar>
             </FilterBar>
 
@@ -328,7 +339,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
             <Card style={{ padding: 0 }}>
                 {loading && requests.length === 0 ? (
                     <ModuleLoader moduleName="Sticker Generation" icon={<Printer size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
-                ) : filtered.length === 0 ? (
+                ) : requests.length === 0 ? (
                     <EmptyState
                         icon={<PackageOpen size={48} style={{ color: 'var(--enterprise-gray-400)' }} />}
                         title="No Sticker Generation Records"
@@ -359,7 +370,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {displayedRequests.map(r => {
+                                    {requests.map(r => {
                                         return (
                                             <tr key={r.id}
                                                 onClick={() => setSelectedRequest(r)}
@@ -398,7 +409,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
                             </table>
                         </div>
 
-                        {displayedRequests.length > 0 && (
+                        {requests.length > 0 && (
                             <Pagination
                                 page={page}
                                 pageSize={PAGE_SIZE}

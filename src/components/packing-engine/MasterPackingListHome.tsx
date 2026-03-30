@@ -156,18 +156,20 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
 
     const loadSummary = useCallback(async () => {
         try {
-            // Single lightweight query: fetch just status for all MPLs, compute counts client-side
-            const { data, error } = await getSupabaseClient()
-                .from('master_packing_lists')
-                .select('status');
-            if (error) { console.error('[PackingList Summary Query Error]', error); return; }
-            const rows = data || [];
-            const total = rows.length;
-            const pending = rows.filter((r: any) => r.status === 'DRAFT').length;
-            const printed = rows.filter((r: any) => r.status === 'PRINTED').length;
-            const dispatched = rows.filter((r: any) => r.status === 'DISPATCHED').length;
-            console.log('[PackingList Summary]', { total, pending, printed, dispatched });
-            setSummary({ total, pending, printed, dispatched });
+            // BACKEND AGGREGATES: parallel HEAD queries (count-only, no data transfer)
+            const sb = getSupabaseClient();
+            const [totalR, pendingR, printedR, dispatchedR] = await Promise.all([
+                sb.from('master_packing_lists').select('id', { count: 'exact', head: true }),
+                sb.from('master_packing_lists').select('id', { count: 'exact', head: true }).eq('status', 'DRAFT'),
+                sb.from('master_packing_lists').select('id', { count: 'exact', head: true }).eq('status', 'PRINTED'),
+                sb.from('master_packing_lists').select('id', { count: 'exact', head: true }).eq('status', 'DISPATCHED'),
+            ]);
+            setSummary({
+                total: totalR.count ?? 0,
+                pending: pendingR.count ?? 0,
+                printed: printedR.count ?? 0,
+                dispatched: dispatchedR.count ?? 0,
+            });
         } catch (err) {
             console.error('[PackingList Summary Error]', err);
         }

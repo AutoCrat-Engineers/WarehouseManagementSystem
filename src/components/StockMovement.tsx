@@ -391,24 +391,54 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   const [totalDbCount, setTotalDbCount] = useState(0);
   const realtimeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Debounced search for server-side queries (300ms delay after last keystroke)
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchTerm), 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  // Ref holds current filter values — enables stable useCallback while reading latest filters
+  const filtersRef = useRef({ status: 'ALL', type: 'ALL', stockType: 'ALL', dateFrom: '', dateTo: '', search: '' });
+  filtersRef.current = { status: filterStatus, type: filterType, stockType: filterStockType, dateFrom: filterDateFrom, dateTo: filterDateTo, search: debouncedSearch };
+
   // ============================================================================
   // FETCH MOVEMENTS FOR MAIN PAGE
   // ============================================================================
 
-  /** Fetch a page of movements from the server. */
+  /**
+   * Fetch a page of movements with SERVER-SIDE filtering.
+   * Filters are read from filtersRef (kept current on every render).
+   * Query order: SELECT → WHERE (filters) → ORDER BY → LIMIT/OFFSET
+   */
   const fetchMovements = useCallback(async (offset = 0) => {
     setLoading(true);
     try {
-      // STEP 0 — lightweight count query (only on first load / refresh)
-      if (offset === 0) {
-        const { count } = await supabase
-          .from('inv_movement_headers')
-          .select('id', { count: 'exact', head: true });
-        setTotalDbCount(count ?? 0);
+      const filters = filtersRef.current;
+
+      // ── PRE-SEARCH: Cross-table text search (item_code, part_number, MSN) ──
+      let searchHeaderIds: string[] | null = null;
+      if (filters.search) {
+        const term = filters.search;
+        const { data: matchingItems } = await supabase
+          .from('items')
+          .select('item_code')
+          .or(`item_code.ilike.%${term}%,part_number.ilike.%${term}%,master_serial_no.ilike.%${term}%`)
+          .limit(200);
+        const matchingItemCodes = (matchingItems || []).map((i: any) => i.item_code);
+        if (matchingItemCodes.length > 0) {
+          const { data: matchingLines } = await supabase
+            .from('inv_movement_lines')
+            .select('header_id')
+            .in('item_code', matchingItemCodes);
+          searchHeaderIds = [...new Set((matchingLines || []).map((l: any) => l.header_id as string))];
+        } else {
+          searchHeaderIds = [];
+        }
       }
 
-      // STEP 1: Fetch headers — paginated (only PAGE_SIZE rows at a time)
-      const { data: headers, error: headErr } = await supabase
+      // ── BUILD QUERY: Filters applied BEFORE pagination (critical fix) ──
+      let query = supabase
         .from('inv_movement_headers')
         .select(`
           id, movement_number, movement_date, movement_type, status,
@@ -418,10 +448,53 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
           source_warehouse_id, destination_warehouse_id,
           source_warehouse:source_warehouse_id ( warehouse_name, warehouse_code ),
           destination_warehouse:destination_warehouse_id ( warehouse_name, warehouse_code )
-        `)
+        `, { count: 'exact' });
+
+      // Status filter (server-side)
+      if (filters.status !== 'ALL') {
+        if (filters.status === 'COMPLETED' || filters.status === 'PARTIALLY_APPROVED') {
+          // DB stores both as 'APPROVED'; client distinguishes full vs partial after fetch
+          query = query.eq('status', 'APPROVED');
+        } else {
+          query = query.eq('status', filters.status);
+        }
+      }
+
+      // Movement type filter
+      if (filters.type !== 'ALL') {
+        query = query.eq('movement_type', filters.type);
+      }
+
+      // Stock type filter (maps to movement type groups)
+      if (filters.stockType !== 'ALL') {
+        if (filters.stockType === 'REJECTION') {
+          query = query.in('movement_type', REVERSE_MOVEMENT_TYPES);
+        } else {
+          query = query.not('movement_type', 'in', `(${REVERSE_MOVEMENT_TYPES.join(',')})`);
+        }
+      }
+
+      // Date range filter
+      if (filters.dateFrom) query = query.gte('movement_date', filters.dateFrom);
+      if (filters.dateTo) query = query.lte('movement_date', filters.dateTo);
+
+      // Search filter (movement_number + pre-searched item matches)
+      if (filters.search) {
+        const term = filters.search;
+        if (searchHeaderIds && searchHeaderIds.length > 0) {
+          const limitedIds = searchHeaderIds.slice(0, 100);
+          query = query.or(`movement_number.ilike.%${term}%,id.in.(${limitedIds.join(',')})`);
+        } else {
+          query = query.ilike('movement_number', `%${term}%`);
+        }
+      }
+
+      // STEP 1: Ordering + Pagination applied AFTER all filters
+      const { data: headers, count, error: headErr } = await query
         .order('created_at', { ascending: false })
         .range(offset, offset + PAGE_SIZE - 1);
       if (headErr) throw headErr;
+      setTotalDbCount(count ?? 0);
 
       const headerIds = (headers || []).map((h: any) => h.id);
       const userIds = [...new Set((headers || []).map((h: any) => h.requested_by).filter(Boolean))];
@@ -535,7 +608,11 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
     } catch { /* non-critical */ }
   }, [supabase]);
 
+  // Fetch data when page changes
   useEffect(() => { fetchMovements(page * PAGE_SIZE); }, [fetchMovements, page]);
+  // Reset to page 0 and re-fetch when any filter changes
+  useEffect(() => { setPage(0); fetchMovements(0); }, [filterStatus, filterType, filterStockType, filterDateFrom, filterDateTo, debouncedSearch, fetchMovements]);
+  // Load summary counts on mount
   useEffect(() => { fetchSummaryCounts(); }, [fetchSummaryCounts]);
 
   // Real-time subscription: debounced auto-refresh on approval/status changes
@@ -549,7 +626,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
           // Debounce: avoid rapid-fire refetches when multiple changes occur
           if (realtimeDebounce.current) clearTimeout(realtimeDebounce.current);
           realtimeDebounce.current = setTimeout(() => {
-            fetchMovements();
+            fetchMovements(0); setPage(0);
             fetchSummaryCounts();
           }, 1000);
         }
@@ -1198,25 +1275,12 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   // FILTER / SEARCH
   // ============================================================================
 
-  const filteredMovements = movements.filter(m => {
-    const matchesSearch = !searchTerm ||
-      m.movement_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      m.part_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      m.master_serial_no?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      m.item_code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      m.source_warehouse?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      m.destination_warehouse?.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesFilter = filterType === 'ALL' || m.movement_type === filterType;
-    const matchesStatus = filterStatus === 'ALL' ||
-      (filterStatus === 'COMPLETED' ? ['COMPLETED', 'APPROVED'].includes(m.status) : m.status === filterStatus);
-    const matchesStockType = filterStockType === 'ALL' || getStockType(m.movement_type) === filterStockType;
-    const matchesDateFrom = !filterDateFrom || (m.movement_date && m.movement_date >= filterDateFrom);
-    const matchesDateTo = !filterDateTo || (m.movement_date && m.movement_date <= filterDateTo);
-    return matchesSearch && matchesFilter && matchesStatus && matchesStockType && matchesDateFrom && matchesDateTo;
-  });
+  // ── DISPLAY: Most filters applied server-side. Only client-side post-filter
+  // is COMPLETED vs PARTIALLY_APPROVED (DB stores both as 'APPROVED'). ──
+  const filteredMovements = (filterStatus === 'COMPLETED' || filterStatus === 'PARTIALLY_APPROVED')
+    ? movements.filter(m => m.status === filterStatus)
+    : movements;
 
-  // With server-side pagination, display all fetched rows that pass client-side filters.
-  // "Load More" fetches the next page from the server.
   const displayedMovements = filteredMovements;
   const hasMore = movements.length < totalDbCount;
 

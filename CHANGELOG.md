@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.2] — 2026-03-30
+
+### Release Type: Critical Bugfix
+
+### Fixed
+
+- **Stock Movement: Server-Side Filtering** — Filters (Pending, Rejected, Completed, Partial) now query the database directly instead of filtering paginated client-side data. Fixed "No data found" bug when selecting status filters while data exists on other pages.
+- **Stock Movement: Cross-Table Search** — Search now performs a two-phase server-side lookup: first finds matching items (item_code, part_number, MSN) in the items table, then filters movement headers. Previously, search only worked within the current page's 20 records.
+- **Sticker Generation: Summary Cards** — Cards now use independent backend HEAD queries (`select('id', { count: 'exact', head: true })`) instead of computing counts from `requests.filter().length` on paginated data. Cards no longer change when navigating pages.
+- **Sticker Generation: Server-Side Status Filter** — Status filter (Approved, In Progress, Completed) is now applied at the database query level before pagination, fixing "No records" when filtering by status.
+- **Pagination + Filter Order** — All affected modules now enforce the correct query order: `SELECT → WHERE (filters) → ORDER BY → LIMIT/OFFSET`. Previously, pagination was applied before filters, causing empty results.
+- **Page Reset on Filter Change** — All modules now reset to page 0 when any filter changes, preventing stale page numbers after filter updates.
+
+### Changed
+
+- `src/components/StockMovement.tsx` — Rewritten `fetchMovements` to apply status, type, stock type, date range, and search filters server-side before pagination. Uses `{ count: 'exact' }` in the main query for accurate filtered totals. Added debounced search (300ms) for server-side queries. Added `filtersRef` pattern for stable useCallback with current filter state.
+- `src/components/packing/PackingModule.tsx` — Added `fetchSummaryCounts()` with parallel HEAD queries for all 4 card values. Replaced `requests.filter().length` with backend aggregate state. Server-side status filtering added to `fetchRequests`.
+- `src/components/packing-engine/PerformaInvoice.tsx` — Replaced `limit(100)` with proper server-side pagination using `{ count: 'exact' }`. Status and date range filters moved server-side. Removed `filteredPIs` client-side array in favor of `displayedPIs` from server-filtered data.
+
+### Architecture
+
+- **Rule: Never compute counts from paginated data** — All summary cards must use independent HEAD queries (`{ count: 'exact', head: true }`)
+- **Rule: Filter before paginate** — Database query must apply WHERE clauses before RANGE/LIMIT
+- **Pattern: filtersRef** — Use React refs to hold current filter state for stable useCallback functions, avoiding unnecessary re-renders while keeping filter values current
+
+---
+
 ## [0.4.1] — 2026-03-06
 
 ### Release Type: Patch Release

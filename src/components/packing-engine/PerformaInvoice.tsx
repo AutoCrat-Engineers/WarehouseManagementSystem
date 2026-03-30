@@ -77,39 +77,45 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [activeDropdown]);
 
-    // Stats
-    const stats = useMemo(() => ({
-        total: pis.length,
-        draft: pis.filter(p => p.status === 'DRAFT').length,
-        confirmed: pis.filter(p => p.status === 'CONFIRMED').length,
-        dispatched: pis.filter(p => p.status === 'STOCK_MOVED').length,
-        cancelled: pis.filter(p => p.status === 'CANCELLED').length,
-    }), [pis]);
+    // ────── BACKEND AGGREGATES for summary cards (NEVER depend on paginated data) ──────
+    const [stats, setStats] = useState({ total: 0, draft: 0, confirmed: 0, dispatched: 0, cancelled: 0 });
+    const fetchCounts = useCallback(async () => {
+        try {
+            const [totalR, draftR, confirmedR, stockMovedR, cancelledR] = await Promise.all([
+                supabase.from('pack_proforma_invoices').select('id', { count: 'exact', head: true }),
+                supabase.from('pack_proforma_invoices').select('id', { count: 'exact', head: true }).eq('status', 'DRAFT'),
+                supabase.from('pack_proforma_invoices').select('id', { count: 'exact', head: true }).eq('status', 'CONFIRMED'),
+                supabase.from('pack_proforma_invoices').select('id', { count: 'exact', head: true }).eq('status', 'STOCK_MOVED'),
+                supabase.from('pack_proforma_invoices').select('id', { count: 'exact', head: true }).eq('status', 'CANCELLED'),
+            ]);
+            setStats({
+                total: totalR.count ?? 0,
+                draft: draftR.count ?? 0,
+                confirmed: confirmedR.count ?? 0,
+                dispatched: stockMovedR.count ?? 0,
+                cancelled: cancelledR.count ?? 0,
+            });
+        } catch { /* non-critical */ }
+    }, [supabase]);
 
     // Pagination
     const [page, setPage] = useState(0);
     const PAGE_SIZE = 20;
 
-    // Filtered PIs
-    const filteredPIs = useMemo(() => {
-        let result = pis;
-        if (statusFilter !== 'ALL') result = result.filter(p => p.status === statusFilter);
-        if (dateFrom) result = result.filter(p => p.created_at >= dateFrom);
-        if (dateTo) result = result.filter(p => p.created_at <= dateTo + 'T23:59:59');
-        if (searchTerm.trim()) {
-            const s = searchTerm.toLowerCase();
-            result = result.filter(p =>
-                p.proforma_number.toLowerCase().includes(s) ||
-                (p.shipment_number || '').toLowerCase().includes(s) ||
-                (p.customer_name || '').toLowerCase().includes(s)
-            );
-        }
-        return result;
-    }, [pis, statusFilter, searchTerm, dateFrom, dateTo]);
+    // Filtered count for pagination (respects current filters)
+    const [totalFilteredCount, setTotalFilteredCount] = useState(0);
 
+    // Filtered PIs — with server-side filtering, this is just the fetched data
     const displayedPIs = useMemo(() => {
-        return filteredPIs.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
-    }, [filteredPIs, page]);
+        // Only client-side search filter remains (for proforma_number, shipment_number, customer_name)
+        if (!searchTerm.trim()) return pis;
+        const s = searchTerm.toLowerCase();
+        return pis.filter(p =>
+            p.proforma_number.toLowerCase().includes(s) ||
+            (p.shipment_number || '').toLowerCase().includes(s) ||
+            (p.customer_name || '').toLowerCase().includes(s)
+        );
+    }, [pis, searchTerm]);
 
     // Reset to page 0 when filters change
     useEffect(() => {
@@ -195,12 +201,31 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
         try { sessionStorage.removeItem(PI_SESSION_KEY); } catch { }
     }, []);
 
-    // Load PIs (isRefresh avoids full-screen loading)
+    // Load PIs with server-side filtering and pagination
     const loadPIs = useCallback(async (isRefresh = false) => {
         if (isRefresh) setRefreshing(true); else setLoading(true);
         try {
-            const { data, error: piErr } = await supabase.from('pack_proforma_invoices').select('*, profiles!pack_proforma_invoices_created_by_fkey (full_name)').order('created_at', { ascending: false }).limit(100);
+            // Build query with server-side filters
+            let query = supabase
+                .from('pack_proforma_invoices')
+                .select('*, profiles!pack_proforma_invoices_created_by_fkey (full_name)', { count: 'exact' });
+
+            // Status filter (server-side)
+            if (statusFilter !== 'ALL') {
+                query = query.eq('status', statusFilter);
+            }
+            // Date range filter (server-side)
+            if (dateFrom) query = query.gte('created_at', dateFrom);
+            if (dateTo) query = query.lte('created_at', dateTo + 'T23:59:59');
+
+            // Pagination AFTER filters
+            const offset = page * PAGE_SIZE;
+            const { data, count, error: piErr } = await query
+                .order('created_at', { ascending: false })
+                .range(offset, offset + PAGE_SIZE - 1);
             if (piErr) throw piErr;
+
+            setTotalFilteredCount(count ?? 0);
             const piList = (data || []).map((d: any) => ({ ...d, created_by_name: d.profiles?.full_name || '—' }));
 
             // Enrich DRAFT PIs with live active MPL counts (stale total_invoices fix)
@@ -217,14 +242,12 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
                         .select('id, status')
                         .in('id', allMplIds);
                     const cancelledMplIds = new Set((mplStatuses || []).filter((m: any) => m.status === 'CANCELLED').map((m: any) => m.id));
-                    // Count active MPLs per PI
                     const activeCounts: Record<string, number> = {};
                     for (const j of junctionRows) {
                         if (!cancelledMplIds.has(j.mpl_id)) {
                             activeCounts[j.proforma_id] = (activeCounts[j.proforma_id] || 0) + 1;
                         }
                     }
-                    // Override total_invoices with real active count
                     for (const pi of piList) {
                         if (pi.status === 'DRAFT') {
                             pi.total_invoices = activeCounts[pi.id] || 0;
@@ -235,11 +258,12 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
 
             setPis(piList);
         } catch (err: any) { setError(err.message); } finally { setLoading(false); setRefreshing(false); }
-    }, [supabase]);
+    }, [supabase, statusFilter, dateFrom, dateTo, page]);
 
     useEffect(() => { loadPIs(); }, [loadPIs]);
+    useEffect(() => { fetchCounts(); }, [fetchCounts]);
 
-    const handleRefresh = () => loadPIs(true);
+    const handleRefresh = () => { loadPIs(true); fetchCounts(); };
 
     // Step 1: Auto-generate shipment number, ask for freight forwarder
     const handleStartCreate = async () => {
@@ -1295,7 +1319,7 @@ ${rowsHtml}
                             <ExportCSVButton onClick={() => {
                                 import('xlsx').then(XLSX => {
                                     const headers = ['PI Number', 'Shipment #', 'Customer', 'MPLs', 'Pallets', 'Quantity', 'Gross Weight (kg)', 'Status', 'Stock Moved At', 'Created', 'Created By'];
-                                    const rows = filteredPIs.map(p => [
+                                    const rows = displayedPIs.map(p => [
                                         p.proforma_number,
                                         p.shipment_number || '',
                                         p.customer_name || '',
@@ -1322,7 +1346,7 @@ ${rowsHtml}
 
                     {/* ═══ TABLE ═══ */}
                     <div style={{ backgroundColor: 'var(--card-background, #fff)', borderRadius: 'var(--border-radius-lg, 12px)', border: '1px solid var(--border-color, #e5e7eb)', overflow: 'hidden', boxShadow: 'var(--shadow-sm)' }}>
-                        {filteredPIs.length === 0 ? (
+                        {displayedPIs.length === 0 ? (
                             <div style={{ padding: '60px 24px', textAlign: 'center' }}>
                                 <FileText size={48} style={{ color: 'var(--enterprise-gray-300)', marginBottom: 12 }} />
                                 <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--enterprise-gray-600)', marginBottom: 4 }}>{searchTerm || statusFilter !== 'ALL' ? 'No Matching Invoices' : 'No Performa Invoices'}</h3>
@@ -1409,11 +1433,11 @@ ${rowsHtml}
                             </div>
                         )}
                         
-                        {filteredPIs.length > 0 && (
+                        {displayedPIs.length > 0 && (
                             <Pagination
                                 page={page}
                                 pageSize={PAGE_SIZE}
-                                totalCount={filteredPIs.length}
+                                totalCount={totalFilteredCount}
                                 onPageChange={setPage}
                             />
                         )}
@@ -1429,7 +1453,7 @@ ${rowsHtml}
                         marginTop: '16px'
                     }}>
                         <span>
-                            Showing {filteredPIs.length} items
+                            Showing {Math.min(displayedPIs.length, PAGE_SIZE)} of {totalFilteredCount} items
                         </span>
                     </div>
                 </>

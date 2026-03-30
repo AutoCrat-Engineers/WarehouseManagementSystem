@@ -92,6 +92,30 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
         }
     );
 
+    // ────── BACKEND AGGREGATES for summary cards (NEVER .reduce() on client array) ──────
+    const [summaryStats, setSummaryStats] = useState({ totalReady: 0, totalPartial: 0, totalReadyQty: 0 });
+    const fetchCounts = useCallback(async () => {
+        try {
+            const [readyR, openR, fillingR, adjR] = await Promise.all([
+                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'READY'),
+                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'OPEN'),
+                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'FILLING'),
+                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'ADJUSTMENT_REQUIRED'),
+            ]);
+            // Also get total ready qty from a lightweight query
+            const { data: readyPalletRows } = await supabase
+                .from('pack_pallets')
+                .select('current_qty')
+                .eq('state', 'READY');
+            const totalReadyQty = (readyPalletRows || []).reduce((s: number, p: any) => s + (p.current_qty || 0), 0);
+            setSummaryStats({
+                totalReady: readyR.count ?? 0,
+                totalPartial: (openR.count ?? 0) + (fillingR.count ?? 0) + (adjR.count ?? 0),
+                totalReadyQty,
+            });
+        } catch { /* non-critical */ }
+    }, [supabase]);
+
     const fetchData = useCallback(async () => {
         setLoading(true);
         try {
@@ -109,7 +133,10 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
     const handleRefresh = useCallback(async () => {
         setRefreshing(true);
         try {
-            const data = await svc.fetchDispatchReadiness();
+            const [data] = await Promise.all([
+                svc.fetchDispatchReadiness(),
+                fetchCounts(),
+            ]);
             setReadiness(data);
             showToast('info', 'Refreshed', 'Dispatch data refreshed successfully.');
         } catch (err) {
@@ -117,9 +144,10 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
         } finally {
             setRefreshing(false);
         }
-    }, [showToast]);
+    }, [showToast, fetchCounts]);
 
     useEffect(() => { fetchData(); }, [fetchData]);
+    useEffect(() => { fetchCounts(); }, [fetchCounts]);
 
     const handleExpandItem = async (itemCode: string) => {
         if (expandedItem === itemCode) {
@@ -221,9 +249,10 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
         return filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
     }, [filtered, page]);
 
-    const totalReady = readiness.reduce((s, r) => s + (r.ready_pallets || 0), 0);
-    const totalPartial = readiness.reduce((s, r) => s + (r.partial_pallets || 0), 0);
-    const totalReadyQty = readiness.reduce((s, r) => s + (r.ready_qty || 0), 0);
+    // Use backend aggregate stats for summary cards
+    const totalReady = summaryStats.totalReady;
+    const totalPartial = summaryStats.totalPartial;
+    const totalReadyQty = summaryStats.totalReadyQty;
 
     // Reactive selected count
     const selectedCount = selectedPalletIds.size;
