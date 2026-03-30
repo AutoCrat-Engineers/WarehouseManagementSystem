@@ -14,6 +14,7 @@ import { Search, Truck, CheckCircle2, Package, Plus, Loader2, XCircle, Eye, Aler
 import { getSupabaseClient } from '../../utils/supabase/client';
 import { fetchMasterPackingLists, createPerformaInvoice, approvePerformaInvoice, cancelPerformaInvoice } from './mplService';
 import type { MasterPackingList } from './mplService';
+import { generatePdf as generatePdfViaService } from '../../services/pdfServiceClient';
 import { Card, ModuleLoader } from '../ui/EnterpriseUI';
 import {
     SummaryCardsGrid, SummaryCard, FilterBar, SearchBox, ActionBar, AddButton,
@@ -650,8 +651,7 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
         setApproveTarget(pi); setApprovalEmails('');
     };
 
-    // ─── GENERATE PI PDF VIA PUPPETEER SERVICE & UPLOAD TO STORAGE ───
-    const PDF_SERVICE_URL = import.meta.env.VITE_PDF_SERVICE_URL || 'http://localhost:3001';
+    // ─── GENERATE PI PDF VIA MICROSERVICE (resilient client with retry + circuit breaker) ───
 
     const generatePIPdfAndUpload = async (pi: PIRecord): Promise<boolean> => {
         try {
@@ -817,23 +817,18 @@ ${rowsHtml}
 </tr></table>
 </body></html>`;
 
-            // 4. Send HTML to Puppeteer service → receive PDF as raw binary
-            console.log(`📄 Sending HTML to Puppeteer service (${PDF_SERVICE_URL})...`);
-            const pdfRes = await fetch(`${PDF_SERVICE_URL}/api/generate-pdf`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ html: piHtml }),
-            });
+            // 4. Send HTML to PDF microservice (resilient: retry + circuit breaker + timeout)
+            console.log(`📄 Generating PDF via microservice...`);
+            const pdfResult = await generatePdfViaService(piHtml);
 
-            if (!pdfRes.ok) {
-                const errBody = await pdfRes.text();
-                throw new Error(`PDF service error (${pdfRes.status}): ${errBody}`);
+            if (!pdfResult.success || !pdfResult.pdfBuffer) {
+                console.error(`❌ PDF generation failed: ${pdfResult.error}`);
+                return false;
             }
 
             // Receive as ArrayBuffer → Uint8Array (binary-safe, no conversion)
-            const pdfArrayBuffer = await pdfRes.arrayBuffer();
-            const pdfUint8 = new Uint8Array(pdfArrayBuffer);
-            console.log(`✅ PDF received from Puppeteer: ${Math.round(pdfUint8.length / 1024)} KB`);
+            const pdfUint8 = new Uint8Array(pdfResult.pdfBuffer);
+            console.log(`✅ PDF received: ${pdfResult.sizeKb} KB in ${pdfResult.durationMs}ms (req: ${pdfResult.requestId})`);
 
             // 5. Upload raw binary to Supabase Storage
             const piNum = pi.proforma_number;
