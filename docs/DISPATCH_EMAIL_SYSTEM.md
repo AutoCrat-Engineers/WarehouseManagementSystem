@@ -37,7 +37,7 @@ The Dispatch Email System sends automated, branded email notifications with the 
 │       │                ← Logo embedded as base64 data-URI           │
 │       │                                                             │
 │       ▼                                                             │
-│  [3. POST HTML → Puppeteer Service]  (localhost:3001)               │
+│  [3. POST HTML → PDF Microservice]   (VITE_PDF_SERVICE_URL)         │
 │       │                                                             │
 │       ▼                                                             │
 │  [4. Chrome renders → page.pdf()]  ← print media, fonts loaded     │
@@ -78,9 +78,9 @@ The Dispatch Email System sends automated, branded email notifications with the 
 - The HTML template is the **exact same structure** used in `handlePrintPI`, ensuring the stored PDF matches the Print Preview.
 - PDF service URL is configurable via `VITE_PDF_SERVICE_URL` environment variable (defaults to `http://localhost:3001`).
 
-### 3.2 Puppeteer PDF Service — `pdf-server.mjs`
+### 3.2 PDF Microservice (Decoupled)
 
-**Path**: `server/pdf-server.mjs`
+**Path**: `micro-services/pdf-service/` (standalone service with its own repo, Dockerfile, and CI/CD)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -367,8 +367,8 @@ npm install
 #    → 011_email_dispatch_logging.sql
 #    → 012_pi_documents_storage.sql
 
-# 3. Start PDF service (Terminal 1)
-npm run pdf-server
+# 3. Start PDF microservice (Terminal 1)
+cd ../micro-services/pdf-service && npm install && npm start
 # Output: 📄 PDF Service running at http://localhost:3001
 
 # 4. Start Vite dev server (Terminal 2)
@@ -393,7 +393,7 @@ npm run dev
 
 ### PDF Service Deployment
 
-The Puppeteer service (`server/pdf-server.mjs`) must be deployed separately since Supabase Edge Functions can't run Chrome.
+The PDF microservice (`micro-services/pdf-service/`) is deployed as a Docker container. See `micro-services/pdf-service/DEPLOYMENT.md` for full instructions.
 
 **Recommended Platforms:**
 
@@ -447,7 +447,7 @@ npx supabase functions deploy send-dispatch-email --no-verify-jwt
 | Storage Access | RLS enforced — only authenticated users can upload, service_role can download |
 | Edge Function Auth | Bearer token from Supabase Auth session |
 | Resend API Key | Stored as Supabase Edge Function secret (not in code) |
-| PDF Service | Runs on localhost:3001 (CORS enabled, no auth for local dev) |
+| PDF Service | Decoupled microservice with API key auth, rate limiting, and CORS (see `micro-services/pdf-service/`) |
 | Email Spoofing | Uses Resend's verified domain (pending DNS verification) |
 | Data Exposure | PI HTML contains business data — PDF service should be on trusted network in production |
 

@@ -60,7 +60,6 @@
       },
       "scripts": {
             "dev": "vite",
-            "build": "vite build",
-            "pdf-server": "node server/pdf-server.mjs"
+            "build": "vite build"
       }
 }
