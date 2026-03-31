@@ -2,7 +2,7 @@
   <img src="public/logo.png" alt="AutoCrat Engineers Logo" width="320" />
 </p>
 
-<h1 align="center">Warehouse Management System (WMS)</h1>
+<h1 align="center">Warehouse Management System (WMS-AE)</h1>
 
 <p align="center">
   <strong>Enterprise-Grade Inventory Planning, Forecasting & Warehouse Operations Platform</strong>
