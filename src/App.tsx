@@ -13,7 +13,7 @@ import { PlanningModule } from './components/PlanningModule';
 import { StockMovement } from './components/StockMovement';
 import { RackView } from './components/RackView';
 import { PackingModule, PackingDetails, PackingListInvoice, PackingListSubInvoice } from './components/packing';
-import { PalletDashboard, ContractConfigManager, DispatchSelection, PackingListManager, TraceabilityViewer, MasterPackingListHome, PerformaInvoice } from './components/packing-engine';
+import { PalletDashboard, ContractConfigManager, DispatchSelection, TraceabilityViewer, MasterPackingListHome, PerformaInvoice } from './components/packing-engine';
 import { LoadingPage } from './components/LoadingPage';
 import { UserManagement } from './auth/users/UserManagement';
 import { NotificationBell } from './components/notifications/NotificationBell';
@@ -27,7 +27,6 @@ import {
   FileText,
   TrendingUp,
   Calendar,
-  BarChart3,
   LogOut,
   Menu,
   ChevronLeft,
@@ -40,17 +39,10 @@ import {
   Boxes,
   Printer,
   ClipboardList,
-  List,
-  FileCheck,
-  FileMinus,
   Lock,
   Unlock,
   Grid3X3,
   Layers,
-  Settings,
-  Truck,
-  Receipt,
-  Eye,
   Forklift,
   Stamp,
 } from 'lucide-react';
@@ -834,26 +826,7 @@ export default function App() {
                         </button>
                       )}
 
-                      {/* Traceability
-                      {canAccessViewLocal('pe-traceability') && (
-                        <button
-                          onClick={() => handleNavigation('pe-traceability')}
-                          style={{
-                            width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
-                            padding: '9px 24px 9px 44px', border: 'none',
-                            backgroundColor: currentView === 'pe-traceability' ? 'rgba(30, 58, 138, 0.08)' : 'transparent',
-                            borderLeft: currentView === 'pe-traceability' ? '3px solid #1e3a8a' : '3px solid transparent',
-                            color: currentView === 'pe-traceability' ? '#1e3a8a' : 'var(--enterprise-gray-600)',
-                            textAlign: 'left', cursor: 'pointer', transition: 'all 150ms ease',
-                            fontWeight: currentView === 'pe-traceability' ? '600' : '400', fontSize: '13px',
-                          }}
-                          onMouseEnter={(e) => { if (currentView !== 'pe-traceability') e.currentTarget.style.backgroundColor = 'rgba(30, 58, 138, 0.04)'; }}
-                          onMouseLeave={(e) => { if (currentView !== 'pe-traceability') e.currentTarget.style.backgroundColor = 'transparent'; }}
-                        >
-                          <Eye size={15} strokeWidth={currentView === 'pe-traceability' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-traceability' ? 1 : 0.6 }} />
-                          <span>Traceability</span>
-                        </button>
-                      )} */}
+
                     </div>
                   </div>
                 );

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/Version-0.5.0-blue?style=for-the-badge" alt="Version" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Version-0.5.1-blue?style=for-the-badge" alt="Version" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Status-Active_Development-brightgreen?style=for-the-badge" alt="Status" /></a>
   <a href="#"><img src="https://img.shields.io/badge/License-Proprietary-red?style=for-the-badge" alt="License" /></a>
   <a href="#"><img src="https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=white" alt="React" /></a>
@@ -148,7 +148,7 @@ WarehouseManagementSystem/
 ├── 📄 .gitignore                # Git ignore rules
 ├── 📄 README.md                 # This file
 ├── 📄 CHANGELOG.md              # Version history and release notes
-├── 📄 RELEASE_NOTES.md          # Current release notes (v0.5.0)
+├── 📄 RELEASE_NOTES.md          # Current release notes (v0.5.1)
 ├── 📄 LICENSE                   # Proprietary license
 ├── 📄 package.json              # Dependencies and scripts
 ├── 📄 tsconfig.json             # TypeScript configuration
@@ -156,23 +156,21 @@ WarehouseManagementSystem/
 ├── 📄 vite.config.ts            # Vite build configuration
 ├── 📄 index.html                # HTML entry point
 │
-├── 📁 config/                   # Database schemas & migrations
-│   ├── current-database-schema.sql
-│   ├── migration_add_text_columns.sql
-│   └── migration_stock_movement_v2.sql
-│
-├── 📁 .db_reference/            # Database reference schemas & migrations
-│   ├── presentschema.sql        # Current full schema reference
+├── 📁 .db_reference/            # Database reference schemas & migrations (git-ignored)
+│   ├── db_schema.sql            # Full consolidated DB schema
+│   ├── current-database-schema.sql  # Current schema snapshot
 │   ├── rbac.sql                 # RBAC tables, roles, policies
 │   ├── supabasesetup.sql        # Initial DB setup
 │   ├── packing.sql              # Packing module schema
 │   ├── packing_module_migration.sql
 │   ├── packing_data_migration.sql
 │   ├── packing_view.sql         # Packing detail views
+│   ├── migration_add_text_columns.sql  # Applied migration
+│   ├── migration_stock_movement_v2.sql # Applied migration
 │   ├── fix_profiles_rls.sql     # RLS policy fixes
 │   ├── fix_supabase_lint_errors.sql
 │   ├── fix_remaining_lint_warnings.sql
-│   └── today.sql                # Latest consolidated SQL
+│   └── migrations/              # GRBAC migration scripts (001–009)
 │
 ├── 📁 docs/                     # Technical documentation
 │   ├── ARCHITECTURE.md          # System architecture overview
@@ -506,7 +504,7 @@ The system uses a relational PostgreSQL schema with the following core tables:
 | `contract_configs` | Customer-specific packing configurations |
 | `user_permissions` | Granular RBAC permission overrides |
 
-Database migrations are stored in `config/`, `.db_reference/`, and `supabase/migrations/`.
+Database migrations are stored in `.db_reference/` and `supabase/migrations/`.
 Full schema documentation is available at [`docs/DATABASE_SCHEMA.md`](docs/DATABASE_SCHEMA.md).
 
 ---
@@ -605,13 +603,14 @@ MAJOR.MINOR.PATCH
 | **MINOR** | New features, backwards-compatible |
 | **PATCH** | Bug fixes and minor improvements |
 
-**Current Version:** `v0.5.0`
+**Current Version:** `v0.5.1`
 
 ### Version History
 
 | Version | Date | Type | Highlights |
 | :--- | :--- | :--- | :--- |
-| **0.5.0** | 2026-03-31 | Minor | Codebase cleanup, dependency audit, documentation overhaul, PDF microservice |
+| **0.5.1** | 2026-03-31 | Patch | Deep cleanup, dead code removal, DB consolidation, documentation sync |
+| 0.5.0 | 2026-03-31 | Minor | Codebase cleanup, dependency audit, documentation overhaul, PDF microservice |
 | 0.4.2 | 2026-03-30 | Patch | Server-side filtering, backend aggregates, pagination fixes |
 | 0.4.1 | 2026-03-06 | Patch | Performance optimization, documentation overhaul, structured logging |
 | 0.4.0 | 2026-03-05 | Minor | Master Packing List, Performa Invoice, Traceability |
@@ -655,6 +654,35 @@ This release focuses on enterprise-grade code quality improvements with **zero b
 - Added page reset on filter change to prevent stale results
 
 See [CHANGELOG.md](CHANGELOG.md) and [RELEASE_NOTES.md](RELEASE_NOTES.md) for complete details.
+
+### v0.5.1 — Deep Cleanup & Standardization (2026-03-31)
+
+This round performs a comprehensive dead code audit and structural cleanup with **zero business logic changes**:
+
+#### Dead Code & Import Cleanup
+- Removed 253 lines of commented-out duplicate code from `src/utils/supabase/auth.ts`
+- Removed 8 unused Lucide icon imports from `App.tsx` (BarChart3, List, FileCheck, FileMinus, Settings, Truck, Receipt, Eye)
+- Removed 20-line commented-out Traceability menu block from `App.tsx`
+- Removed unused `PackingListManager` import from `App.tsx`
+- Fixed dangling `AuthDebug` import in `DashboardNew.tsx` (file didn't exist)
+
+#### Legacy File Removal
+- Deleted `server/pdf-server.mjs` — PDF service fully decoupled to `micro-services/pdf-service/`
+- Removed `pdf-server` script from `package.json`
+- Moved `@types/qrcode` from dependencies to devDependencies
+
+#### Database File Consolidation
+- Moved 3 SQL files from `config/` into `.db_reference/` (single source of truth)
+- Removed empty `config/` directory entirely
+
+#### .gitignore Enhancement
+- Added `config/` and `server/` to prevent re-creation of legacy directories
+
+#### Documentation Updates
+- Updated `DISPATCH_EMAIL_SYSTEM.md` to reflect microservice architecture (v8)
+- Updated README project structure to match current file layout
+- Updated `RELEASE_NOTES.md` with v0.5.1 entries
+- Updated `CHANGELOG.md` with v0.5.1 structured entry
 
 ---
 

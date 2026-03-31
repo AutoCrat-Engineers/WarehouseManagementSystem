@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.1] — 2026-03-31
+
+### Release Type: Deep Cleanup & Standardization
+
+### Removed
+
+- **Dead Commented-Out Code** — Removed 253 lines of entirely commented-out duplicate code from `src/utils/supabase/auth.ts` (identical copy of active code below it)
+- **Unused Imports** — Removed 8 unused Lucide icon imports from `App.tsx` (`BarChart3`, `List`, `FileCheck`, `FileMinus`, `Settings`, `Truck`, `Receipt`, `Eye`)
+- **Commented-Out UI Block** — Removed 20-line commented-out Traceability menu section from `App.tsx` sidebar
+- **Dangling Import** — Removed `AuthDebug` import from `DashboardNew.tsx` (referenced file did not exist)
+- **Unused Component Import** — Removed `PackingListManager` import from `App.tsx` (imported but never rendered)
+- **Legacy Server Directory** — Deleted `server/pdf-server.mjs` and `server/` directory (PDF service fully decoupled to `micro-services/pdf-service/`)
+- **Legacy Script** — Removed `pdf-server` npm script from `package.json`
+- **Legacy Config Directory** — Removed `config/` directory after consolidating 3 SQL files into `.db_reference/`
+
+### Changed
+
+- **Dependency Classification** — Moved `@types/qrcode` from `dependencies` to `devDependencies` (type packages belong in devDependencies)
+- **`.gitignore` Enhancement** — Added `config/` and `server/` patterns to prevent re-creation of removed directories
+- **DB File Consolidation** — Moved `current-database-schema.sql`, `migration_add_text_columns.sql`, `migration_stock_movement_v2.sql` from `config/` into `.db_reference/`
+
+### Documentation
+
+- Updated `docs/DISPATCH_EMAIL_SYSTEM.md` to version v8 reflecting microservice architecture
+- Updated `README.md` project structure to match current directory layout
+- Updated `README.md` with v0.5.1 Recent Changes section
+- Updated `RELEASE_NOTES.md` with v0.5.1 entries
+- Updated `CHANGELOG.md` — This entry
+
+---
+
 ## [0.5.0] — 2026-03-31
 
 ### Release Type: Codebase Cleanup & Documentation
