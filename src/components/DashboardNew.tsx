@@ -14,7 +14,6 @@ import {
 import { useDashboard } from '../hooks/useDashboard';
 import { seedService } from '../utils/api/services';
 import { SampleDataInfo } from './SampleDataInfo';
-import { AuthDebug } from './AuthDebug';
 import { APIError } from '../utils/api/client';
 
 interface DashboardProps {

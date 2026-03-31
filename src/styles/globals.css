@@ -41,6 +41,7 @@
 
   /* Layout */
   --sidebar-width: 260px;
+  --sidebar-collapsed-width: 72px;
   --topbar-height: 64px;
   --content-max-width: 1600px;
 
@@ -315,6 +316,28 @@
 
   ::-webkit-scrollbar-thumb:hover {
     background: var(--enterprise-gray-500);
+  }
+
+  /* Hide scrollbar in sidebar while preserving scroll */
+  .app-sidebar {
+    scrollbar-width: none;
+    /* Firefox */
+    -ms-overflow-style: none;
+    /* IE/Edge */
+  }
+
+  .app-sidebar::-webkit-scrollbar {
+    display: none;
+    /* Chrome/Safari/Edge */
+  }
+
+  .app-sidebar nav {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .app-sidebar nav::-webkit-scrollbar {
+    display: none;
   }
 }
 

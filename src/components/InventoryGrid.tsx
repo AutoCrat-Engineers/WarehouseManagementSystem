@@ -14,7 +14,7 @@
  * - View Screen: vw_item_stock_distribution
  */
 
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
     Package,
     RefreshCw,
@@ -27,13 +27,14 @@ import {
     Download,
     X,
     XCircle,
+    Info,
 } from 'lucide-react';
 import { Card, Button, Badge, LoadingSpinner, EmptyState, Modal, ModuleLoader } from './ui/EnterpriseUI';
 import {
     SummaryCard, SummaryCardsGrid,
     FilterBar as SharedFilterBar, ActionBar,
     SearchBox, StatusFilter, RefreshButton, ExportCSVButton, ClearFiltersButton,
-    ActionButton,
+    ActionButton, sharedThStyle, sharedTdStyle, Pagination
 } from './ui/SharedComponents';
 import { useAllItemsStockDashboard, useItemStockDistribution } from '../hooks/useInventory';
 import type { ItemStockDashboard, ItemStockDistribution, StockStatus } from '../types/inventory';
@@ -214,9 +215,9 @@ function StockDetailModal({ isOpen, onClose, item }: StockDetailModalProps) {
                                     FG Warehouse
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
-                                    <span style={{ color: 'var(--enterprise-gray-500)' }}>Available</span>
+                                    <span style={{ color: 'var(--enterprise-gray-500)' }}>On Hand</span>
                                     <span style={{ fontWeight: 600, color: 'var(--enterprise-success)' }}>
-                                        {(distribution as any)?.productionAvailable ?? item.productionFinishedStock ?? 0}
+                                        {(distribution as any)?.productionOnHand ?? item.productionFinishedStock ?? 0}
                                     </span>
                                 </div>
                             </div>
@@ -350,7 +351,7 @@ function StockDetailModal({ isOpen, onClose, item }: StockDetailModalProps) {
                                 color: 'var(--enterprise-gray-500)',
                                 marginTop: '8px',
                             }}>
-                                = US Warehouse + In Transit + S&V Warehouse − Reserved (Next Month)
+                                = US Warehouse + S&V Warehouse − Reserved (Next Month)
                             </p>
                         </div>
                     </>
@@ -368,49 +369,23 @@ function StockDetailModal({ isOpen, onClose, item }: StockDetailModalProps) {
 }
 
 // ============================================================================
-// CSV EXPORT UTILITY
+// EXCEL EXPORT UTILITY
 // ============================================================================
 
-function exportToCSV(data: ItemStockDashboard[], filename: string = 'inventory_export') {
-    const headers = [
-        'Item Code',
-        'Description',
-        'MSN',
-        'Part Number',
-        'Net Available',
-        'Status',
-        'Active'
-    ];
-
-    const rows = data.map(item => [
-        item.itemCode,
-        item.itemName || '',
-        item.masterSerialNo || '',
-        item.partNumber || '',
-        item.netAvailableForCustomer,
-        item.stockStatus || '',
-        (item as ItemStockDashboardExtended).isActive !== false ? 'Active' : 'Inactive'
-    ]);
-
-    const csvContent = [
-        headers.join(','),
-        ...rows.map(row => row.map(cell =>
-            typeof cell === 'string' && (cell.includes(',') || cell.includes('"'))
-                ? `"${cell.replace(/"/g, '""')}"`
-                : cell
-        ).join(','))
-    ].join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-
-    link.setAttribute('href', url);
-    link.setAttribute('download', `${filename}_${new Date().toISOString().split('T')[0]}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+function exportToExcel(data: ItemStockDashboard[], filename: string = 'inventory_export') {
+    import('xlsx').then(XLSX => {
+        const headers = ['Item Code', 'Description', 'MSN', 'Part Number', 'Net Available', 'Status', 'Active'];
+        const rows = data.map(item => [
+            item.itemCode, item.itemName || '', item.masterSerialNo || '',
+            item.partNumber || '', item.netAvailableForCustomer,
+            item.stockStatus || '',
+            (item as ItemStockDashboardExtended).isActive !== false ? 'Active' : 'Inactive',
+        ]);
+        const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
+        XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
+    });
 }
 
 // ============================================================================
@@ -422,6 +397,13 @@ export function InventoryGrid() {
 
     // Local state
     const [refreshing, setRefreshing] = useState(false);
+    const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; title: string; text: string } | null>(null);
+    const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const showToast = useCallback((type: 'success' | 'error' | 'warning' | 'info', title: string, text: string, dur = 3000) => {
+        if (toastTimer.current) clearTimeout(toastTimer.current);
+        setToast({ type, title, text });
+        toastTimer.current = setTimeout(() => setToast(null), dur);
+    }, []);
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState<StockStatus | 'ALL'>('ALL');
     const [activeStatusFilter, setActiveStatusFilter] = useState<ActiveStatusFilter>('ALL');
@@ -431,8 +413,8 @@ export function InventoryGrid() {
     const [selectedItem, setSelectedItem] = useState<ItemStockDashboard | null>(null);
     const [showDetailModal, setShowDetailModal] = useState(false);
 
-    // Pagination state - show 20 items at a time
-    const [displayCount, setDisplayCount] = useState(20);
+    // Pagination state
+    const [page, setPage] = useState(0);
     const ITEMS_PER_PAGE = 20;
 
     // Handle refresh
@@ -440,6 +422,7 @@ export function InventoryGrid() {
         setRefreshing(true);
         await refetch();
         setRefreshing(false);
+        showToast('info', 'Refreshed', 'Data refreshed successfully.');
     };
 
     // Handle sort
@@ -525,27 +508,19 @@ export function InventoryGrid() {
         return result;
     }, [items, searchTerm, statusFilter, activeStatusFilter, sortField, sortDirection]);
 
-    // Paginated items - only show displayCount items
+    // Paginated items
     const displayedItems = useMemo(() => {
-        return filteredItems.slice(0, displayCount);
-    }, [filteredItems, displayCount]);
+        return filteredItems.slice(page * ITEMS_PER_PAGE, (page + 1) * ITEMS_PER_PAGE);
+    }, [filteredItems, page]);
 
-    // Check if there are more items to load
-    const hasMoreItems = displayCount < filteredItems.length;
-
-    // Reset display count when filters change
+    // Reset display page when filters change
     useEffect(() => {
-        setDisplayCount(ITEMS_PER_PAGE);
+        setPage(0);
     }, [searchTerm, statusFilter, activeStatusFilter, cardFilter]);
-
-    // Handle load more
-    const handleLoadMore = () => {
-        setDisplayCount(prev => prev + ITEMS_PER_PAGE);
-    };
 
     // Handle export
     const handleExport = useCallback(() => {
-        exportToCSV(filteredItems, 'inventory_export');
+        exportToExcel(filteredItems, 'inventory_export');
     }, [filteredItems]);
 
     // Handle view details
@@ -589,6 +564,36 @@ export function InventoryGrid() {
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            {/* Toast */}
+            {toast && (
+                <div style={{
+                    position: 'fixed', top: '24px', right: '24px', zIndex: 9999,
+                    padding: '16px 20px', borderRadius: '14px', maxWidth: '420px', minWidth: '320px',
+                    background: toast.type === 'success' ? 'linear-gradient(135deg, #f0fdf4, #dcfce7)'
+                        : toast.type === 'error' ? 'linear-gradient(135deg, #fef2f2, #fee2e2)'
+                            : toast.type === 'warning' ? 'linear-gradient(135deg, #fffbeb, #fef3c7)'
+                                : 'linear-gradient(135deg, #eff6ff, #dbeafe)',
+                    border: `1.5px solid ${toast.type === 'success' ? '#86efac' : toast.type === 'error' ? '#fca5a5' : toast.type === 'warning' ? '#fcd34d' : '#93c5fd'}`,
+                    boxShadow: '0 10px 40px rgba(0,0,0,0.12)', display: 'flex', alignItems: 'flex-start', gap: '12px',
+                    animation: 'slideInDown 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+                }}>
+                    <div style={{
+                        width: '36px', height: '36px', borderRadius: '10px', flexShrink: 0,
+                        background: toast.type === 'success' ? 'linear-gradient(135deg, #16a34a, #15803d)' : toast.type === 'error' ? 'linear-gradient(135deg, #dc2626, #b91c1c)' : toast.type === 'warning' ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                        {toast.type === 'success' && <CheckCircle size={18} style={{ color: '#fff' }} />}
+                        {toast.type === 'error' && <XCircle size={18} style={{ color: '#fff' }} />}
+                        {toast.type === 'warning' && <AlertTriangle size={18} style={{ color: '#fff' }} />}
+                        {toast.type === 'info' && <Info size={18} style={{ color: '#fff' }} />}
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '13px', fontWeight: 800, color: toast.type === 'success' ? '#14532d' : toast.type === 'error' ? '#7f1d1d' : toast.type === 'warning' ? '#78350f' : '#1e3a5f', marginBottom: '2px' }}>{toast.title}</div>
+                        <div style={{ fontSize: '12px', fontWeight: 500, lineHeight: '1.5', color: toast.type === 'success' ? '#166534' : toast.type === 'error' ? '#991b1b' : toast.type === 'warning' ? '#92400e' : '#1e40af' }}>{toast.text}</div>
+                    </div>
+                    <button onClick={() => { if (toastTimer.current) clearTimeout(toastTimer.current); setToast(null); }} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px', borderRadius: '6px', display: 'flex', color: 'var(--enterprise-gray-400)' }}><X size={16} /></button>
+                </div>
+            )}
             {/* Summary Cards - Responsive Grid with Click-to-Filter */}
             <SummaryCardsGrid>
                 <SummaryCard
@@ -651,7 +656,7 @@ export function InventoryGrid() {
                     )}
                     <RefreshButton onClick={handleRefresh} loading={refreshing} />
                     <ActionButton
-                        label="Export CSV"
+                        label="Export Excel"
                         icon={<Download size={14} />}
                         onClick={handleExport}
                         variant="primary"
@@ -673,7 +678,7 @@ export function InventoryGrid() {
                     />
                 ) : (
                     <>
-                        <div className="table-responsive" style={{ overflowX: 'auto' }}>
+                        <div className="table-responsive" style={{ overflowX: 'auto', opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                                 <thead>
                                     <tr style={{
@@ -795,50 +800,12 @@ export function InventoryGrid() {
                             </table>
                         </div>
 
-                        {/* Load More Button - Outside scrollable area */}
-                        {hasMoreItems && (
-                            <div style={{
-                                padding: '20px',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                alignItems: 'center',
-                                gap: '12px',
-                                borderTop: '1px solid var(--table-border)',
-                                position: 'relative',
-                                zIndex: 10,
-                                backgroundColor: 'white',
-                            }}>
-                                <p style={{
-                                    fontSize: '13px',
-                                    color: 'var(--enterprise-gray-500)',
-                                    margin: 0,
-                                }}>
-                                    Showing {displayedItems.length} of {filteredItems.length} items
-                                </p>
-                                <Button
-                                    variant="primary"
-                                    onClick={handleLoadMore}
-                                >
-                                    Load More ({Math.min(ITEMS_PER_PAGE, filteredItems.length - displayedItems.length)} more)
-                                </Button>
-                            </div>
-                        )}
-
-                        {/* Show total when all loaded */}
-                        {!hasMoreItems && displayedItems.length > 0 && (
-                            <div style={{
-                                padding: '16px',
-                                textAlign: 'center',
-                                borderTop: '1px solid var(--table-border)',
-                            }}>
-                                <p style={{
-                                    fontSize: '13px',
-                                    color: 'var(--enterprise-gray-500)',
-                                }}>
-                                    Showing all {filteredItems.length} items
-                                </p>
-                            </div>
-                        )}
+                        <Pagination
+                            page={page}
+                            pageSize={ITEMS_PER_PAGE}
+                            totalCount={filteredItems.length}
+                            onPageChange={setPage}
+                        />
                     </>
                 )}
             </Card>
@@ -877,6 +844,10 @@ export function InventoryGrid() {
                 }
                 .spinning {
                     animation: spin 1s linear infinite;
+                }
+                @keyframes slideInDown {
+                    from { opacity: 0; transform: translateY(-16px); }
+                    to { opacity: 1; transform: translateY(0); }
                 }
             `}</style>
         </div >

@@ -1,9 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { projectId } from '../utils/supabase/info';
 import { Plus, Edit2, FileText, Loader2, Search, Trash2, Eye, Package } from 'lucide-react';
+import { ModuleLoader } from './ui/EnterpriseUI';
+
+type UserRole = 'L1' | 'L2' | 'L3' | null;
 
 interface BlanketOrdersProps {
   accessToken: string;
+  userRole?: UserRole;
+  userPerms?: Record<string, boolean>;
 }
 
 interface BlanketOrder {
@@ -37,7 +42,10 @@ interface Item {
   uom: string;
 }
 
-export function BlanketOrders({ accessToken }: BlanketOrdersProps) {
+export function BlanketOrders({ accessToken, userRole, userPerms = {} }: BlanketOrdersProps) {
+  // RBAC helpers — granular permissions with role-based fallback
+  const hasPerms = Object.keys(userPerms).length > 0;
+  const canCreate = userRole === 'L3' || (hasPerms ? userPerms['orders.create'] === true : userRole === 'L2');
   const [orders, setOrders] = useState<BlanketOrder[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
@@ -46,7 +54,7 @@ export function BlanketOrders({ accessToken }: BlanketOrdersProps) {
   const [selectedOrder, setSelectedOrder] = useState<BlanketOrder | null>(null);
   const [orderLines, setOrderLines] = useState<OrderLine[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  
+
   const [formData, setFormData] = useState({
     orderNumber: '',
     customerName: '',
@@ -108,7 +116,7 @@ export function BlanketOrders({ accessToken }: BlanketOrdersProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     try {
       const response = await fetch(
         `https://${projectId}.supabase.co/functions/v1/make-server-9c637d11/blanket-orders`,
@@ -193,6 +201,11 @@ export function BlanketOrders({ accessToken }: BlanketOrdersProps) {
     order.customerName.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  // ── FIRST-LOAD: full-page skeleton ──
+  if (loading && orders.length === 0) {
+    return <ModuleLoader moduleName="Blanket Orders" icon={<FileText size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -201,13 +214,13 @@ export function BlanketOrders({ accessToken }: BlanketOrdersProps) {
           <h1 className="text-3xl font-bold text-gray-900">Blanket Orders</h1>
           <p className="text-gray-600 mt-1">Manage long-term customer orders with multiple items</p>
         </div>
-        <button
+        {canCreate && <button
           onClick={() => setShowModal(true)}
           className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
         >
           <Plus size={20} />
           New Order
-        </button>
+        </button>}
       </div>
 
       {/* Summary Cards */}
@@ -261,7 +274,7 @@ export function BlanketOrders({ accessToken }: BlanketOrdersProps) {
 
       {/* Orders Table */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        {loading ? (
+        {loading && orders.length === 0 ? (
           <div className="flex items-center justify-center h-64">
             <Loader2 className="animate-spin text-blue-600" size={32} />
           </div>
@@ -269,15 +282,15 @@ export function BlanketOrders({ accessToken }: BlanketOrdersProps) {
           <div className="text-center py-12">
             <FileText className="mx-auto text-gray-400 mb-4" size={48} />
             <p className="text-gray-600">No blanket orders found</p>
-            <button
+            {canCreate && <button
               onClick={() => setShowModal(true)}
               className="mt-4 text-blue-600 hover:text-blue-700 font-medium"
             >
               Create your first order
-            </button>
+            </button>}
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto" style={{ opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto' }}>
             <table className="w-full">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
@@ -305,11 +318,10 @@ export function BlanketOrders({ accessToken }: BlanketOrdersProps) {
                       {new Date(order.startDate).toLocaleDateString()} - {new Date(order.endDate).toLocaleDateString()}
                     </td>
                     <td className="px-6 py-4 text-center">
-                      <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
-                        order.status === 'ACTIVE' ? 'bg-green-100 text-green-700' :
+                      <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${order.status === 'ACTIVE' ? 'bg-green-100 text-green-700' :
                         order.status === 'COMPLETED' ? 'bg-blue-100 text-blue-700' :
-                        'bg-gray-100 text-gray-700'
-                      }`}>
+                          'bg-gray-100 text-gray-700'
+                        }`}>
                         {order.status}
                       </span>
                     </td>

@@ -243,54 +243,10 @@ export async function refreshToken(): Promise<string | null> {
 // ============================================================================
 // PERMISSION FUNCTIONS
 // ============================================================================
-
-/**
- * Get all permissions for current user
- */
-export async function getUserPermissions(): Promise<Permission[]> {
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return [];
-
-    const { data, error } = await supabase
-      .rpc('get_user_permissions', { user_id: user.id });
-
-    if (error) {
-      console.error('Get permissions error:', error);
-      return [];
-    }
-
-    return data || [];
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Check if user has specific permission
- */
-export async function hasPermission(module: string, action: string): Promise<boolean> {
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return false;
-
-    const { data, error } = await supabase
-      .rpc('has_permission', {
-        user_id: user.id,
-        p_module: module,
-        p_action: action
-      });
-
-    if (error) {
-      console.error('Check permission error:', error);
-      return false;
-    }
-
-    return data || false;
-  } catch {
-    return false;
-  }
-}
+// NOTE: Granular permission functions live in permissionService.ts
+// Use: getUserPermissions(), saveUserPermissions(), checkPermission()
+// from '../services/permissionService' for all GRBAC operations.
+// ============================================================================
 
 /**
  * Check if user has minimum role level

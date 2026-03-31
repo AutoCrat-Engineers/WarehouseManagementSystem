@@ -37,75 +37,60 @@ export function useDashboard(accessToken: string | null) {
       setLoading(true);
       setError(null);
 
-      // Fetch items
-      const { data: items, error: itemsError } = await supabase
-        .from('items')
-        .select('*');
+      // PERF: Fetch stock data and blanket orders IN PARALLEL
+      const [stockResult, ordersResult] = await Promise.all([
+        supabase
+          .from('vw_item_stock_dashboard')
+          .select('item_code, item_name, stock_status, net_available_for_customer, total_on_hand'),
+        supabase
+          .from('blanket_orders')
+          .select('id, order_number, customer_name, status, total_value, created_at')
+          .order('created_at', { ascending: false })
+          .limit(5),
+      ]);
 
-      if (itemsError) throw itemsError;
+      if (stockResult.error) throw stockResult.error;
+      if (ordersResult.error) throw ordersResult.error;
 
-      // Fetch inventory
-      const { data: inventory, error: inventoryError } = await supabase
-        .from('inventory')
-        .select('*');
+      const stockItems = stockResult.data;
+      const blanketOrders = ordersResult.data;
 
-      if (inventoryError) throw inventoryError;
-
-      // Fetch blanket orders
-      const { data: blanketOrders, error: ordersError } = await supabase
-        .from('blanket_orders')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(5);
-
-      if (ordersError) throw ordersError;
-
-      // Calculate summary
-      const totalItems = items?.length || 0;
+      // Calculate summary from the DB view's stock_status
+      const totalItems = stockItems?.length || 0;
       let lowStockCount = 0;
       let totalStockValue = 0;
 
-      items?.forEach((item: any) => {
-        const inv = inventory?.find((i: any) => i.item_code === item.item_code);
-        if (inv) {
-          const currentStock = inv.current_stock || 0;
-          const minStock = item.min_stock_level || 0;
-          const reorderPoint = item.reorder_point || 0;
-
-          if (currentStock <= Math.max(minStock, reorderPoint)) {
-            lowStockCount++;
-          }
-
-          totalStockValue += currentStock * (item.unit_price || 0);
+      stockItems?.forEach((item: any) => {
+        const status = (item.stock_status || '').toUpperCase();
+        // Count CRITICAL and LOW as "low stock" — matches Inventory module
+        if (status === 'CRITICAL' || status === 'LOW') {
+          lowStockCount++;
         }
+        totalStockValue += item.total_on_hand || 0;
       });
 
       const healthyStockCount = totalItems - lowStockCount;
 
-      // Generate alerts
+      // Generate alerts from the view data
       const alerts: any[] = [];
-      items?.forEach((item: any) => {
-        const inv = inventory?.find((i: any) => i.item_code === item.item_code);
-        if (inv) {
-          const currentStock = inv.current_stock || 0;
-          const minStock = item.min_stock_level || 0;
-          const reorderPoint = item.reorder_point || 0;
+      stockItems?.forEach((item: any) => {
+        const status = (item.stock_status || '').toUpperCase();
+        const netAvailable = item.net_available_for_customer || 0;
 
-          if (currentStock <= minStock) {
-            alerts.push({
-              message: `${item.item_name} is critically low (${currentStock} ${item.uom})`,
-              severity: 'critical' as const,
-              itemCode: item.item_code,
-              timestamp: new Date().toISOString(),
-            });
-          } else if (currentStock <= reorderPoint) {
-            alerts.push({
-              message: `${item.item_name} below reorder point (${currentStock} ${item.uom})`,
-              severity: 'warning' as const,
-              itemCode: item.item_code,
-              timestamp: new Date().toISOString(),
-            });
-          }
+        if (status === 'CRITICAL') {
+          alerts.push({
+            message: `${item.item_name || item.item_code} is critically low (${netAvailable} available)`,
+            severity: 'critical' as const,
+            itemCode: item.item_code,
+            timestamp: new Date().toISOString(),
+          });
+        } else if (status === 'LOW') {
+          alerts.push({
+            message: `${item.item_name || item.item_code} is below reorder point (${netAvailable} available)`,
+            severity: 'warning' as const,
+            itemCode: item.item_code,
+            timestamp: new Date().toISOString(),
+          });
         }
       });
 

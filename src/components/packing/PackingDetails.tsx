@@ -13,15 +13,15 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { getSupabaseClient } from '../../utils/supabase/client';
 import {
     Card, Button, Badge, Input, Label, Select,
-    Modal, LoadingSpinner, EmptyState,
+    Modal, LoadingSpinner, EmptyState, ModuleLoader,
 } from '../ui/EnterpriseUI';
 import {
     SummaryCard, SummaryCardsGrid,
     FilterBar as SharedFilterBar, ActionBar,
-    SearchBox, ClearFiltersButton, ExportCSVButton, RefreshButton, AddButton,
+    SearchBox, ClearFiltersButton, ExportCSVButton, RefreshButton, AddButton, Pagination
 } from '../ui/SharedComponents';
 import {
-    Package, Search, Plus, Eye, Edit2, Download,
+    PackageOpen, Search, Plus, Eye, Edit2, Download,
     X, CheckCircle2, XCircle, AlertTriangle, Info,
     ClipboardList, Ruler, Weight, Box, ChevronDown,
     RefreshCw, Filter, Trash2, Settings,
@@ -36,6 +36,7 @@ type UserRole = 'L1' | 'L2' | 'L3' | null;
 interface PackingDetailsProps {
     accessToken: string;
     userRole?: UserRole;
+    userPerms?: Record<string, boolean>;
     onNavigate?: (view: string) => void;
 }
 
@@ -193,14 +194,33 @@ function UnitToggle<T extends string>({ units, active, onChange, label, icon }: 
 }
 
 // ============================================================================
-// VIEW MODAL
+// CONTAINER BREAKDOWN CALCULATOR (for Contract Config tab)
 // ============================================================================
+function calcContainerBreakdown(outerQty: number, innerQty: number) {
+    if (!outerQty || !innerQty || innerQty <= 0) return { full: 0, adjustment: 0, total: 0 };
+    const full = Math.floor(outerQty / innerQty);
+    const adjustment = outerQty % innerQty;
+    return { full, adjustment, total: outerQty };
+}
+
+// ============================================================================
+// VIEW MODAL (with switchable tabs: Packing Details + Contract Config)
+// ============================================================================
+
+type ViewModalTab = 'packing-details' | 'contract-config';
 
 function ViewModal({ isOpen, onClose, spec, item }: {
     isOpen: boolean; onClose: () => void; spec: PackingSpec | null; item?: ItemMaster | null;
 }) {
     const [lu, setLu] = useState<LengthUnit>('mm');
     const [wu, setWu] = useState<WeightUnit>('kg');
+    const [modalTab, setModalTab] = useState<ViewModalTab>('packing-details');
+
+    // Reset tab when modal opens with a new spec
+    useEffect(() => {
+        if (isOpen) setModalTab('packing-details');
+    }, [isOpen, spec?.id]);
+
     if (!spec) return null;
 
     const fmtSize = (l: number, w: number, h: number) =>
@@ -215,56 +235,249 @@ function ViewModal({ isOpen, onClose, spec, item }: {
         textTransform: 'uppercase', letterSpacing: '0.4px', fontWeight: 600,
     };
 
+    // Contract Config calculations
+    const breakdown = calcContainerBreakdown(spec.outer_box_quantity, spec.inner_box_quantity);
+    const isConfigValid = spec.outer_box_quantity > 0 && spec.inner_box_quantity > 0;
+
+    // Tab definitions
+    const modalTabs: { id: ViewModalTab; label: string; icon: React.ReactNode }[] = [
+        { id: 'packing-details', label: 'Packing Details', icon: <ClipboardList size={15} /> },
+        { id: 'contract-config', label: 'Contract Config', icon: <Settings size={15} /> },
+    ];
+
     return (
         <Modal isOpen={isOpen} onClose={onClose} title={
             <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
                 <span>View Packing Specification</span>
                 <Badge variant={spec.is_active ? 'success' : 'error'}>{spec.is_active ? 'Active' : 'Inactive'}</Badge>
             </span>
-        } maxWidth="750px">
-            {/* Item Info */}
-            <div style={{ ...sectionStyle, background: 'linear-gradient(135deg, rgba(30,58,138,0.03), rgba(30,58,138,0.08))', border: '1px solid rgba(30,58,138,0.1)' }}>
-                <p style={{ fontSize: '12px', fontWeight: 700, color: 'var(--enterprise-primary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Package size={14} /> Item Information
-                </p>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div><Label>Item Code</Label><Input value={spec.item_code} disabled /></div>
-                    <div><Label>Part Number</Label><Input value={spec.part_number || '—'} disabled /></div>
-                    <div><Label>MSN</Label><Input value={spec.master_serial_no || '—'} disabled /></div>
-                    <div><Label>Revision</Label><Input value={spec.revision || '—'} disabled /></div>
-                    <div style={{ gridColumn: '1 / -1' }}><Label>Description</Label><Input value={spec.item_name || '—'} disabled /></div>
-                </div>
+        } maxWidth="800px">
+
+            {/* ═══ TAB BAR ═══ */}
+            <div style={{
+                display: 'flex', alignItems: 'stretch',
+                borderBottom: '2px solid var(--enterprise-gray-200, #e5e7eb)',
+                marginBottom: '20px',
+            }}>
+                {modalTabs.map(tab => (
+                    <button
+                        key={tab.id}
+                        onClick={() => setModalTab(tab.id)}
+                        style={{
+                            display: 'flex', alignItems: 'center', gap: '7px',
+                            padding: '11px 20px', border: 'none',
+                            borderBottom: modalTab === tab.id
+                                ? '3px solid var(--enterprise-primary, #1e3a8a)'
+                                : '3px solid transparent',
+                            marginBottom: '-2px',
+                            fontSize: '13px',
+                            fontWeight: modalTab === tab.id ? 700 : 500,
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease',
+                            background: 'transparent',
+                            color: modalTab === tab.id
+                                ? 'var(--enterprise-primary, #1e3a8a)'
+                                : 'var(--enterprise-gray-500, #6b7280)',
+                        }}
+                        onMouseEnter={e => {
+                            if (modalTab !== tab.id) {
+                                e.currentTarget.style.color = 'var(--enterprise-gray-700, #374151)';
+                                e.currentTarget.style.borderBottomColor = 'var(--enterprise-gray-300, #d1d5db)';
+                            }
+                        }}
+                        onMouseLeave={e => {
+                            if (modalTab !== tab.id) {
+                                e.currentTarget.style.color = 'var(--enterprise-gray-500, #6b7280)';
+                                e.currentTarget.style.borderBottomColor = 'transparent';
+                            }
+                        }}
+                    >
+                        <span style={{ display: 'flex', alignItems: 'center', opacity: modalTab === tab.id ? 1 : 0.6 }}>{tab.icon}</span>
+                        {tab.label}
+                    </button>
+                ))}
             </div>
 
-            {/* Unit Toggles */}
-            <div style={{ display: 'flex', gap: '20px', marginBottom: '16px', justifyContent: 'flex-end' }}>
-                <UnitToggle<LengthUnit> units={['mm', 'cm', 'inches']} active={lu} onChange={setLu} icon={<Ruler size={14} />} />
-                <UnitToggle<WeightUnit> units={['g', 'kg', 'lbs']} active={wu} onChange={setWu} icon={<Weight size={14} />} />
-            </div>
+            {/* ═══ TAB: PACKING DETAILS ═══ */}
+            {modalTab === 'packing-details' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    {/* Item Info */}
+                    <div style={{ ...sectionStyle, background: 'linear-gradient(135deg, rgba(30,58,138,0.03), rgba(30,58,138,0.08))', border: '1px solid rgba(30,58,138,0.1)' }}>
+                        <p style={{ fontSize: '12px', fontWeight: 700, color: 'var(--enterprise-primary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <PackageOpen size={14} /> Item Information
+                        </p>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                            <div><Label>Item Code</Label><Input value={spec.item_code} disabled /></div>
+                            <div><Label>Part Number</Label><Input value={spec.part_number || '—'} disabled /></div>
+                            <div><Label>MSN</Label><Input value={spec.master_serial_no || '—'} disabled /></div>
+                            <div><Label>Revision</Label><Input value={spec.revision || '—'} disabled /></div>
+                            <div style={{ gridColumn: '1 / -1' }}><Label>Description</Label><Input value={spec.item_name || '—'} disabled /></div>
+                        </div>
+                    </div>
 
-            {/* Inner Box */}
-            <div style={{ ...sectionStyle, background: 'linear-gradient(135deg, rgba(34,197,94,0.03), rgba(34,197,94,0.08))', border: '1px solid rgba(34,197,94,0.15)' }}>
-                <p style={{ fontSize: '12px', fontWeight: 700, color: 'var(--enterprise-success)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Box size={14} /> Inner Box
-                </p>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-                    <div style={detailCard}><p style={lblStyle}>Size (L × W × H)</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{fmtSize(spec.inner_box_length_mm, spec.inner_box_width_mm, spec.inner_box_height_mm)}</p></div>
-                    <div style={detailCard}><p style={lblStyle}>Quantity</p><p style={{ fontWeight: 700, color: 'var(--enterprise-info, #3b82f6)', fontSize: '18px' }}>{spec.inner_box_quantity}</p></div>
-                    <div style={detailCard}><p style={lblStyle}>Carton Box Gross Weight</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{convertWeight(spec.inner_box_net_weight_kg, wu)} {WEIGHT_LABELS[wu]}</p></div>
-                </div>
-            </div>
+                    {/* Unit Toggles */}
+                    <div style={{ display: 'flex', gap: '20px', justifyContent: 'flex-end' }}>
+                        <UnitToggle<LengthUnit> units={['mm', 'cm', 'inches']} active={lu} onChange={setLu} icon={<Ruler size={14} />} />
+                        <UnitToggle<WeightUnit> units={['g', 'kg', 'lbs']} active={wu} onChange={setWu} icon={<Weight size={14} />} />
+                    </div>
 
-            {/* Outer Box */}
-            <div style={{ ...sectionStyle, background: 'linear-gradient(135deg, rgba(168,85,247,0.03), rgba(168,85,247,0.08))', border: '1px solid rgba(168,85,247,0.15)', marginBottom: 0 }}>
-                <p style={{ fontSize: '12px', fontWeight: 700, color: 'rgb(168,85,247)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Package size={14} /> Outer Box
-                </p>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-                    <div style={detailCard}><p style={lblStyle}>Size (L × W × H)</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{fmtSize(spec.outer_box_length_mm, spec.outer_box_width_mm, spec.outer_box_height_mm)}</p></div>
-                    <div style={detailCard}><p style={lblStyle}>Quantity</p><p style={{ fontWeight: 700, color: 'rgb(168,85,247)', fontSize: '18px' }}>{spec.outer_box_quantity}</p></div>
-                    <div style={detailCard}><p style={lblStyle}>Plywood Box Gross Weight</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{convertWeight(spec.outer_box_gross_weight_kg, wu)} {WEIGHT_LABELS[wu]}</p></div>
+                    {/* Inner Box */}
+                    <div style={{ ...sectionStyle, background: 'linear-gradient(135deg, rgba(34,197,94,0.03), rgba(34,197,94,0.08))', border: '1px solid rgba(34,197,94,0.15)' }}>
+                        <p style={{ fontSize: '12px', fontWeight: 700, color: 'var(--enterprise-success)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <Box size={14} /> Inner Box
+                        </p>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                            <div style={detailCard}><p style={lblStyle}>Size (L × W × H)</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{fmtSize(spec.inner_box_length_mm, spec.inner_box_width_mm, spec.inner_box_height_mm)}</p></div>
+                            <div style={detailCard}><p style={lblStyle}>Quantity</p><p style={{ fontWeight: 700, color: 'var(--enterprise-info, #3b82f6)', fontSize: '18px' }}>{spec.inner_box_quantity}</p></div>
+                            <div style={detailCard}><p style={lblStyle}>Carton Box Gross Weight</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{convertWeight(spec.inner_box_net_weight_kg, wu)} {WEIGHT_LABELS[wu]}</p></div>
+                        </div>
+                    </div>
+
+                    {/* Outer Box */}
+                    <div style={{ ...sectionStyle, background: 'linear-gradient(135deg, rgba(168,85,247,0.03), rgba(168,85,247,0.08))', border: '1px solid rgba(168,85,247,0.15)', marginBottom: 0 }}>
+                        <p style={{ fontSize: '12px', fontWeight: 700, color: 'rgb(168,85,247)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <PackageOpen size={14} /> Outer Box
+                        </p>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                            <div style={detailCard}><p style={lblStyle}>Size (L × W × H)</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{fmtSize(spec.outer_box_length_mm, spec.outer_box_width_mm, spec.outer_box_height_mm)}</p></div>
+                            <div style={detailCard}><p style={lblStyle}>Quantity</p><p style={{ fontWeight: 700, color: 'rgb(168,85,247)', fontSize: '18px' }}>{spec.outer_box_quantity}</p></div>
+                            <div style={detailCard}><p style={lblStyle}>Plywood Box Gross Weight</p><p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{convertWeight(spec.outer_box_gross_weight_kg, wu)} {WEIGHT_LABELS[wu]}</p></div>
+                        </div>
+                    </div>
                 </div>
-            </div>
+            )}
+
+            {/* ═══ TAB: CONTRACT CONFIG ═══ */}
+            {modalTab === 'contract-config' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    {/* Item identifier bar */}
+                    <div style={{
+                        display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px',
+                        borderRadius: 'var(--border-radius-md)',
+                        background: 'linear-gradient(135deg, rgba(30,58,138,0.04), rgba(30,58,138,0.08))',
+                        border: '1px solid rgba(30,58,138,0.12)',
+                    }}>
+                        <PackageOpen size={16} style={{ color: 'var(--enterprise-primary)', flexShrink: 0 }} />
+                        <div style={{ flex: 1 }}>
+                            <span style={{ fontWeight: 700, color: 'var(--enterprise-primary)', fontSize: '14px' }}>{spec.item_code}</span>
+                            <span style={{ margin: '0 8px', color: 'var(--enterprise-gray-300)' }}>|</span>
+                            <span style={{ fontSize: '13px', color: 'var(--enterprise-gray-600)' }}>{spec.item_name || '—'}</span>
+                        </div>
+                        {spec.master_serial_no && (
+                            <span style={{ fontSize: '12px', fontFamily: 'monospace', color: 'var(--enterprise-gray-500)', background: 'rgba(30,58,138,0.06)', padding: '3px 8px', borderRadius: '4px' }}>
+                                MSN: {spec.master_serial_no}
+                            </span>
+                        )}
+                    </div>
+
+                    {/* Packing Configuration Summary */}
+                    <div style={{ ...sectionStyle, background: 'linear-gradient(135deg, rgba(30,58,138,0.02), rgba(30,58,138,0.06))', border: '1px solid rgba(30,58,138,0.1)' }}>
+                        <p style={{ fontSize: '12px', fontWeight: 700, color: 'var(--enterprise-primary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <Settings size={14} /> Packing Configuration
+                        </p>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                            <div style={detailCard}>
+                                <p style={lblStyle}>Outer Box Quantity</p>
+                                <p style={{ fontWeight: 700, color: 'rgb(168,85,247)', fontSize: '20px' }}>
+                                    {spec.outer_box_quantity > 0 ? spec.outer_box_quantity.toLocaleString() : '—'}
+                                </p>
+                                <p style={{ fontSize: '11px', color: 'var(--enterprise-gray-400)', marginTop: '4px' }}>pcs per outer box</p>
+                            </div>
+                            <div style={detailCard}>
+                                <p style={lblStyle}>Inner Box Quantity</p>
+                                <p style={{ fontWeight: 700, color: 'var(--enterprise-info, #3b82f6)', fontSize: '20px' }}>
+                                    {spec.inner_box_quantity > 0 ? spec.inner_box_quantity.toLocaleString() : '—'}
+                                </p>
+                                <p style={{ fontSize: '11px', color: 'var(--enterprise-gray-400)', marginTop: '4px' }}>pcs per inner box</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Container Breakdown Calculation */}
+                    <div style={{ ...sectionStyle, background: isConfigValid ? 'linear-gradient(135deg, rgba(34,197,94,0.03), rgba(34,197,94,0.08))' : 'linear-gradient(135deg, rgba(220,38,38,0.03), rgba(220,38,38,0.06))', border: isConfigValid ? '1px solid rgba(34,197,94,0.15)' : '1px solid rgba(220,38,38,0.15)' }}>
+                        <p style={{ fontSize: '12px', fontWeight: 700, color: isConfigValid ? 'var(--enterprise-success)' : '#dc2626', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            {isConfigValid ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
+                            Container Breakdown
+                        </p>
+                        {isConfigValid ? (
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                                <div style={detailCard}>
+                                    <p style={lblStyle}>Full Containers</p>
+                                    <p style={{ fontWeight: 700, color: 'var(--enterprise-primary)', fontSize: '22px' }}>{breakdown.full}</p>
+                                    <p style={{ fontSize: '11px', color: 'var(--enterprise-gray-400)', marginTop: '4px' }}>
+                                        {breakdown.full} × {spec.inner_box_quantity} = {(breakdown.full * spec.inner_box_quantity).toLocaleString()} pcs
+                                    </p>
+                                </div>
+                                <div style={detailCard}>
+                                    <p style={lblStyle}>Top-off / Adjustment</p>
+                                    {breakdown.adjustment > 0 ? (
+                                        <>
+                                            <p style={{ fontWeight: 700, color: '#d97706', fontSize: '22px' }}>{breakdown.adjustment}</p>
+                                            <p style={{ fontSize: '11px', color: '#92400e', marginTop: '4px' }}>pcs in partial container</p>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <p style={{ fontWeight: 700, color: '#16a34a', fontSize: '16px' }}>Clean Split</p>
+                                            <p style={{ fontSize: '11px', color: 'var(--enterprise-gray-400)', marginTop: '4px' }}>No remainder</p>
+                                        </>
+                                    )}
+                                </div>
+                                <div style={detailCard}>
+                                    <p style={lblStyle}>Total Pieces</p>
+                                    <p style={{ fontWeight: 700, color: 'var(--enterprise-gray-800)', fontSize: '22px' }}>{spec.outer_box_quantity.toLocaleString()}</p>
+                                    <p style={{ fontSize: '11px', color: 'var(--enterprise-gray-400)', marginTop: '4px' }}>per pallet / shipment</p>
+                                </div>
+                            </div>
+                        ) : (
+                            <div style={{ padding: '20px', textAlign: 'center', color: '#991b1b', fontSize: '13px' }}>
+                                <AlertTriangle size={24} style={{ color: '#dc2626', marginBottom: '8px' }} />
+                                <p style={{ fontWeight: 600, marginBottom: '4px' }}>Incomplete Configuration</p>
+                                <p style={{ color: 'var(--enterprise-gray-500)' }}>Outer box and inner box quantities must both be greater than zero to calculate container breakdown.</p>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Box Dimensions Summary */}
+                    <div style={{ ...sectionStyle, background: 'var(--enterprise-gray-50, #f9fafb)', border: '1px solid var(--enterprise-gray-200, #e5e7eb)' }}>
+                        <p style={{ fontSize: '12px', fontWeight: 700, color: 'var(--enterprise-gray-600)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <Box size={14} /> Box Dimensions & Weight Summary
+                        </p>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                            <div style={{ ...detailCard, borderLeft: '3px solid #22c55e' }}>
+                                <p style={{ ...lblStyle, color: '#16a34a' }}>Inner Box</p>
+                                <p style={{ fontSize: '13px', fontWeight: 600, color: 'var(--enterprise-gray-700)' }}>
+                                    {spec.inner_box_length_mm} × {spec.inner_box_width_mm} × {spec.inner_box_height_mm} mm
+                                </p>
+                                <p style={{ fontSize: '12px', color: 'var(--enterprise-gray-500)', marginTop: '4px' }}>
+                                    Net Weight: {spec.inner_box_net_weight_kg} kg
+                                </p>
+                            </div>
+                            <div style={{ ...detailCard, borderLeft: '3px solid rgb(168,85,247)' }}>
+                                <p style={{ ...lblStyle, color: 'rgb(168,85,247)' }}>Outer Box</p>
+                                <p style={{ fontSize: '13px', fontWeight: 600, color: 'var(--enterprise-gray-700)' }}>
+                                    {spec.outer_box_length_mm} × {spec.outer_box_width_mm} × {spec.outer_box_height_mm} mm
+                                </p>
+                                <p style={{ fontSize: '12px', color: 'var(--enterprise-gray-500)', marginTop: '4px' }}>
+                                    Gross Weight: {spec.outer_box_gross_weight_kg} kg
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Info note */}
+                    <div style={{
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                        padding: '10px 14px', borderRadius: '8px',
+                        background: 'linear-gradient(135deg, #eff6ff, #f0f4ff)',
+                        border: '1px solid #bfdbfe',
+                    }}>
+                        <Info size={14} style={{ color: '#1e3a8a', flexShrink: 0 }} />
+                        <span style={{ fontSize: '12px', color: '#1e40af' }}>
+                            Quantities and dimensions are managed in <strong>Packing Details</strong>. Use the Edit action to update values.
+                        </span>
+                    </div>
+                </div>
+            )}
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}><Button variant="primary" onClick={onClose}>Close</Button></div>
         </Modal>
@@ -275,10 +488,13 @@ function ViewModal({ isOpen, onClose, spec, item }: {
 // MAIN COMPONENT
 // ============================================================================
 
-export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
-    const canAdd = userRole === 'L2' || userRole === 'L3';
-    const canEdit = userRole === 'L3';
-    const canAction = userRole === 'L2' || userRole === 'L3';
+export function PackingDetails({ accessToken, userRole, userPerms = {} }: PackingDetailsProps) {
+    // RBAC helpers — granular permissions with role-based fallback
+    const hasPerms = Object.keys(userPerms).length > 0;
+    const canAdd = userRole === 'L3' || (hasPerms ? userPerms['packing.packing-details.create'] === true : userRole === 'L2');
+    const canEdit = userRole === 'L3' || (hasPerms ? userPerms['packing.packing-details.edit'] === true : false);
+    const canDelete = userRole === 'L3' || (hasPerms ? userPerms['packing.packing-details.delete'] === true : false);
+    const canAction = canEdit || canDelete;
 
     // Data state
     const [specs, setSpecs] = useState<PackingSpec[]>([]);
@@ -288,7 +504,7 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
     // UI state
     const [searchTerm, setSearchTerm] = useState('');
     const [cardFilter, setCardFilter] = useState<CardFilter>('ALL');
-    const [displayCount, setDisplayCount] = useState(20);
+    const [page, setPage] = useState<number>(0);
     const ITEMS_PER_PAGE = 20;
 
     // Table unit toggles
@@ -392,10 +608,9 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
         return r;
     }, [specs, cardFilter, searchTerm]);
 
-    const displayed = useMemo(() => filtered.slice(0, displayCount), [filtered, displayCount]);
-    const hasMore = displayCount < filtered.length;
+    const displayed = useMemo(() => filtered.slice(page * ITEMS_PER_PAGE, (page + 1) * ITEMS_PER_PAGE), [filtered, page]);
 
-    useEffect(() => { setDisplayCount(ITEMS_PER_PAGE); }, [cardFilter, searchTerm]);
+    useEffect(() => { setPage(0); }, [cardFilter, searchTerm]);
 
     // ── ITEM SEARCH (for Add modal) ──
     const searchItems = useCallback(async (q: string) => {
@@ -547,23 +762,23 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
     const getOuterWtDisplay = (field: keyof PackingFormData) =>
         getDisplayValue(field, v => convertWeight(v, outerFormWU));
 
-    // ── CSV EXPORT ──
+    // ── EXCEL EXPORT ──
     const handleExport = () => {
-        const rows = filtered.map((s, i) => [
-            i + 1, s.item_code, s.master_serial_no || '', s.item_name || '',
-            `${s.inner_box_length_mm}x${s.inner_box_width_mm}x${s.inner_box_height_mm}`,
-            s.inner_box_quantity, s.inner_box_net_weight_kg,
-            `${s.outer_box_length_mm}x${s.outer_box_width_mm}x${s.outer_box_height_mm}`,
-            s.outer_box_gross_weight_kg, s.is_active ? 'Active' : 'Inactive',
-        ]);
-        const header = 'ID,Item Code,MSN,Description,Inner Box Size (mm),Inner Box Qty,Inner Net Wt (kg),Outer Box Size (mm),Outer Gross Wt (kg),Status';
-        const csv = [header, ...rows.map(r => r.join(','))].join('\n');
-        const blob = new Blob([csv], { type: 'text/csv' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = `packing_details_${new Date().toISOString().slice(0, 10)}.csv`;
-        a.click(); URL.revokeObjectURL(url);
-        showToast('success', 'Exported', `${filtered.length} records exported to CSV.`);
+        import('xlsx').then(XLSX => {
+            const header = ['ID', 'Item Code', 'MSN', 'Description', 'Inner Box Size (mm)', 'Inner Box Qty', 'Inner Net Wt (kg)', 'Outer Box Size (mm)', 'Outer Gross Wt (kg)', 'Status'];
+            const rows = filtered.map((s, i) => [
+                i + 1, s.item_code, s.master_serial_no || '', s.item_name || '',
+                `${s.inner_box_length_mm}x${s.inner_box_width_mm}x${s.inner_box_height_mm}`,
+                s.inner_box_quantity, s.inner_box_net_weight_kg,
+                `${s.outer_box_length_mm}x${s.outer_box_width_mm}x${s.outer_box_height_mm}`,
+                s.outer_box_gross_weight_kg, s.is_active ? 'Active' : 'Inactive',
+            ]);
+            const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'Packing Details');
+            XLSX.writeFile(wb, `packing_details_${new Date().toISOString().slice(0, 10)}.xlsx`);
+            showToast('success', 'Exported', `${filtered.length} records exported to Excel.`);
+        });
     };
 
     const hasActiveFilters = cardFilter !== 'ALL';
@@ -602,13 +817,10 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
         setDeleteTarget(null);
     };
 
-    // ── LOADING STATE ──
-    if (loading) {
+    // ── LOADING STATE (only on initial load) ──
+    if (loading && specs.length === 0) {
         return (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '80px 20px' }}>
-                <LoadingSpinner size={40} />
-                <p style={{ marginTop: '16px', color: 'var(--enterprise-gray-600)', fontSize: '14px' }}>Loading packing specifications...</p>
-            </div>
+            <ModuleLoader moduleName="Packing Details" icon={<ClipboardList size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
         );
     }
 
@@ -698,7 +910,7 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                         <ClearFiltersButton onClick={() => setCardFilter('ALL')} />
                     )}
                     <ExportCSVButton onClick={handleExport} />
-                    <RefreshButton onClick={() => { fetchSpecs(); showToast('info', 'Refreshed', 'Data refreshed successfully.'); }} />
+                    <RefreshButton onClick={() => { fetchSpecs().then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); }} loading={loading} />
                     {canAdd && <AddButton label="Add Specification" onClick={() => setShowAddModal(true)} />}
                 </ActionBar>
             </SharedFilterBar>
@@ -713,7 +925,7 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                         action={!hasActiveFilters && !searchTerm && canAdd ? { label: 'Add Specification', onClick: () => setShowAddModal(true) } : undefined}
                     />
                 ) : (
-                    <div className="table-responsive" style={{ overflowX: 'auto' }}>
+                    <div className="table-responsive" style={{ overflowX: 'auto', opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto' }}>
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead>
                                 <tr style={{ backgroundColor: 'var(--table-header-bg)', borderBottom: '2px solid var(--table-border)' }}>
@@ -746,7 +958,7 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                                             <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: '12px' }}>{fmtSz(s.inner_box_length_mm, s.inner_box_width_mm, s.inner_box_height_mm)} {LENGTH_LABELS[tableLU]}</td>
                                             <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 700, color: 'var(--enterprise-info, #3b82f6)' }}>{s.inner_box_quantity}</td>
                                             <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: '12px' }}>{fmtSz(s.outer_box_length_mm, s.outer_box_width_mm, s.outer_box_height_mm)} {LENGTH_LABELS[tableLU]}</td>
-                                            <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 700, color: 'rgb(168,85,247)' }}>{s.outer_box_quantity}</td>
+                                            <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 700, color: (s.inner_box_quantity > 0 && s.outer_box_quantity > 0 && (s.outer_box_quantity % s.inner_box_quantity) !== 0) ? '#d97706' : 'rgb(168,85,247)' }}>{s.outer_box_quantity}</td>
                                             <td style={{ ...tdStyle, textAlign: 'center' }}><Badge variant={s.is_active ? 'success' : 'error'} style={!s.is_active ? { backgroundColor: '#fee2e2', color: '#b91c1c' } : {}}>{s.is_active ? 'Active' : 'Inactive'}</Badge></td>
                                             {/* View — ALL roles */}
                                             <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px' }}>
@@ -784,23 +996,27 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                                                                         boxShadow: '0 10px 40px rgba(0,0,0,0.15)', border: '1px solid #e5e7eb', overflow: 'hidden',
                                                                     }}
                                                                 >
-                                                                    <button
-                                                                        onClick={() => { openEdit(s); setActiveDropdown(null); }}
-                                                                        style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
-                                                                        onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
-                                                                        onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-                                                                    >
-                                                                        <Edit2 size={16} /> Edit Specs
-                                                                    </button>
-                                                                    <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
-                                                                    <button
-                                                                        onClick={() => { handleDeleteClick(s); setActiveDropdown(null); }}
-                                                                        style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
-                                                                        onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#fef2f2'; }}
-                                                                        onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-                                                                    >
-                                                                        <Trash2 size={16} /> Delete Specs
-                                                                    </button>
+                                                                    {canEdit && (
+                                                                        <button
+                                                                            onClick={() => { openEdit(s); setActiveDropdown(null); }}
+                                                                            style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
+                                                                            onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
+                                                                            onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                                                        >
+                                                                            <Edit2 size={16} /> Edit Specs
+                                                                        </button>
+                                                                    )}
+                                                                    {canEdit && canDelete && <div style={{ borderTop: '1px solid #f3f4f6' }}></div>}
+                                                                    {canDelete && (
+                                                                        <button
+                                                                            onClick={() => { handleDeleteClick(s); setActiveDropdown(null); }}
+                                                                            style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
+                                                                            onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#fef2f2'; }}
+                                                                            onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                                                        >
+                                                                            <Trash2 size={16} /> Delete Specs
+                                                                        </button>
+                                                                    )}
                                                                 </div>
                                                             );
                                                         })()}
@@ -814,21 +1030,27 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                         </table>
                     </div>
                 )}
+                <Pagination
+                    page={page}
+                    pageSize={ITEMS_PER_PAGE}
+                    totalCount={filtered.length}
+                    onPageChange={setPage}
+                />
             </Card>
 
-            {/* Load More — placed OUTSIDE the Card to prevent hover/scroll clipping */}
-            {filtered.length > 0 && hasMore && (
-                <div style={{ padding: '16px', textAlign: 'center' }}>
-                    <Button variant="primary" onClick={() => setDisplayCount(p => p + ITEMS_PER_PAGE)}>
-                        Load More ({Math.min(ITEMS_PER_PAGE, filtered.length - displayed.length)} more)
-                    </Button>
-                </div>
-            )}
-            {filtered.length > 0 && !hasMore && displayed.length > 0 && (
-                <div style={{ padding: '8px 16px', textAlign: 'center' }}>
-                    <p style={{ fontSize: '13px', color: 'var(--enterprise-gray-500)' }}>Showing all {filtered.length} specifications</p>
-                </div>
-            )}
+            {/* Results Summary */}
+            <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                fontSize: '12px',
+                color: 'var(--enterprise-gray-600)',
+            }}>
+                <span>
+                    Showing {filtered.length} of {specs.length} specifications
+                    {hasActiveFilters && ' (filtered)'}
+                </span>
+            </div>
 
             {/* ADD / EDIT MODAL */}
             <Modal isOpen={showAddModal || !!editSpec} onClose={handleCloseModal} title={editSpec ? 'Edit Packing Specification' : 'Add Packing Specification'} maxWidth="800px">
@@ -884,7 +1106,7 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                         <div style={{ ...sectionStyle, background: 'linear-gradient(135deg, rgba(30,58,138,0.03), rgba(30,58,138,0.08))', border: '1px solid rgba(30,58,138,0.1)' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                                 <p style={{ fontSize: '12px', fontWeight: 700, color: 'var(--enterprise-primary)', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                    <Package size={14} /> Selected Item
+                                    <PackageOpen size={14} /> Selected Item
                                 </p>
                                 <Button variant="tertiary" size="sm" onClick={() => setSelectedItem(null)}>Change Item</Button>
                             </div>
@@ -901,7 +1123,7 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                     {editSpec && (
                         <div style={{ ...sectionStyle, background: 'linear-gradient(135deg, rgba(30,58,138,0.03), rgba(30,58,138,0.08))', border: '1px solid rgba(30,58,138,0.1)' }}>
                             <p style={{ fontSize: '12px', fontWeight: 700, color: 'var(--enterprise-primary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <Package size={14} /> Item Information (Read Only)
+                                <PackageOpen size={14} /> Item Information (Read Only)
                             </p>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                                 <div><Label>Item Code</Label><Input value={editSpec.item_code} disabled /></div>
@@ -941,7 +1163,7 @@ export function PackingDetails({ accessToken, userRole }: PackingDetailsProps) {
                             <div style={{ ...sectionStyle, background: 'linear-gradient(135deg, rgba(168,85,247,0.03), rgba(168,85,247,0.08))', border: '1px solid rgba(168,85,247,0.15)' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
                                     <p style={{ fontSize: '12px', fontWeight: 700, color: 'rgb(168,85,247)', textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
-                                        <Package size={14} /> Outer Box Specifications
+                                        <PackageOpen size={14} /> Outer Box Specifications
                                     </p>
                                     <div style={{ display: 'flex', gap: '12px' }}>
                                         <UnitToggle<LengthUnit> units={['mm', 'cm', 'inches']} active={outerFormLU} onChange={setOuterFormLU} icon={<Ruler size={14} />} />
