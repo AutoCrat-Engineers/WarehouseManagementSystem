@@ -14,6 +14,7 @@
  */
 import { getSupabaseClient } from '../../utils/supabase/client';
 import { isValidTransition, generatePackingId } from '../../types/packing';
+import { generateIdempotencyKey, extractRpcError } from '../../utils/idempotency';
 import type {
     PackingRequest, PackingBox, PackingAuditLog,
     PackingRequestStatus, PackingAuditAction,
@@ -130,13 +131,13 @@ export async function createPackingFromMovementRejection(
 // FETCH
 // ============================================================================
 
-export async function fetchPackingRequests(onlyMine: boolean = false): Promise<PackingRequest[]> {
+export async function fetchPackingRequests(onlyMine: boolean = false, pageSize: number = 200, offset: number = 0): Promise<PackingRequest[]> {
     const userId = await getCurrentUserId();
     let query = supabase
         .from('packing_requests')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(200);
+        .range(offset, offset + pageSize - 1);
 
     if (onlyMine) query = query.eq('created_by', userId);
     const { data, error } = await query;
@@ -208,28 +209,28 @@ export async function fetchPackingRequests(onlyMine: boolean = false): Promise<P
         // otherwise calculate expected count from movement notes or total / inner_qty
         const actualBoxCount = boxAgg[r.id]?.count ?? 0;
         const innerBoxQty = specMap[r.item_code];
-        
+
         let expectedBoxes = 0;
         const notes = headerNotesMap[r.movement_header_id];
         if (notes) {
             const adjMatch = notes.match(/Boxes:\s*(\d+)\s*[x×]\s*\d+\s*PCS\/box\s*\+\s*(\d+)\s*(?:Adj|Top-off)\s*Box/i);
             if (adjMatch) {
-                 expectedBoxes = parseInt(adjMatch[1], 10) + parseInt(adjMatch[2], 10);
+                expectedBoxes = parseInt(adjMatch[1], 10) + parseInt(adjMatch[2], 10);
             } else {
-                 const boxMatch = notes.match(/Boxes:\s*(\d+)\s*[x×]\s*\d+\s*PCS\/box\s*=/i);
-                 if (boxMatch) {
-                     expectedBoxes = parseInt(boxMatch[1], 10);
-                 }
+                const boxMatch = notes.match(/Boxes:\s*(\d+)\s*[x×]\s*\d+\s*PCS\/box\s*=/i);
+                if (boxMatch) {
+                    expectedBoxes = parseInt(boxMatch[1], 10);
+                }
             }
         }
-        
+
         let calculatedBoxCount = expectedBoxes;
         if (calculatedBoxCount === 0) {
             calculatedBoxCount = innerBoxQty && innerBoxQty > 0
                 ? Math.floor(Number(r.total_packed_qty) / innerBoxQty) + (Number(r.total_packed_qty) % innerBoxQty > 0 ? 1 : 0)
                 : 0;
         }
-        
+
         const boxesCount = actualBoxCount > 0 ? actualBoxCount : calculatedBoxCount;
 
         return {
@@ -697,13 +698,15 @@ export async function markStickerPrinted(requestId: string, boxId: string) {
 }
 
 // ============================================================================
-// STOCK TRANSFER — Move packed stock from PRODUCTION → FG Warehouse
-// This is the core of v5: stock moves based on packing, not on approval.
-// ============================================================================
-
 /**
  * Transfer packed (and printed) boxes' stock from Production to FG Warehouse.
  * Can be called for partial transfers (some boxes) or full transfer (all boxes).
+ *
+ * ═══ PRODUCTION-GRADE ═══
+ * Now uses atomic RPC: transfer_packed_stock
+ * All stock credits, box marking, completion detection, and audit logging
+ * happen inside a single Postgres transaction with SELECT FOR UPDATE locking.
+ *
  * @param requestId - Packing request ID
  * @param boxIds - Optional array of specific box IDs to transfer. If empty, transfers ALL untransferred printed boxes.
  */
@@ -711,159 +714,23 @@ export async function transferPackedStock(
     requestId: string,
     boxIds?: string[]
 ): Promise<{ transferredQty: number; boxesTransferred: number; isComplete: boolean }> {
-    // ── PHASE 1: Parallel fetch — auth + request + boxes + movement header ──
-    // v0.4.1: Movement header fetch moved into Phase 1 parallel block
-    // (was previously a sequential Phase 2 call, adding unnecessary latency)
-    let boxQuery = supabase.from('packing_boxes')
-        .select('*')
-        .eq('packing_request_id', requestId)
-        .eq('sticker_printed', true)
-        .eq('is_transferred', false);
-    if (boxIds && boxIds.length > 0) {
-        boxQuery = boxQuery.in('id', boxIds);
-    }
+    const { userId } = await getAuthContext();
+    const idempotencyKey = generateIdempotencyKey();
 
-    const [authCtx, reqResult, boxResult] = await Promise.all([
-        getAuthContext(),
-        supabase.from('packing_requests')
-            .select('*, movement_header_id, movement_number, item_code, total_packed_qty, status, transferred_qty')
-            .eq('id', requestId).single(),
-        boxQuery,
-    ]);
+    const { data, error } = await supabase.rpc('transfer_packed_stock', {
+        p_request_id: requestId,
+        p_box_ids: boxIds && boxIds.length > 0 ? boxIds : null,
+        p_user_id: userId,
+        p_idempotency_key: idempotencyKey,
+    });
 
-    const { userId, role } = authCtx;
-    const req = reqResult.data;
-    if (!req) throw new Error('Packing request not found');
-    if (!['PACKING_IN_PROGRESS', 'PARTIALLY_TRANSFERRED'].includes(req.status)) {
-        throw new Error('Can only transfer stock when packing is in progress');
-    }
-
-    const eligibleBoxes = boxResult.data;
-    if (!eligibleBoxes || eligibleBoxes.length === 0) {
-        throw new Error('No eligible boxes to transfer. Boxes must have stickers printed and not already transferred.');
-    }
-
-    const transferQty = eligibleBoxes.reduce((sum: number, b: any) => sum + Number(b.box_qty), 0);
-
-    // ── PHASE 2: Movement header fetch (now uses movement_header_id from Phase 1) ──
-    const { data: movementHeader } = await supabase.from('inv_movement_headers')
-        .select('source_warehouse_id, destination_warehouse_id')
-        .eq('id', req.movement_header_id).single();
-    if (!movementHeader) throw new Error('Movement header not found');
-
-    const dstId = movementHeader.destination_warehouse_id;
-    const itemCode = req.item_code;
-    const now = new Date().toISOString();
-
-    // ── PHASE 3: Stock update + BATCH box update — all in parallel ──
-    const eligibleBoxIds = eligibleBoxes.map((b: any) => b.id);
-
-    // Build stock operations (Supabase query builders are thenable)
-    const stockOps: any[] = [];
-
-    if (dstId && itemCode) {
-        const { data: ds } = await supabase.from('inv_warehouse_stock')
-            .select('id, quantity_on_hand').eq('warehouse_id', dstId)
-            .eq('item_code', itemCode).eq('is_active', true).single();
-
-        if (ds) {
-            const nq = ds.quantity_on_hand + transferQty;
-            // Parallel: update stock + insert ledger
-            stockOps.push(
-                supabase.from('inv_warehouse_stock').update({
-                    quantity_on_hand: nq,
-                    last_receipt_date: now,
-                    updated_by: userId,
-                }).eq('id', ds.id),
-                supabase.from('inv_stock_ledger').insert({
-                    warehouse_id: dstId, item_code: itemCode,
-                    transaction_type: 'TRANSFER_IN',
-                    quantity_change: transferQty,
-                    quantity_before: ds.quantity_on_hand,
-                    quantity_after: nq,
-                    reference_type: 'PACKING_TRANSFER',
-                    reference_id: requestId,
-                    notes: `IN: ${transferQty} units | Packing transfer — ${eligibleBoxes.length} box(es) | Movement: ${req.movement_number}`,
-                    created_by: userId,
-                }),
-            );
-        } else {
-            stockOps.push(
-                supabase.from('inv_warehouse_stock').insert({
-                    warehouse_id: dstId, item_code: itemCode,
-                    quantity_on_hand: transferQty,
-                    last_receipt_date: now,
-                    created_by: userId,
-                }),
-                supabase.from('inv_stock_ledger').insert({
-                    warehouse_id: dstId, item_code: itemCode,
-                    transaction_type: 'TRANSFER_IN',
-                    quantity_change: transferQty,
-                    quantity_before: 0,
-                    quantity_after: transferQty,
-                    reference_type: 'PACKING_TRANSFER',
-                    reference_id: requestId,
-                    notes: `IN: ${transferQty} units | Packing transfer — ${eligibleBoxes.length} box(es) | Movement: ${req.movement_number}`,
-                    created_by: userId,
-                }),
-            );
-        }
-    }
-
-    // BATCH: Mark ALL boxes as transferred in ONE query (not one-at-a-time loop!)
-    await Promise.all([
-        ...stockOps,
-        supabase.from('packing_boxes').update({
-            is_transferred: true,
-            transferred_at: now,
-        }).in('id', eligibleBoxIds),
-    ]);
-
-    // ── PHASE 4: Compute completion + update status + audit — parallel ──
-    const { data: allBoxes } = await supabase.from('packing_boxes')
-        .select('box_qty, is_transferred').eq('packing_request_id', requestId);
-    const totalBoxQty = (allBoxes || []).reduce((s: number, b: any) => s + Number(b.box_qty), 0);
-    const allTransferred = (allBoxes || []).every((b: any) => b.is_transferred);
-    const cumulativeTransferredQty = (allBoxes || [])
-        .filter((b: any) => b.is_transferred)
-        .reduce((s: number, b: any) => s + Number(b.box_qty), 0);
-    const isComplete = allTransferred && totalBoxQty >= Number(req.total_packed_qty);
-    const newTotalTransferred = cumulativeTransferredQty;
-
-    const newStatus = isComplete ? 'COMPLETED' : 'PARTIALLY_TRANSFERRED';
-    const packingIds = eligibleBoxes.map((b: any) => b.packing_id || generatePackingId(b.id));
-    const auditAction: PackingAuditAction = isComplete ? 'STOCK_FULL_TRANSFER' : 'STOCK_PARTIAL_TRANSFER';
-
-    // Parallel: update request status + audit log(s)
-    const finalOps: any[] = [
-        supabase.from('packing_requests').update({
-            transferred_qty: newTotalTransferred,
-            last_transfer_at: now,
-            status: newStatus,
-            ...(isComplete ? { completed_at: now } : {}),
-        }).eq('id', requestId),
-        logAudit(requestId, auditAction, userId, role, {
-            transferred_qty: transferQty,
-            total_transferred: newTotalTransferred,
-            boxes_transferred: eligibleBoxes.length,
-            remaining_qty: Number(req.total_packed_qty) - newTotalTransferred,
-            movement_number: req.movement_number,
-            packing_ids: packingIds.join(', '),
-        }),
-    ];
-    if (isComplete) {
-        finalOps.push(logAudit(requestId, 'PACKING_COMPLETED', userId, role, {
-            total_packed_qty: Number(req.total_packed_qty),
-            boxes_count: (allBoxes || []).length,
-            movement_number: req.movement_number,
-        }));
-    }
-    await Promise.all(finalOps);
+    const rpcError = extractRpcError(error, data);
+    if (rpcError) throw new Error(rpcError);
 
     return {
-        transferredQty: transferQty,
-        boxesTransferred: eligibleBoxes.length,
-        isComplete,
+        transferredQty: data.transferred_qty,
+        boxesTransferred: data.boxes_transferred,
+        isComplete: data.is_complete,
     };
 }
 

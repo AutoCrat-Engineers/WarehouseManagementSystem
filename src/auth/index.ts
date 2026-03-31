@@ -26,8 +26,6 @@ export {
     getCurrentSession,
     getAccessToken,
     refreshToken,
-    getUserPermissions,
-    hasPermission,
     hasMinimumRole,
     onAuthStateChange,
     ROLE_CONFIG,
@@ -62,10 +60,10 @@ export type {
 } from './services/userService';
 
 // ============================================================================
-// PERMISSION SERVICES (L3 Only)
+// PERMISSION SERVICES — Single source of truth for GRBAC
 // ============================================================================
 export {
-    getUserPermissions as getGranularPermissions,
+    getUserPermissions,
     saveUserPermissions,
     getBulkUserPermissions,
     checkPermission,
@@ -73,7 +71,34 @@ export {
     hasAllPermissions,
     getPermissionCount,
     deleteUserPermissions,
+    getUserOverrides,
+    getBulkUserOverrides,
+    invalidateUserPermCache,
+    invalidatePermissionSourceCache,
+    getEffectivePermissionsDetailed,
 } from './services/permissionService';
+
+export type {
+    OverrideMode,
+    DetailedPermissions,
+    UserOverridesResult,
+} from './services/permissionService';
+
+// ============================================================================
+// PERMISSION UTILITIES — Centralized access checks
+// ============================================================================
+export {
+    canAccessView,
+    canAccess,
+    resolvePermissions,
+    canAccessAnyPackingModule,
+    canAccessAnyDispatchModule,
+    VIEW_PERMISSION_MAP,
+} from './utils/permissionUtils';
+
+export type {
+    ModulePermissions,
+} from './utils/permissionUtils';
 
 // ============================================================================
 // COMPONENTS

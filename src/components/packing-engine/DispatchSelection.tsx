@@ -17,12 +17,13 @@ import {
 import { Card, Modal, EmptyState, ModuleLoader } from '../ui/EnterpriseUI';
 import {
     SummaryCard, SummaryCardsGrid, SearchBox, FilterBar, ActionBar,
-    ActionButton, RefreshButton,
+    ActionButton, RefreshButton, Pagination
 } from '../ui/SharedComponents';
 import * as svc from './packingEngineService';
 import type { Pallet, DispatchReadiness, PackingList } from './packingEngineService';
-import { createMasterPackingList } from './mplService';
 import { getSupabaseClient } from '../../utils/supabase/client';
+import { useSessionPersistence } from '../../hooks/useSessionPersistence';
+import { generateIdempotencyKey, extractRpcError } from '../../utils/idempotency';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
@@ -45,7 +46,7 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
 
     // RBAC
     const hasPerms = Object.keys(userPerms).length > 0;
-    const canCreate = userRole === 'L3' || (hasPerms ? userPerms['dispatch.create'] === true : userRole === 'L2');
+    const canCreate = userRole === 'L3' || (hasPerms ? userPerms['packing.dispatch.create'] === true : userRole === 'L2');
 
     const [readiness, setReadiness] = useState<DispatchReadiness[]>([]);
     const [pallets, setPallets] = useState<Pallet[]>([]);
@@ -69,6 +70,51 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
         toastTimer.current = setTimeout(() => setToast(null), duration);
     }, []);
     const [refreshing, setRefreshing] = useState(false);
+    const [page, setPage] = useState(0);
+    const PAGE_SIZE = 15;
+
+    // ── OPTIONAL SESSION PERSISTENCE for form state (graceful — no-ops if migration not run) ──
+    const { patchSession } = useSessionPersistence(
+        'dispatch_selection',
+        undefined,
+        undefined,
+        {
+            onRecover: (data, isNew) => {
+                if (!isNew && data) {
+                    if (data.selectedPalletIds?.length > 0) {
+                        setSelectedPalletIds(new Set(data.selectedPalletIds));
+                    }
+                    if (data.expandedItem) {
+                        setExpandedItem(data.expandedItem);
+                    }
+                }
+            },
+        }
+    );
+
+    // ────── BACKEND AGGREGATES for summary cards (NEVER .reduce() on client array) ──────
+    const [summaryStats, setSummaryStats] = useState({ totalReady: 0, totalPartial: 0, totalReadyQty: 0 });
+    const fetchCounts = useCallback(async () => {
+        try {
+            const [readyR, openR, fillingR, adjR] = await Promise.all([
+                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'READY'),
+                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'OPEN'),
+                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'FILLING'),
+                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'ADJUSTMENT_REQUIRED'),
+            ]);
+            // Also get total ready qty from a lightweight query
+            const { data: readyPalletRows } = await supabase
+                .from('pack_pallets')
+                .select('current_qty')
+                .eq('state', 'READY');
+            const totalReadyQty = (readyPalletRows || []).reduce((s: number, p: any) => s + (p.current_qty || 0), 0);
+            setSummaryStats({
+                totalReady: readyR.count ?? 0,
+                totalPartial: (openR.count ?? 0) + (fillingR.count ?? 0) + (adjR.count ?? 0),
+                totalReadyQty,
+            });
+        } catch { /* non-critical */ }
+    }, [supabase]);
 
     const fetchData = useCallback(async () => {
         setLoading(true);
@@ -87,7 +133,10 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
     const handleRefresh = useCallback(async () => {
         setRefreshing(true);
         try {
-            const data = await svc.fetchDispatchReadiness();
+            const [data] = await Promise.all([
+                svc.fetchDispatchReadiness(),
+                fetchCounts(),
+            ]);
             setReadiness(data);
             showToast('info', 'Refreshed', 'Dispatch data refreshed successfully.');
         } catch (err) {
@@ -95,9 +144,10 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
         } finally {
             setRefreshing(false);
         }
-    }, [showToast]);
+    }, [showToast, fetchCounts]);
 
     useEffect(() => { fetchData(); }, [fetchData]);
+    useEffect(() => { fetchCounts(); }, [fetchCounts]);
 
     const handleExpandItem = async (itemCode: string) => {
         if (expandedItem === itemCode) {
@@ -105,6 +155,7 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
             return;
         }
         setExpandedItem(itemCode);
+        patchSession({ expandedItem: itemCode });
         setLoadingPallets(true);
         setSelectedPalletIds(new Set());
         try {
@@ -125,11 +176,13 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
         if (next.has(id)) next.delete(id);
         else next.add(id);
         setSelectedPalletIds(next);
+        patchSession({ selectedPalletIds: Array.from(next) });
     };
 
     const selectAllReady = () => {
         const readyIds = pallets.filter(p => p.state === 'READY').map(p => p.id);
         setSelectedPalletIds(new Set(readyIds));
+        patchSession({ selectedPalletIds: readyIds });
     };
 
     const readyPallets = pallets.filter(p => p.state === 'READY');
@@ -140,22 +193,36 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
         setGenerating(true);
         try {
             const item = readiness.find(r => r.item_code === expandedItem);
-            const pl = await svc.createPackingList(
-                Array.from(selectedPalletIds),
-                { customer_name: item?.customer_name || undefined }
-            );
-            // Create MPL directly in the database (no localStorage)
-            const mpl = await createMasterPackingList({ packing_list_id: pl.id });
+            const palletIdsArray = Array.from(selectedPalletIds);
+            const customerName = item?.customer_name || '';
+            const idempotencyKey = generateIdempotencyKey();
+
+            // ═══ PRODUCTION-GRADE ═══
+            // Single atomic RPC: creates PL + MPL + locks pallets + audit
+            // All within one Postgres transaction. If anything fails, everything rolls back.
+            // Idempotency key ensures safe retry on network failure or double-click.
+            const { data, error } = await supabase.rpc('create_dispatch_packing_list', {
+                p_pallet_ids: palletIdsArray,
+                p_user_id: (await supabase.auth.getUser()).data.user?.id,
+                p_customer_name: customerName || null,
+                p_idempotency_key: idempotencyKey,
+            });
+
+            const rpcError = extractRpcError(error, data);
+            if (rpcError) throw new Error(rpcError);
+
             setSelectedPalletIds(new Set());
             fetchData();
-            // Redirect to MPL Home — MPL already exists in DB
+
+            // Redirect to MPL Home
             if (onNavigate) {
                 onNavigate('pe-mpl-home');
             } else {
-                alert(`Packing List ${pl.packing_list_number} created! MPL ${mpl.mpl_number} is ready in MPL Home.`);
+                showToast('success', 'Packing List Created', `PL ${data.pl_number} & MPL ${data.mpl_number} created successfully.`);
             }
         } catch (err: any) {
-            alert('Error generating packing list: ' + (err.message || err));
+            console.error('Generate packing list error:', err);
+            showToast('error', 'Generation Failed', 'Error: ' + (err.message || err));
         } finally {
             setGenerating(false);
         }
@@ -174,9 +241,18 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
             (r.customer_name || '').toLowerCase().includes(s);
     }), [readiness, searchTerm, cardFilter]);
 
-    const totalReady = readiness.reduce((s, r) => s + r.ready_pallets, 0);
-    const totalPartial = readiness.reduce((s, r) => s + r.partial_pallets, 0);
-    const totalReadyQty = readiness.reduce((s, r) => s + r.ready_qty, 0);
+    useEffect(() => {
+        setPage(0);
+    }, [searchTerm, cardFilter]);
+
+    const displayedRecords = useMemo(() => {
+        return filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+    }, [filtered, page]);
+
+    // Use backend aggregate stats for summary cards
+    const totalReady = summaryStats.totalReady;
+    const totalPartial = summaryStats.totalPartial;
+    const totalReadyQty = summaryStats.totalReadyQty;
 
     // Reactive selected count
     const selectedCount = selectedPalletIds.size;
@@ -290,15 +366,15 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
                                     <th style={{ ...th, width: 32, padding: '10px 6px' }} />
                                     <th style={th}>Item</th>
                                     <th style={th}>MSN</th>
-                                    <th style={{ ...th, textAlign: 'center' }}>Pallet Qty / Inner Box Qty</th>
+                                    <th style={{ ...th, textAlign: 'center' }}>Pallet Qty</th>
                                     <th style={{ ...th, textAlign: 'center' }}>Ready</th>
                                     <th style={{ ...th, textAlign: 'center' }}>Partial</th>
                                     <th style={{ ...th, textAlign: 'center' }}>Ready Qty</th>
-                                    <th style={{ ...th, textAlign: 'center' }}>Inner Box Qty</th>
+                                    <th style={{ ...th, textAlign: 'center' }}>Total Containers</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {filtered.map(r => (
+                                {displayedRecords.map(r => (
                                     <React.Fragment key={r.item_code}>
                                         <tr
                                             style={{ cursor: 'pointer', transition: 'background 0.15s' }}
@@ -318,7 +394,7 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
                                             </td>
                                             <td style={{ ...td, fontFamily: 'monospace', fontSize: 12, whiteSpace: 'nowrap' }}>{r.master_serial_no || '—'}</td>
                                             <td style={{ ...td, textAlign: 'center', fontWeight: 600, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
-                                                {r.contract_outer_qty.toLocaleString()} / {r.inner_box_qty}
+                                                {(r.contract_outer_qty || 0).toLocaleString()}
                                             </td>
                                             <td style={{ ...td, textAlign: 'center' }}>
                                                 <span style={{
@@ -341,7 +417,7 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
                                                 </span>
                                             </td>
                                             <td style={{ ...td, textAlign: 'center', fontWeight: 600, fontFamily: 'monospace' }}>
-                                                {r.ready_qty.toLocaleString()}
+                                                {(r.ready_qty || 0).toLocaleString()}
                                             </td>
                                             <td style={{ ...td, textAlign: 'center', fontWeight: 600 }}>{r.total_containers}</td>
                                         </tr>
@@ -453,10 +529,10 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
 
                                                                                         {/* Qty */}
                                                                                         <div style={{ fontSize: 20, fontWeight: 800, color: '#0f172a', fontFamily: 'monospace', lineHeight: 1.1 }}>
-                                                                                            {p.current_qty.toLocaleString()}
+                                                                                            {(p.current_qty || 0).toLocaleString()}
                                                                                             {!isReady && (
                                                                                                 <span style={{ fontSize: 10, fontWeight: 500, color: '#94a3b8' }}>
-                                                                                                    {' '}/ {p.target_qty.toLocaleString()}
+                                                                                                    {' '}/ {(p.target_qty || 0).toLocaleString()}
                                                                                                 </span>
                                                                                             )}
                                                                                             <span style={{ fontSize: 8.5, fontWeight: 600, color: '#94a3b8', marginLeft: 2 }}>PCS</span>
@@ -508,7 +584,30 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
                         </table>
                     </div>
                 )}
+                {filtered.length > 0 && (
+                    <Pagination
+                        page={page}
+                        pageSize={PAGE_SIZE}
+                        totalCount={filtered.length}
+                        onPageChange={setPage}
+                    />
+                )}
             </Card>
+
+            {/* Results Summary */}
+            <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                fontSize: '12px',
+                color: 'var(--enterprise-gray-600)',
+                marginTop: '16px'
+            }}>
+                <span>
+                    Showing {filtered.length} of {readiness.length} items
+                    {(searchTerm || cardFilter !== 'ALL') && ' (filtered)'}
+                </span>
+            </div>
 
 
 

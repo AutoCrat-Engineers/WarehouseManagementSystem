@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0] — 2026-03-31
+
+### Release Type: Codebase Cleanup & Documentation
+
+### Removed
+
+- **Unused Dependencies** — Removed 6 packages not imported anywhere in `src/`: `hono`, `canvas`, `html2canvas`, `jspdf`, `jsbarcode`, `puppeteer`. Reduces `node_modules` footprint and eliminates native compilation requirements.
+- **Debug Artifacts** — Deleted `git_log_output.txt`, `git_status_output.txt`, `tsc_output.txt`, `log.txt`, `log2.txt` from tracked files.
+- **Dead Code** — Cleaned 63 lines of commented-out mock data from `SampleDataInfo.tsx` (retained no-op shim for backward compatibility).
+
+### Changed
+
+- **Package Metadata** — Fixed project name from "Build Inventory Forecasting System" to "warehouse-management-system". Version bumped to `0.5.0`.
+- **`.gitignore` Optimization** — Added 8 new patterns: `tsc_output.txt`, `git_*_output.txt`, `log.txt`, `log2.txt`, `*.tmp`, `*.temp`, `*.bak`, and reorganized sections for clarity.
+- **DB Schema Consolidation** — Moved root-level `db_schema.sql` (60KB duplicate) into `.db_reference/` directory where it belongs.
+
+### Documentation
+
+- Added `RELEASE_NOTES.md` — Professional release notes generated from 81 commits and 40+ PRs.
+- Updated `README.md` — Added "Recent Changes" section documenting v0.5.0 cleanup.
+- Updated `CHANGELOG.md` — This entry.
+- Updated architecture documentation index to reflect current module count and PDF microservice extraction.
+
+---
+
+## [0.4.2] — 2026-03-30
+
+### Release Type: Critical Bugfix
+
+### Fixed
+
+- **Stock Movement: Server-Side Filtering** — Filters (Pending, Rejected, Completed, Partial) now query the database directly instead of filtering paginated client-side data. Fixed "No data found" bug when selecting status filters while data exists on other pages.
+- **Stock Movement: Cross-Table Search** — Search now performs a two-phase server-side lookup: first finds matching items (item_code, part_number, MSN) in the items table, then filters movement headers. Previously, search only worked within the current page's 20 records.
+- **Sticker Generation: Summary Cards** — Cards now use independent backend HEAD queries (`select('id', { count: 'exact', head: true })`) instead of computing counts from `requests.filter().length` on paginated data. Cards no longer change when navigating pages.
+- **Sticker Generation: Server-Side Status Filter** — Status filter (Approved, In Progress, Completed) is now applied at the database query level before pagination, fixing "No records" when filtering by status.
+- **Pagination + Filter Order** — All affected modules now enforce the correct query order: `SELECT → WHERE (filters) → ORDER BY → LIMIT/OFFSET`. Previously, pagination was applied before filters, causing empty results.
+- **Page Reset on Filter Change** — All modules now reset to page 0 when any filter changes, preventing stale page numbers after filter updates.
+
+### Changed
+
+- `src/components/StockMovement.tsx` — Rewritten `fetchMovements` to apply status, type, stock type, date range, and search filters server-side before pagination. Uses `{ count: 'exact' }` in the main query for accurate filtered totals. Added debounced search (300ms) for server-side queries. Added `filtersRef` pattern for stable useCallback with current filter state.
+- `src/components/packing/PackingModule.tsx` — Added `fetchSummaryCounts()` with parallel HEAD queries for all 4 card values. Replaced `requests.filter().length` with backend aggregate state. Server-side status filtering added to `fetchRequests`.
+- `src/components/packing-engine/PerformaInvoice.tsx` — Replaced `limit(100)` with proper server-side pagination using `{ count: 'exact' }`. Status and date range filters moved server-side. Removed `filteredPIs` client-side array in favor of `displayedPIs` from server-filtered data.
+
+### Architecture
+
+- **Rule: Never compute counts from paginated data** — All summary cards must use independent HEAD queries (`{ count: 'exact', head: true }`)
+- **Rule: Filter before paginate** — Database query must apply WHERE clauses before RANGE/LIMIT
+- **Pattern: filtersRef** — Use React refs to hold current filter state for stable useCallback functions, avoiding unnecessary re-renders while keeping filter values current
+
+---
+
 ## [0.4.1] — 2026-03-06
 
 ### Release Type: Patch Release

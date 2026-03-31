@@ -50,8 +50,10 @@ async function getPermissionSource(): Promise<PermissionSource> {
             .single();
 
         if (error || !data) {
-            console.warn('⚠️ [PermService] Could not read permission_source, defaulting to localStorage');
-            return 'localStorage';
+            console.warn('⚠️ [PermService] Could not read permission_source, defaulting to db_only');
+            cachedSource = 'db_only';
+            sourceFetchedAt = now;
+            return 'db_only';
         }
         const raw = typeof data.value === 'string' ? data.value : JSON.stringify(data.value);
         cachedSource = raw.replace(/"/g, '') as PermissionSource;
@@ -59,7 +61,7 @@ async function getPermissionSource(): Promise<PermissionSource> {
         return cachedSource;
     } catch (err) {
         console.error('💥 [PermService] Error reading permission source:', err);
-        return cachedSource || 'localStorage';
+        return cachedSource || 'db_only';
     }
 }
 
@@ -381,6 +383,8 @@ export async function getUserPermissions(userId: string): Promise<PermissionMap>
     const source = await getPermissionSource();
     let result: PermissionMap;
 
+    console.log(`[PermService] Loading permissions for ${userId} (source: ${source})`);
+
     switch (source) {
         case 'localStorage': {
             result = lsGetUserPermissions(userId);
@@ -396,11 +400,25 @@ export async function getUserPermissions(userId: string): Promise<PermissionMap>
             break;
         case 'db_only':
         case 'cleanup_done':
-            result = await dbGetUserPermissions(userId);
+            try {
+                result = await dbGetUserPermissions(userId);
+            } catch (err) {
+                console.error('❌ [PermService] DB fetch failed in db_only mode:', err);
+                // Return empty map — callers should handle this safely
+                result = {};
+            }
             break;
         default:
-            result = lsGetUserPermissions(userId);
+            try {
+                result = await dbGetUserPermissions(userId);
+            } catch {
+                result = {};
+            }
     }
+
+    const permCount = Object.keys(result).length;
+    const grantedCount = Object.values(result).filter(Boolean).length;
+    console.log(`[PermService] Loaded ${permCount} permission keys (${grantedCount} granted) for ${userId}`);
 
     // Cache the result
     userPermCache.set(userId, { perms: result, fetchedAt: Date.now() });
@@ -595,28 +613,42 @@ export async function saveUserPermissions(
 
 /**
  * Check if a specific user has a specific permission.
- * For synchronous checks, use the cached permissions from getUserPermissions.
+ * Uses the in-memory cache from getUserPermissions (DB-aware).
+ * Falls back to cached data if available, otherwise returns false.
  */
 export function checkPermission(userId: string, permission: string): boolean {
-    // Synchronous fallback — only works with localStorage
-    const perms = lsGetUserPermissions(userId);
-    return perms[permission] === true;
+    // Use the in-memory cache (populated by getUserPermissions)
+    const cached = userPermCache.get(userId);
+    if (cached) {
+        return cached.perms[permission] === true;
+    }
+    // No cache available — return false (safe default)
+    // Caller should use async getUserPermissions first
+    return false;
 }
 
 /**
  * Check if a user has ANY of the given permissions.
+ * Uses the in-memory cache (DB-aware).
  */
 export function hasAnyPermission(userId: string, permissions: string[]): boolean {
-    const perms = lsGetUserPermissions(userId);
-    return permissions.some(p => perms[p] === true);
+    const cached = userPermCache.get(userId);
+    if (cached) {
+        return permissions.some(p => cached.perms[p] === true);
+    }
+    return false;
 }
 
 /**
  * Check if a user has ALL of the given permissions.
+ * Uses the in-memory cache (DB-aware).
  */
 export function hasAllPermissions(userId: string, permissions: string[]): boolean {
-    const perms = lsGetUserPermissions(userId);
-    return permissions.every(p => perms[p] === true);
+    const cached = userPermCache.get(userId);
+    if (cached) {
+        return permissions.every(p => cached.perms[p] === true);
+    }
+    return false;
 }
 
 /**

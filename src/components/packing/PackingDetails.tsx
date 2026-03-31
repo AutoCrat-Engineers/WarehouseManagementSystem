@@ -18,7 +18,7 @@ import {
 import {
     SummaryCard, SummaryCardsGrid,
     FilterBar as SharedFilterBar, ActionBar,
-    SearchBox, ClearFiltersButton, ExportCSVButton, RefreshButton, AddButton,
+    SearchBox, ClearFiltersButton, ExportCSVButton, RefreshButton, AddButton, Pagination
 } from '../ui/SharedComponents';
 import {
     PackageOpen, Search, Plus, Eye, Edit2, Download,
@@ -504,7 +504,7 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
     // UI state
     const [searchTerm, setSearchTerm] = useState('');
     const [cardFilter, setCardFilter] = useState<CardFilter>('ALL');
-    const [displayCount, setDisplayCount] = useState(20);
+    const [page, setPage] = useState<number>(0);
     const ITEMS_PER_PAGE = 20;
 
     // Table unit toggles
@@ -608,10 +608,9 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
         return r;
     }, [specs, cardFilter, searchTerm]);
 
-    const displayed = useMemo(() => filtered.slice(0, displayCount), [filtered, displayCount]);
-    const hasMore = displayCount < filtered.length;
+    const displayed = useMemo(() => filtered.slice(page * ITEMS_PER_PAGE, (page + 1) * ITEMS_PER_PAGE), [filtered, page]);
 
-    useEffect(() => { setDisplayCount(ITEMS_PER_PAGE); }, [cardFilter, searchTerm]);
+    useEffect(() => { setPage(0); }, [cardFilter, searchTerm]);
 
     // ── ITEM SEARCH (for Add modal) ──
     const searchItems = useCallback(async (q: string) => {
@@ -1031,21 +1030,27 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
                         </table>
                     </div>
                 )}
+                <Pagination
+                    page={page}
+                    pageSize={ITEMS_PER_PAGE}
+                    totalCount={filtered.length}
+                    onPageChange={setPage}
+                />
             </Card>
 
-            {/* Load More — placed OUTSIDE the Card to prevent hover/scroll clipping */}
-            {filtered.length > 0 && hasMore && (
-                <div style={{ padding: '16px', textAlign: 'center' }}>
-                    <Button variant="primary" onClick={() => setDisplayCount(p => p + ITEMS_PER_PAGE)}>
-                        Load More ({Math.min(ITEMS_PER_PAGE, filtered.length - displayed.length)} more)
-                    </Button>
-                </div>
-            )}
-            {filtered.length > 0 && !hasMore && displayed.length > 0 && (
-                <div style={{ padding: '8px 16px', textAlign: 'center' }}>
-                    <p style={{ fontSize: '13px', color: 'var(--enterprise-gray-500)' }}>Showing all {filtered.length} specifications</p>
-                </div>
-            )}
+            {/* Results Summary */}
+            <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                fontSize: '12px',
+                color: 'var(--enterprise-gray-600)',
+            }}>
+                <span>
+                    Showing {filtered.length} of {specs.length} specifications
+                    {hasActiveFilters && ' (filtered)'}
+                </span>
+            </div>
 
             {/* ADD / EDIT MODAL */}
             <Modal isOpen={showAddModal || !!editSpec} onClose={handleCloseModal} title={editSpec ? 'Edit Packing Specification' : 'Add Packing Specification'} maxWidth="800px">

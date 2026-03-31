@@ -45,11 +45,11 @@ import {
     FileCheck,
     FileMinus,
     Users,
-    Bell,
     Lock,
     Unlock,
     ToggleLeft,
     ToggleRight,
+    Truck,
 } from 'lucide-react';
 import { RoleBadge } from './RoleBadge';
 import type { UserListItem } from '../services/userService';
@@ -79,6 +79,11 @@ export interface ModuleConfig {
     /** Which actions are applicable when there are no submodules */
     actions: PermissionAction[];
     submodules?: SubmoduleConfig[];
+    /** Optional: override the parent prefix used in DB permission keys.
+     *  e.g., dispatch uses dbParentId='packing' so keys become 'packing.dispatch.view'
+     *  instead of 'dispatch.dispatch.view'. This allows visual grouping to differ from
+     *  the DB module_registry structure. */
+    dbParentId?: string;
 }
 
 /** Permission state: module.submodule.action → boolean */
@@ -163,20 +168,6 @@ const MODULE_CONFIG: ModuleConfig[] = [
                 actions: ['view', 'create', 'edit', 'delete'],
             },
             {
-                id: 'packing-list-invoice',
-                label: 'Packing List — Invoice',
-                icon: FileCheck,
-                description: 'Packing by invoice',
-                actions: ['view', 'create', 'edit', 'delete'],
-            },
-            {
-                id: 'packing-list-sub-invoice',
-                label: 'Packing List — Sub Invoice',
-                icon: FileMinus,
-                description: 'Packing by sub invoice',
-                actions: ['view', 'create', 'edit', 'delete'],
-            },
-            {
                 id: 'pallet-dashboard',
                 label: 'Pallet Dashboard',
                 icon: List,
@@ -190,20 +181,17 @@ const MODULE_CONFIG: ModuleConfig[] = [
                 description: 'Contract packing rules',
                 actions: ['view', 'create', 'edit', 'delete'],
             },
-            {
-                id: 'packing-lists',
-                label: 'Packing List Manager',
-                icon: ClipboardList,
-                description: 'Packing list creation',
-                actions: ['view', 'create', 'edit'],
-            },
-            {
-                id: 'traceability',
-                label: 'Traceability',
-                icon: Eye,
-                description: 'Full backward trace',
-                actions: ['view'],
-            },
+        ],
+    },
+    {
+        id: 'dispatch',
+        label: 'Dispatch',
+        icon: Truck,
+        color: '#0ea5e9',
+        description: 'Dispatch & Shipping',
+        actions: ['view', 'create', 'edit'],
+        dbParentId: 'packing',
+        submodules: [
             {
                 id: 'dispatch',
                 label: 'Dispatch Selection',
@@ -213,9 +201,9 @@ const MODULE_CONFIG: ModuleConfig[] = [
             },
             {
                 id: 'mpl-home',
-                label: 'Master Packing List',
+                label: 'Packing List',
                 icon: FileCheck,
-                description: 'MPL dashboard & print',
+                description: 'Master Packing List dashboard & print',
                 actions: ['view', 'create', 'edit'],
             },
             {
@@ -267,27 +255,26 @@ const MODULE_CONFIG: ModuleConfig[] = [
         description: 'Manage Users & Roles',
         actions: ['view', 'create', 'edit', 'delete'],
     },
-    {
-        id: 'notifications',
-        label: 'Notifications',
-        icon: Bell,
-        color: '#64748b',
-        description: 'System Notifications',
-        actions: ['view'],
-    },
 ];
+
 
 // ═══════════════════════════════════════════════════════════════════════
 // HELPER: Generate all possible permission keys
 // ═══════════════════════════════════════════════════════════════════════
 
+/** Resolve the DB parent prefix for a module (uses dbParentId if set, otherwise mod.id) */
+function getDbParent(mod: ModuleConfig): string {
+    return mod.dbParentId || mod.id;
+}
+
 function getAllPermissionKeys(): string[] {
     const keys: string[] = [];
     for (const mod of MODULE_CONFIG) {
+        const parent = getDbParent(mod);
         if (mod.submodules && mod.submodules.length > 0) {
             for (const sub of mod.submodules) {
                 for (const action of sub.actions) {
-                    keys.push(`${mod.id}.${sub.id}.${action}`);
+                    keys.push(`${parent}.${sub.id}.${action}`);
                 }
             }
         } else {
@@ -301,10 +288,11 @@ function getAllPermissionKeys(): string[] {
 
 function getModulePermissionKeys(mod: ModuleConfig): string[] {
     const keys: string[] = [];
+    const parent = getDbParent(mod);
     if (mod.submodules && mod.submodules.length > 0) {
         for (const sub of mod.submodules) {
             for (const action of sub.actions) {
-                keys.push(`${mod.id}.${sub.id}.${action}`);
+                keys.push(`${parent}.${sub.id}.${action}`);
             }
         }
     } else {
@@ -315,8 +303,9 @@ function getModulePermissionKeys(mod: ModuleConfig): string[] {
     return keys;
 }
 
-function getSubmodulePermissionKeys(modId: string, sub: SubmoduleConfig): string[] {
-    return sub.actions.map(action => `${modId}.${sub.id}.${action}`);
+function getSubmodulePermissionKeys(modId: string, sub: SubmoduleConfig, dbParentId?: string): string[] {
+    const parent = dbParentId || modId;
+    return sub.actions.map(action => `${parent}.${sub.id}.${action}`);
 }
 
 /**
@@ -325,8 +314,9 @@ function getSubmodulePermissionKeys(modId: string, sub: SubmoduleConfig): string
  * For flat modules, returns just the module id.
  */
 function getModuleDbKeys(mod: ModuleConfig): string[] {
+    const parent = getDbParent(mod);
     if (mod.submodules && mod.submodules.length > 0) {
-        return mod.submodules.map(sub => `${mod.id}.${sub.id}`);
+        return mod.submodules.map(sub => `${parent}.${sub.id}`);
     }
     return [mod.id];
 }
@@ -914,7 +904,7 @@ export function GrantAccessModal({
                                     }}>
                                         {mod.submodules!.map((sub, idx) => {
                                             const SubIcon = sub.icon;
-                                            const subState = getSubmoduleState(mod.id, sub);
+                                            const subState = getSubmoduleState(getDbParent(mod), sub);
                                             const isLast = idx === mod.submodules!.length - 1;
 
                                             return (
@@ -933,7 +923,7 @@ export function GrantAccessModal({
                                                 >
                                                     {/* Submodule Select All */}
                                                     <button
-                                                        onClick={() => toggleSubmoduleAll(mod.id, sub)}
+                                                        onClick={() => toggleSubmoduleAll(getDbParent(mod), sub)}
                                                         style={{
                                                             border: 'none', background: 'none', padding: '0',
                                                             cursor: 'pointer', display: 'flex', alignItems: 'center',
@@ -983,7 +973,7 @@ export function GrantAccessModal({
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                                         {(['view', 'create', 'edit', 'delete'] as PermissionAction[]).map(action => {
                                                             const applicable = sub.actions.includes(action);
-                                                            const key = `${mod.id}.${sub.id}.${action}`;
+                                                            const key = `${getDbParent(mod)}.${sub.id}.${action}`;
                                                             const isChecked = !!permissions[key];
                                                             const meta = ACTION_META[action];
 

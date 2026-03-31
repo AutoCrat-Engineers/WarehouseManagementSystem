@@ -17,11 +17,12 @@ import {
 import { Card, Modal, EmptyState, ModuleLoader, Button } from '../ui/EnterpriseUI';
 import {
     SummaryCard, SummaryCardsGrid, SearchBox, FilterBar, ActionBar,
-    StatusFilter, RefreshButton, ExportCSVButton, DateRangeFilter, ClearFiltersButton,
+    StatusFilter, RefreshButton, ExportCSVButton, DateRangeFilter, ClearFiltersButton, Pagination,
 } from '../ui/SharedComponents';
 import * as svc from './packingEngineService';
 import type { Pallet, PalletState, PackContainer } from './packingEngineService';
 import { getSupabaseClient } from '../../utils/supabase/client';
+import { fetchAggregates } from '../../utils/supabase/queryBuilder';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
@@ -107,8 +108,8 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
     const [palletContainers, setPalletContainers] = useState<PackContainer[]>([]);
     const [loadingContainers, setLoadingContainers] = useState(false);
     const [selectedPallet, setSelectedPallet] = useState<Pallet | null>(null);
-    const [displayCount, setDisplayCount] = useState(20);
-    const ITEMS_PER_PAGE = 20;
+    const [page, setPage] = useState(0);
+    const PAGE_SIZE = 20;
 
     // Date range filter
     const [dateFrom, setDateFrom] = useState('');
@@ -117,7 +118,30 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
     // Cache all container packing IDs for search
     const [allContainerMap, setAllContainerMap] = useState<Record<string, string[]>>({});
 
-    // ────── Fetch ──────
+    // ────── BACKEND AGGREGATES for summary cards (NEVER depend on paginated data) ──────
+    const [counts, setCounts] = useState({ total: 0, ready: 0, filling: 0, adjustment: 0, dispatched: 0 });
+    const fetchCounts = useCallback(async () => {
+        try {
+            const [totalR, readyR, openR, fillingR, adjR, dispatchedR, inTransitR] = await Promise.all([
+                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }),
+                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'READY'),
+                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'OPEN'),
+                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'FILLING'),
+                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'ADJUSTMENT_REQUIRED'),
+                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'DISPATCHED'),
+                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'IN_TRANSIT'),
+            ]);
+            setCounts({
+                total: totalR.count ?? 0,
+                ready: readyR.count ?? 0,
+                filling: (openR.count ?? 0) + (fillingR.count ?? 0),
+                adjustment: adjR.count ?? 0,
+                dispatched: (dispatchedR.count ?? 0) + (inTransitR.count ?? 0),
+            });
+        } catch { /* non-critical */ }
+    }, [supabase]);
+
+    // ────── Fetch paginated data ──────
     const fetchData = useCallback(async () => {
         setLoading(true);
         try {
@@ -150,15 +174,19 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
     }, [supabase]);
 
     useEffect(() => { fetchData(); }, [fetchData]);
+    useEffect(() => { fetchCounts(); }, [fetchCounts]);
 
-    // Real-time
+    // Real-time — refresh BOTH data and counts
     useEffect(() => {
         const ch = supabase
             .channel('pallet-dashboard-rt')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'pack_pallets' }, () => fetchData())
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'pack_pallets' }, () => {
+                fetchData();
+                fetchCounts();
+            })
             .subscribe();
         return () => { supabase.removeChannel(ch); };
-    }, [supabase, fetchData]);
+    }, [supabase, fetchData, fetchCounts]);
 
     // ────── Expand pallet ──────
     const handleExpand = async (palletId: string) => {
@@ -178,7 +206,7 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
         }
     };
 
-    // ────── Filter ──────
+    // ────── Filter (client-side on loaded pallets — for search across related tables) ──────
     const filtered = useMemo(() => {
         return pallets.filter(p => {
             const term = searchTerm.toLowerCase();
@@ -204,20 +232,12 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
         });
     }, [pallets, searchTerm, stateFilter, allContainerMap, dateFrom, dateTo]);
 
-    // Reset display count when search/filter changes
-    useEffect(() => { setDisplayCount(ITEMS_PER_PAGE); }, [searchTerm, stateFilter, dateFrom, dateTo]);
+    // Reset page when search/filter changes
+    useEffect(() => { setPage(0); }, [searchTerm, stateFilter, dateFrom, dateTo]);
 
-    const visiblePallets = useMemo(() => filtered.slice(0, displayCount), [filtered, displayCount]);
-    const hasMore = displayCount < filtered.length;
-
-    // ────── Counts ──────
-    const counts = useMemo(() => ({
-        total: pallets.length,
-        ready: pallets.filter(p => p.state === 'READY').length,
-        filling: pallets.filter(p => ['OPEN', 'FILLING'].includes(p.state)).length,
-        adjustment: pallets.filter(p => p.state === 'ADJUSTMENT_REQUIRED').length,
-        dispatched: pallets.filter(p => ['DISPATCHED', 'IN_TRANSIT'].includes(p.state)).length,
-    }), [pallets]);
+    const visiblePallets = useMemo(() => {
+        return filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+    }, [filtered, page]);
 
     // ────── Table styles ──────
     const th: React.CSSProperties = {
@@ -358,7 +378,7 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
                         <ClearFiltersButton onClick={() => { setSearchTerm(''); setStateFilter('ALL'); setDateFrom(''); setDateTo(''); }} />
                     )}
                     <ExportCSVButton onClick={handleExport} />
-                    <RefreshButton onClick={() => { fetchData().then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); }} loading={loading} />
+                    <RefreshButton onClick={() => { Promise.all([fetchData(), fetchCounts()]).then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); }} loading={loading} />
                 </ActionBar>
             </FilterBar>
 
@@ -544,53 +564,32 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
                             </tbody>
                         </table>
 
-                        {/* Load More Button - Outside scrollable area */}
-                        {hasMore && (
-                            <div style={{
-                                padding: '20px',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                alignItems: 'center',
-                                gap: '12px',
-                                borderTop: '1px solid var(--table-border, #e5e7eb)',
-                                position: 'relative',
-                                zIndex: 10,
-                                backgroundColor: 'white',
-                            }}>
-                                <p style={{
-                                    fontSize: '13px',
-                                    color: 'var(--enterprise-gray-500, #6b7280)',
-                                    margin: 0,
-                                }}>
-                                    Showing {visiblePallets.length} of {filtered.length} pallets
-                                </p>
-                                <Button
-                                    variant="primary"
-                                    onClick={() => setDisplayCount(prev => prev + ITEMS_PER_PAGE)}
-                                >
-                                    Load More ({Math.min(ITEMS_PER_PAGE, filtered.length - displayCount)} more)
-                                </Button>
-                            </div>
-                        )}
-
-                        {/* Show total when all loaded */}
-                        {!hasMore && visiblePallets.length > 0 && (
-                            <div style={{
-                                padding: '16px',
-                                textAlign: 'center',
-                                borderTop: '1px solid var(--table-border, #e5e7eb)',
-                            }}>
-                                <p style={{
-                                    fontSize: '13px',
-                                    color: 'var(--enterprise-gray-500, #6b7280)',
-                                }}>
-                                    Showing all {filtered.length} pallets
-                                </p>
-                            </div>
+                        {filtered.length > 0 && (
+                            <Pagination
+                                page={page}
+                                pageSize={PAGE_SIZE}
+                                totalCount={filtered.length}
+                                onPageChange={setPage}
+                            />
                         )}
                     </div>
                 )}
             </Card>
+
+            {/* Results Summary */}
+            <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                fontSize: '12px',
+                color: 'var(--enterprise-gray-600)',
+                marginTop: '16px'
+            }}>
+                <span>
+                    Showing {filtered.length} of {pallets.length} items
+                    {(searchTerm || stateFilter !== 'ALL' || dateFrom || dateTo) && ' (filtered)'}
+                </span>
+            </div>
 
             <style>{`
                 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }

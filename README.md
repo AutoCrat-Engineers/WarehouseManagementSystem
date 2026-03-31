@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/Version-0.4.1-blue?style=for-the-badge" alt="Version" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Version-0.5.0-blue?style=for-the-badge" alt="Version" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Status-Active_Development-brightgreen?style=for-the-badge" alt="Status" /></a>
   <a href="#"><img src="https://img.shields.io/badge/License-Proprietary-red?style=for-the-badge" alt="License" /></a>
   <a href="#"><img src="https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=white" alt="React" /></a>
@@ -35,6 +35,7 @@
 - [Documentation](#-documentation)
 - [Contributing](#-contributing)
 - [Versioning](#-versioning)
+- [Recent Changes](#-recent-changes)
 - [Authors & Maintainers](#-authors--maintainers)
 - [License & Copyright](#-license--copyright)
 
@@ -147,6 +148,7 @@ WarehouseManagementSystem/
 ├── 📄 .gitignore                # Git ignore rules
 ├── 📄 README.md                 # This file
 ├── 📄 CHANGELOG.md              # Version history and release notes
+├── 📄 RELEASE_NOTES.md          # Current release notes (v0.5.0)
 ├── 📄 LICENSE                   # Proprietary license
 ├── 📄 package.json              # Dependencies and scripts
 ├── 📄 tsconfig.json             # TypeScript configuration
@@ -603,13 +605,15 @@ MAJOR.MINOR.PATCH
 | **MINOR** | New features, backwards-compatible |
 | **PATCH** | Bug fixes and minor improvements |
 
-**Current Version:** `v0.4.1`
+**Current Version:** `v0.5.0`
 
 ### Version History
 
 | Version | Date | Type | Highlights |
 | :--- | :--- | :--- | :--- |
-| **0.4.1** | 2026-03-06 | Patch | Performance optimization, documentation overhaul, structured logging |
+| **0.5.0** | 2026-03-31 | Minor | Codebase cleanup, dependency audit, documentation overhaul, PDF microservice |
+| 0.4.2 | 2026-03-30 | Patch | Server-side filtering, backend aggregates, pagination fixes |
+| 0.4.1 | 2026-03-06 | Patch | Performance optimization, documentation overhaul, structured logging |
 | 0.4.0 | 2026-03-05 | Minor | Master Packing List, Performa Invoice, Traceability |
 | 0.3.2 | 2026-02-25 | Patch | RBAC refinements, version management |
 | 0.3.0 | 2026-02-23 | Minor | Granular RBAC, Supabase security hardening |
@@ -617,6 +621,40 @@ MAJOR.MINOR.PATCH
 | 0.1.0 | 2026-01-20 | Initial | Core WMS with inventory, movements, orders |
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
+
+---
+
+## 🔄 Recent Changes
+
+### v0.5.0 — Codebase Cleanup & Documentation (2026-03-31)
+
+This release focuses on enterprise-grade code quality improvements with **zero business logic changes**:
+
+#### Dependency Audit
+- Removed **6 unused npm packages** (`hono`, `canvas`, `html2canvas`, `jspdf`, `jsbarcode`, `puppeteer`) — none were imported in `src/`
+- Fixed package name from "Build Inventory Forecasting System" to "warehouse-management-system"
+
+#### Dead Code & Artifact Cleanup
+- Deleted 5 debug text files (`git_log_output.txt`, `git_status_output.txt`, `tsc_output.txt`, `log.txt`, `log2.txt`)
+- Cleaned 63 lines of commented-out mock data from `SampleDataInfo.tsx`
+- Consolidated duplicate `db_schema.sql` (60KB) into `.db_reference/`
+
+#### .gitignore Optimization
+- Added 8 new exclusion patterns for debug outputs, temporary files, and diagnostic artifacts
+
+#### Documentation
+- Created `RELEASE_NOTES.md` from analysis of 81 commits and 40+ PRs
+- Updated `CHANGELOG.md` with structured v0.5.0 entry
+- Updated architecture documentation to reflect PDF microservice extraction
+
+### v0.4.2 — Critical Bugfixes (2026-03-30)
+
+- Migrated Stock Movement, Sticker Generation, and Proforma Invoice to server-side filtering
+- Fixed summary card counts using independent backend HEAD queries
+- Standardized pagination + filter ordering across all modules
+- Added page reset on filter change to prevent stale results
+
+See [CHANGELOG.md](CHANGELOG.md) and [RELEASE_NOTES.md](RELEASE_NOTES.md) for complete details.
 
 ---
 
