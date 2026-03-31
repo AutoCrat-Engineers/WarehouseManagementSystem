@@ -1,7 +1,7 @@
 # Dispatch Email System — Complete Implementation Report
 
-**Version**: v7 (Production-Grade Puppeteer Architecture)
-**Date**: 26 March 2026
+**Version**: v9 (Resilient Dispatch with Error Recovery)
+**Date**: 31 March 2026
 **Module**: Proforma Invoice Dispatch Notifications
 **Status**: ✅ Production Ready
 
@@ -70,7 +70,9 @@ The Dispatch Email System sends automated, branded email notifications with the 
 | Function | Description |
 |----------|-------------|
 | `generatePIPdfAndUpload(pi)` | Builds PI HTML → POSTs to Puppeteer → receives buffer → uploads to Storage |
-| `handleApproveSubmit()` | Orchestrates: approve RPC → generate PDF → send email |
+| `handleApproveSubmit()` | Orchestrates: approve RPC → generate PDF → send email. Shows proper error states, keeps modal open on partial failures |
+| `handleRetryPdf()` | Retries PDF generation + upload without re-approving the PI |
+| `handleResendEmail()` | Resends dispatch email without re-generating the PDF |
 | `handlePrintPI(pi)` | Opens PI in new window for browser printing (unchanged) |
 
 **Key details:**
@@ -78,14 +80,20 @@ The Dispatch Email System sends automated, branded email notifications with the 
 - The HTML template is the **exact same structure** used in `handlePrintPI`, ensuring the stored PDF matches the Print Preview.
 - PDF service URL is configurable via `VITE_PDF_SERVICE_URL` environment variable (defaults to `http://localhost:3001`).
 
-### 3.2 Puppeteer PDF Service — `pdf-server.mjs`
+### 3.2 Puppeteer PDF Service (Microservice)
 
-**Path**: `server/pdf-server.mjs`
+**Path**: `micro-services/pdf-service/` (decoupled from main repo as of v0.5.0)
+
+> **Note**: The original `server/pdf-server.mjs` has been removed from the main repository.
+> The PDF service now runs as an independent Docker-containerized microservice.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/generate-pdf` | POST | Accepts `{ html: string }`, returns `application/pdf` binary |
-| `/health` | GET | Health check with uptime |
+| `/v1/generate-pdf` | POST | Accepts `{ html: string }`, returns `application/pdf` binary (primary) |
+| `/api/generate-pdf` | POST | Deprecated alias → redirects to `/v1/generate-pdf` (sunset 2027-01-01) |
+| `/health` | GET | Full health check (browser, memory, uptime) |
+| `/healthz` | GET | Liveness probe (minimal) |
+| `/readyz` | GET | Readiness probe (browser + capacity) |
 
 **How it works:**
 1. Launches headless Chrome **once** on startup (connection pooling)
@@ -332,20 +340,23 @@ GROUP BY proforma_number;
 
 ## 9. Error Handling
 
-| Scenario | Behavior |
-|----------|----------|
-| PDF service unreachable | Approval succeeds, email skipped, toast shows warning |
-| PDF service returns error | Logged, email not sent |
-| Storage upload fails | Logged, email not sent |
-| PDF not found in Storage | Edge Function returns error, logged to `email_dispatch_log` |
-| Resend API error (4xx) | No retry, logged as failed |
-| Resend API error (5xx) | 2x retry with exponential backoff, then logged as failed |
-| Invalid email addresses | Resend validates and returns error |
-| PI not found in database | Edge Function returns 400 |
+| Scenario | Behavior | UI State |
+|----------|----------|----------|
+| PDF service unreachable | Approval succeeds, email skipped | ⚠️ Warning toast, modal stays open with **Retry PDF** button |
+| PDF service returns 404 | Categorized error: "route not found" | ❌ Error with diagnostic message |
+| PDF service returns 401/403 | Categorized error: "auth failed" | ❌ Error, check API key config |
+| Storage upload fails | Logged, email not sent | ⚠️ **Retry PDF** button shown |
+| PDF not found in Storage | Edge Function returns error | ⚠️ **Resend Email** button shown |
+| Resend API error (4xx) | No retry, logged as failed | ❌ Error toast |
+| Resend API error (5xx) | 2x retry with exponential backoff | ⚠️ **Resend Email** button shown |
+| Invalid email addresses | Resend validates and returns error | ❌ Error toast |
+| PI not found in database | Edge Function returns 400 | ❌ Error toast |
+| All steps succeed | Modal auto-closes | ✅ Success toast |
 
 ### Failure Isolation
 - **PI approval is always atomic** — stock movement happens regardless of email success
-- **Email is non-blocking** — the user gets a success toast even if email fails
+- **Email failure is visible** — the user sees the exact error and can retry from the modal
+- **Retry without re-approval** — `handleRetryPdf()` and `handleResendEmail()` only re-run the failed step
 - **Every failure is logged** — check `email_dispatch_log` for diagnostics
 
 ---
@@ -367,8 +378,11 @@ npm install
 #    → 011_email_dispatch_logging.sql
 #    → 012_pi_documents_storage.sql
 
-# 3. Start PDF service (Terminal 1)
-npm run pdf-server
+# 3. Start PDF microservice (Terminal 1)
+# Option A: Run from micro-services directory
+cd ../micro-services/pdf-service && npm start
+# Option B: Run via Docker
+docker compose -f ../micro-services/pdf-service/docker-compose.yml up
 # Output: 📄 PDF Service running at http://localhost:3001
 
 # 4. Start Vite dev server (Terminal 2)
@@ -393,7 +407,7 @@ npm run dev
 
 ### PDF Service Deployment
 
-The Puppeteer service (`server/pdf-server.mjs`) must be deployed separately since Supabase Edge Functions can't run Chrome.
+The Puppeteer service (now at `micro-services/pdf-service/`) must be deployed separately since Supabase Edge Functions can't run Chrome. Azure Bicep IaC templates are included for Azure Container Apps deployment.
 
 **Recommended Platforms:**
 
@@ -432,6 +446,8 @@ npx supabase functions deploy send-dispatch-email --no-verify-jwt
 | v5 | 2026-03-26 | Fixed storage path, RLS, JPEG compression | Still layout differences vs print |
 | v6 | 2026-03-26 | Uint8Array upload, improved logo | Multipart/form-data 400 errors |
 | **v7** | **2026-03-26** | **Puppeteer microservice** | **✅ Production-grade, pixel-perfect** |
+| v8 | 2026-03-31 | Decoupled microservice architecture | Extracted to independent repo |
+| **v9** | **2026-03-31** | **Resilient dispatch with error recovery** | **✅ Fixed: CORS, port conflicts, false success UI, retry/resend** |
 
 ### Why Puppeteer Won
 - **pdf-lib**: Manual coordinate positioning — impossible to match complex HTML table layout
@@ -447,11 +463,11 @@ npx supabase functions deploy send-dispatch-email --no-verify-jwt
 | Storage Access | RLS enforced — only authenticated users can upload, service_role can download |
 | Edge Function Auth | Bearer token from Supabase Auth session |
 | Resend API Key | Stored as Supabase Edge Function secret (not in code) |
-| PDF Service | Runs on localhost:3001 (CORS enabled, no auth for local dev) |
+| PDF Service | Runs on localhost:3001 (CORS with X-API-Key header, API key auth in production, no auth for local dev) |
 | Email Spoofing | Uses Resend's verified domain (pending DNS verification) |
 | Data Exposure | PI HTML contains business data — PDF service should be on trusted network in production |
 
 ---
 
-*Report generated: 26 March 2026, 12:36 IST*
+*Report updated: 31 March 2026, 15:15 IST*
 *System: WMS-AE Warehouse Management System — Autocrat Engineers*

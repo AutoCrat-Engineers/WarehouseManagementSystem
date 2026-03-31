@@ -135,6 +135,15 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
     const [approveTarget, setApproveTarget] = useState<PIRecord | null>(null);
     const [approvalEmails, setApprovalEmails] = useState('');
     const [approving, setApproving] = useState(false);
+    // Track approve flow outcomes for retry/resend capability
+    const [approveResult, setApproveResult] = useState<{
+        phase: 'idle' | 'approving' | 'pdf' | 'email' | 'done';
+        piApproved: boolean;
+        pdfOk: boolean | null;
+        emailOk: boolean | null;
+        pdfError?: string;
+        emailError?: string;
+    } | null>(null);
 
     // Cancel flow (type-to-confirm)
     const [cancelTarget, setCancelTarget] = useState<PIRecord | null>(null);
@@ -672,7 +681,7 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
             showToast('error', 'Cannot Approve', 'All linked MPLs have been cancelled. Cancel this Proforma Invoice and create a new one.');
             return;
         }
-        setApproveTarget(pi); setApprovalEmails('');
+        setApproveTarget(pi); setApprovalEmails(''); setApproveResult(null);
     };
 
     // ─── GENERATE PI PDF VIA MICROSERVICE (resilient client with retry + circuit breaker) ───
@@ -880,16 +889,28 @@ ${rowsHtml}
         if (!approveTarget) return;
         if (!approvalEmails.trim()) { setError('Please enter at least one email address'); return; }
         setApproving(true); setError(null);
+        setApproveResult({ phase: 'approving', piApproved: false, pdfOk: null, emailOk: null });
         try {
             // 1. Approve PI & move stock (critical path — atomic RPC)
             await approvePerformaInvoice(approveTarget.id);
+            setApproveResult(prev => prev ? { ...prev, phase: 'pdf', piApproved: true } : prev);
 
             // 2. Generate PI PDF & upload to storage (same HTML as Print)
-            const pdfUploaded = await generatePIPdfAndUpload(approveTarget);
+            let pdfUploaded = false;
+            let pdfErrorMsg = '';
+            try {
+                pdfUploaded = await generatePIPdfAndUpload(approveTarget);
+                if (!pdfUploaded) pdfErrorMsg = 'PDF generation or upload failed';
+            } catch (pdfErr: any) {
+                pdfErrorMsg = pdfErr.message || 'PDF generation failed';
+                console.error('❌ PDF step failed:', pdfErrorMsg);
+            }
+            setApproveResult(prev => prev ? { ...prev, phase: 'email', pdfOk: pdfUploaded, pdfError: pdfErrorMsg || undefined } : prev);
 
-            // 3. Send dispatch email via Edge Function (non-blocking)
+            // 3. Send dispatch email via Edge Function
             const emails = approvalEmails.split(',').map(e => e.trim()).filter(Boolean);
             let emailSent = false;
+            let emailErrorMsg = '';
             try {
                 const { data: { session } } = await supabase.auth.getSession();
                 const res = await fetch(
@@ -908,21 +929,106 @@ ${rowsHtml}
                 );
                 const result = await res.json();
                 emailSent = result.success === true;
-                if (!emailSent) console.warn('Email send failed:', result.error);
+                if (!emailSent) emailErrorMsg = result.error || 'Email service returned failure';
             } catch (emailErr: any) {
-                console.warn('Email dispatch failed (non-blocking):', emailErr.message);
+                emailErrorMsg = emailErr.message || 'Email dispatch failed';
+                console.error('❌ Email step failed:', emailErrorMsg);
             }
 
-            const emailMsg = emailSent
-                ? ` — Email sent to ${emails.length} recipient(s)`
-                : pdfUploaded
-                    ? ` — Email notification pending`
-                    : ` — Email notification pending (PDF generation issue)`;
-            showToast('success', 'Dispatched Successfully', `${approveTarget.proforma_number} approved — Stock moved to In Transit${emailMsg}`);
-            setSuccessMsg(`${approveTarget.proforma_number} approved — Stock moved to In Transit${emailMsg}`);
-            setApproveTarget(null); setStep('LIST'); loadPIs();
-            setTimeout(() => setSuccessMsg(null), 6000);
-        } catch (err: any) { setError(err.message); } finally { setApproving(false); }
+            // 4. Determine outcome and show appropriate toast
+            const finalResult = {
+                phase: 'done' as const,
+                piApproved: true,
+                pdfOk: pdfUploaded,
+                emailOk: emailSent,
+                pdfError: pdfErrorMsg || undefined,
+                emailError: emailErrorMsg || undefined,
+            };
+            setApproveResult(finalResult);
+
+            if (pdfUploaded && emailSent) {
+                // ✅ Full success — close modal
+                showToast('success', 'Dispatched Successfully',
+                    `${approveTarget.proforma_number} approved — Stock moved to In Transit — Email sent to ${emails.length} recipient(s)`);
+                setSuccessMsg(`${approveTarget.proforma_number} approved — Stock dispatched & email sent`);
+                setApproveTarget(null); setApproveResult(null); setStep('LIST'); loadPIs();
+                setTimeout(() => setSuccessMsg(null), 6000);
+            } else {
+                // ⚠️ Partial success — keep modal open with retry options
+                const issues: string[] = [];
+                if (!pdfUploaded) issues.push('PDF generation failed');
+                if (!emailSent) issues.push('Email dispatch failed');
+                showToast('error', 'Dispatch Incomplete',
+                    `${approveTarget.proforma_number} approved (stock moved) but: ${issues.join(', ')}. Use retry buttons below.`);
+                // Refresh list in background but keep modal open
+                loadPIs();
+            }
+        } catch (err: any) {
+            // RPC approval itself failed — critical error
+            setError(err.message);
+            setApproveResult(null);
+            showToast('error', 'Approval Failed', err.message);
+        } finally { setApproving(false); }
+    };
+
+    // ─── RETRY PDF (after partial approve success) ───
+    const handleRetryPdf = async () => {
+        if (!approveTarget) return;
+        setApproveResult(prev => prev ? { ...prev, phase: 'pdf', pdfOk: null, pdfError: undefined } : prev);
+        setApproving(true);
+        try {
+            const pdfUploaded = await generatePIPdfAndUpload(approveTarget);
+            setApproveResult(prev => prev ? { ...prev, pdfOk: pdfUploaded, pdfError: pdfUploaded ? undefined : 'PDF generation failed', phase: 'done' } : prev);
+            if (pdfUploaded) {
+                showToast('success', 'PDF Generated', 'PDF created and uploaded successfully. You can now resend the email.');
+            } else {
+                showToast('error', 'PDF Retry Failed', 'PDF generation failed again. Check if the PDF service is running.');
+            }
+        } catch (err: any) {
+            setApproveResult(prev => prev ? { ...prev, pdfOk: false, pdfError: err.message, phase: 'done' } : prev);
+            showToast('error', 'PDF Retry Failed', err.message);
+        } finally { setApproving(false); }
+    };
+
+    // ─── RESEND EMAIL (after partial approve success) ───
+    const handleResendEmail = async () => {
+        if (!approveTarget) return;
+        const emails = approvalEmails.split(',').map(e => e.trim()).filter(Boolean);
+        if (emails.length === 0) { setError('Please enter at least one email'); return; }
+        setApproveResult(prev => prev ? { ...prev, phase: 'email', emailOk: null, emailError: undefined } : prev);
+        setApproving(true);
+        try {
+            const { data: { session } } = await supabase.auth.getSession();
+            const res = await fetch(
+                `https://sugvmurszfcneaeyoagv.supabase.co/functions/v1/send-dispatch-email`,
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${session?.access_token || ''}`,
+                    },
+                    body: JSON.stringify({ pi_id: approveTarget.id, to: emails }),
+                }
+            );
+            const result = await res.json();
+            const sent = result.success === true;
+            setApproveResult(prev => prev ? { ...prev, emailOk: sent, emailError: sent ? undefined : (result.error || 'Email failed'), phase: 'done' } : prev);
+            if (sent) {
+                showToast('success', 'Email Sent', `Dispatch email sent to ${emails.length} recipient(s)`);
+                // If both PDF and email are now OK, auto-close
+                setApproveResult(prev => {
+                    if (prev?.pdfOk && sent) {
+                        setTimeout(() => { setApproveTarget(null); setApproveResult(null); setStep('LIST'); }, 1500);
+                    }
+                    return prev;
+                });
+            } else {
+                showToast('error', 'Email Failed', result.error || 'Email service returned failure');
+            }
+        } catch (err: any) {
+            setApproveResult(prev => prev ? { ...prev, emailOk: false, emailError: err.message, phase: 'done' } : prev);
+            showToast('error', 'Email Failed', err.message);
+        } finally { setApproving(false); }
     };
 
     const totalPickedPallets = pickedMpls.reduce((s, p) => s + p.mpl.total_pallets, 0);
@@ -2162,13 +2268,70 @@ ${rowsHtml}
                                 </div>
                             </div>
 
+                            {/* ═══ Status Indicators (visible during/after approve) ═══ */}
+                            {approveResult && (
+                                <div style={{ padding: '0 28px 16px' }}>
+                                    <div style={{ borderRadius: 10, border: '1px solid #e5e7eb', overflow: 'hidden', background: '#fafbfc' }}>
+                                        {/* Step 1: PI Approval */}
+                                        <div style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10, borderBottom: '1px solid #f3f4f6' }}>
+                                            {approveResult.piApproved
+                                                ? <CheckCircle2 size={16} style={{ color: '#059669' }} />
+                                                : approveResult.phase === 'approving'
+                                                    ? <Loader2 size={16} style={{ color: '#2563eb', animation: 'spin 1s linear infinite' }} />
+                                                    : <AlertCircle size={16} style={{ color: '#9ca3af' }} />}
+                                            <span style={{ fontSize: 13, fontWeight: 600, color: approveResult.piApproved ? '#059669' : '#374151' }}>
+                                                {approveResult.piApproved ? 'PI Approved — Stock Moved to Transit' : approveResult.phase === 'approving' ? 'Approving PI & moving stock…' : 'PI Approval'}
+                                            </span>
+                                        </div>
+                                        {/* Step 2: PDF Generation */}
+                                        <div style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10, borderBottom: '1px solid #f3f4f6' }}>
+                                            {approveResult.pdfOk === true
+                                                ? <CheckCircle2 size={16} style={{ color: '#059669' }} />
+                                                : approveResult.pdfOk === false
+                                                    ? <XCircle size={16} style={{ color: '#dc2626' }} />
+                                                    : approveResult.phase === 'pdf'
+                                                        ? <Loader2 size={16} style={{ color: '#2563eb', animation: 'spin 1s linear infinite' }} />
+                                                        : <Clock size={16} style={{ color: '#9ca3af' }} />}
+                                            <span style={{ fontSize: 13, fontWeight: 600, color: approveResult.pdfOk === true ? '#059669' : approveResult.pdfOk === false ? '#dc2626' : '#374151', flex: 1 }}>
+                                                {approveResult.pdfOk === true ? 'PDF Generated & Uploaded' : approveResult.pdfOk === false ? (approveResult.pdfError || 'PDF generation failed') : approveResult.phase === 'pdf' ? 'Generating PDF…' : 'PDF Generation'}
+                                            </span>
+                                            {approveResult.pdfOk === false && approveResult.phase === 'done' && (
+                                                <button onClick={handleRetryPdf} disabled={approving}
+                                                    style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fef2f2', color: '#dc2626', fontWeight: 600, fontSize: 12, cursor: approving ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+                                                    <RefreshCw size={12} /> Retry PDF
+                                                </button>
+                                            )}
+                                        </div>
+                                        {/* Step 3: Email Dispatch */}
+                                        <div style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                                            {approveResult.emailOk === true
+                                                ? <CheckCircle2 size={16} style={{ color: '#059669' }} />
+                                                : approveResult.emailOk === false
+                                                    ? <XCircle size={16} style={{ color: '#dc2626' }} />
+                                                    : approveResult.phase === 'email'
+                                                        ? <Loader2 size={16} style={{ color: '#2563eb', animation: 'spin 1s linear infinite' }} />
+                                                        : <Clock size={16} style={{ color: '#9ca3af' }} />}
+                                            <span style={{ fontSize: 13, fontWeight: 600, color: approveResult.emailOk === true ? '#059669' : approveResult.emailOk === false ? '#dc2626' : '#374151', flex: 1 }}>
+                                                {approveResult.emailOk === true ? 'Email Sent' : approveResult.emailOk === false ? (approveResult.emailError || 'Email dispatch failed') : approveResult.phase === 'email' ? 'Sending email…' : 'Email Dispatch'}
+                                            </span>
+                                            {approveResult.emailOk === false && approveResult.phase === 'done' && (
+                                                <button onClick={handleResendEmail} disabled={approving}
+                                                    style={{ padding: '5px 14px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fef2f2', color: '#dc2626', fontWeight: 600, fontSize: 12, cursor: approving ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+                                                    <Mail size={12} /> Resend Email
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Action Buttons */}
                             <div style={{
                                 padding: '0 28px 28px',
                                 display: 'flex', gap: 12, justifyContent: 'flex-end',
                             }}>
                                 <button
-                                    onClick={() => { setApproveTarget(null); setStep('LIST'); }}
+                                    onClick={() => { setApproveTarget(null); setApproveResult(null); setStep('LIST'); }}
                                     style={{
                                         padding: '12px 28px', borderRadius: 10,
                                         border: '1px solid #d1d5db', backgroundColor: '#fff',
@@ -2179,44 +2342,46 @@ ${rowsHtml}
                                     onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#f9fafb'; e.currentTarget.style.borderColor = '#9ca3af'; }}
                                     onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#fff'; e.currentTarget.style.borderColor = '#d1d5db'; }}
                                 >
-                                    <X size={15} /> Cancel
+                                    <X size={15} /> {approveResult?.piApproved ? 'Close' : 'Cancel'}
                                 </button>
-                                <button
-                                    onClick={handleApproveSubmit}
-                                    disabled={approving || !approvalEmails.trim()}
-                                    style={{
-                                        padding: '12px 32px', borderRadius: 10,
-                                        border: 'none',
-                                        background: (approving || !approvalEmails.trim())
-                                            ? '#d1d5db'
-                                            : 'linear-gradient(135deg, #059669, #047857)',
-                                        color: (approving || !approvalEmails.trim()) ? '#9ca3af' : '#fff',
-                                        fontWeight: 700, fontSize: 15,
-                                        cursor: approving ? 'wait' : (approvalEmails.trim() ? 'pointer' : 'not-allowed'),
-                                        display: 'flex', alignItems: 'center', gap: 10,
-                                        boxShadow: (approving || !approvalEmails.trim())
-                                            ? 'none'
-                                            : '0 4px 20px rgba(5,150,105,0.35)',
-                                        transition: 'all 0.2s',
-                                        letterSpacing: '0.2px',
-                                    }}
-                                    onMouseEnter={e => {
-                                        if (!approving && approvalEmails.trim()) {
-                                            e.currentTarget.style.boxShadow = '0 6px 28px rgba(5,150,105,0.4)';
-                                            e.currentTarget.style.transform = 'translateY(-1px)';
-                                        }
-                                    }}
-                                    onMouseLeave={e => {
-                                        e.currentTarget.style.boxShadow = (approving || !approvalEmails.trim()) ? 'none' : '0 4px 20px rgba(5,150,105,0.35)';
-                                        e.currentTarget.style.transform = 'translateY(0)';
-                                    }}
-                                >
-                                    {approving ? (
-                                        <><Loader2 size={17} style={{ animation: 'spin 1s linear infinite' }} /> Approving…</>
-                                    ) : (
-                                        <><Send size={17} /> Approve & Dispatch</>
-                                    )}
-                                </button>
+                                {(!approveResult || !approveResult.piApproved) && (
+                                    <button
+                                        onClick={handleApproveSubmit}
+                                        disabled={approving || !approvalEmails.trim()}
+                                        style={{
+                                            padding: '12px 32px', borderRadius: 10,
+                                            border: 'none',
+                                            background: (approving || !approvalEmails.trim())
+                                                ? '#d1d5db'
+                                                : 'linear-gradient(135deg, #059669, #047857)',
+                                            color: (approving || !approvalEmails.trim()) ? '#9ca3af' : '#fff',
+                                            fontWeight: 700, fontSize: 15,
+                                            cursor: approving ? 'wait' : (approvalEmails.trim() ? 'pointer' : 'not-allowed'),
+                                            display: 'flex', alignItems: 'center', gap: 10,
+                                            boxShadow: (approving || !approvalEmails.trim())
+                                                ? 'none'
+                                                : '0 4px 20px rgba(5,150,105,0.35)',
+                                            transition: 'all 0.2s',
+                                            letterSpacing: '0.2px',
+                                        }}
+                                        onMouseEnter={e => {
+                                            if (!approving && approvalEmails.trim()) {
+                                                e.currentTarget.style.boxShadow = '0 6px 28px rgba(5,150,105,0.4)';
+                                                e.currentTarget.style.transform = 'translateY(-1px)';
+                                            }
+                                        }}
+                                        onMouseLeave={e => {
+                                            e.currentTarget.style.boxShadow = (approving || !approvalEmails.trim()) ? 'none' : '0 4px 20px rgba(5,150,105,0.35)';
+                                            e.currentTarget.style.transform = 'translateY(0)';
+                                        }}
+                                    >
+                                        {approving ? (
+                                            <><Loader2 size={17} style={{ animation: 'spin 1s linear infinite' }} /> {approveResult?.phase === 'approving' ? 'Approving…' : approveResult?.phase === 'pdf' ? 'Generating PDF…' : approveResult?.phase === 'email' ? 'Sending Email…' : 'Processing…'}</>
+                                        ) : (
+                                            <><Send size={17} /> Approve & Dispatch</>
+                                        )}
+                                    </button>
+                                )}
                             </div>
                         </div>
                     </div>

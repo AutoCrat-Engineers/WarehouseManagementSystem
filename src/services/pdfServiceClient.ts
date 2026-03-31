@@ -153,7 +153,14 @@ export async function generatePdf(
 
       if (!res.ok) {
         const errBody = await res.text();
-        lastError = `PDF service error (${res.status}): ${errBody}`;
+        // Categorize errors for better diagnostics
+        if (res.status === 404) {
+          lastError = `PDF service route not found (404). Verify the service is running and the endpoint /v1/generate-pdf is registered.`;
+        } else if (res.status === 401 || res.status === 403) {
+          lastError = `PDF service auth failed (${res.status}). Check API key configuration.`;
+        } else {
+          lastError = `PDF service error (${res.status}): ${errBody}`;
+        }
 
         // Don't retry on client errors (4xx)
         if (res.status >= 400 && res.status < 500) {
