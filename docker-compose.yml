@@ -1,0 +1,9 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wms-app
+    ports:
+      - "80:80"
+    restart: always
