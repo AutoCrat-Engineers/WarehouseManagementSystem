@@ -2264,6 +2264,14 @@ ${rowsHtml}
                                             <AlertCircle size={12} style={{ color: '#9ca3af' }} />
                                             <span style={{ fontSize: 11, color: '#9ca3af' }}>Separate multiple emails with commas</span>
                                         </div>
+                                        {approvalEmails.trim() && (
+                                            <span style={{
+                                                fontSize: 11, fontWeight: 700, color: '#059669',
+                                                background: '#dcfce7', padding: '3px 10px', borderRadius: 6,
+                                            }}>
+                                                {approvalEmails.split(',').filter(e => e.trim()).length} recipient{approvalEmails.split(',').filter(e => e.trim()).length !== 1 ? 's' : ''}
+                                            </span>
+                                        )}
                                     </div>
                                 </div>
                             </div>
