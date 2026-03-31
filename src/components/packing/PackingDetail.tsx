@@ -174,20 +174,20 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
         }
     };
 
-    const handlePrintAllStickers = async () => {
+    const handlePrintAllStickers = async (reprintAll: boolean = false) => {
         if (!request) return;
-        // Build sticker data for all unprinted + non-transferred boxes
-        const eligibleBoxes = boxes.filter(b => !b.sticker_printed && !b.is_transferred);
+        // Build sticker data for all unprinted + non-transferred boxes (unless reprintAll is true)
+        const eligibleBoxes = reprintAll ? boxes : boxes.filter(b => !b.sticker_printed && !b.is_transferred);
         if (eligibleBoxes.length === 0) {
-            setMessage({ type: 'info', text: 'All stickers are already printed.' });
+            setMessage({ type: 'info', text: reprintAll ? 'No stickers available to reprint.' : 'All stickers are already printed.' });
             return;
         }
 
         setSubmitting(true);
-        setMessage({ type: 'info', text: `Preparing ${eligibleBoxes.length} sticker(s) for printing...` });
+        setMessage({ type: 'info', text: `Preparing ${eligibleBoxes.length} sticker(s) for ${reprintAll ? 'reprinting' : 'printing'}...` });
 
         try {
-            // Build sticker data + QR codes for ALL boxes upfront
+            // Build sticker data + QR codes for applicable boxes upfront
             const stickers = eligibleBoxes.map(box => ({
                 packingId: box.packing_id || generatePackingId(box.id),
                 partNumber: request.part_number || '—',
@@ -307,9 +307,9 @@ ${stickerPages}
                             await svc.markStickerPrinted(requestId, boxId);
                         }
                         await loadData();
-                        setMessage({ type: 'success', text: `All ${boxIds.length} sticker(s) printed successfully.` });
+                        setMessage({ type: 'success', text: `All ${boxIds.length} sticker(s) ${reprintAll ? 'reprinted' : 'printed'} successfully.` });
                     } catch (err: any) {
-                        setMessage({ type: 'error', text: err.message || 'Failed to update print status' });
+                        setMessage({ type: 'error', text: err.message || `Failed to update print status` });
                         await loadData();
                     } finally {
                         setSubmitting(false);
@@ -654,6 +654,27 @@ ${stickerPages}
                     }}>
                         Activity Log ({auditLogs.length})
                     </button>
+
+                    <div style={{ flex: 1 }} />
+                    
+                    {/* REPRINT ALL BUTTON */}
+                    {unprintedCount === 0 && (
+                        <button 
+                            onClick={() => handlePrintAllStickers(true)}
+                            disabled={submitting}
+                            style={{
+                                padding: '6px 14px', borderRadius: '6px', border: '1px solid #bfdbfe',
+                                background: '#eff6ff', color: '#1d4ed8', fontSize: 12, fontWeight: 700, 
+                                cursor: submitting ? 'not-allowed' : 'pointer', opacity: submitting ? 0.6 : 1,
+                                display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, alignSelf: 'flex-end', marginRight: 54,
+                                boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                            }}
+                            onMouseEnter={e => e.currentTarget.style.backgroundColor = '#dbeafe'}
+                            onMouseLeave={e => e.currentTarget.style.backgroundColor = '#eff6ff'}
+                        >
+                            <Printer size={14} /> Reprint All
+                        </button>
+                    )}
                 </div>
             )}
 
@@ -809,7 +830,7 @@ ${stickerPages}
                         }}>
                             {/* Print All Stickers */}
                             {unprintedCount > 0 && (
-                                <button onClick={handlePrintAllStickers} disabled={submitting}
+                                <button onClick={() => handlePrintAllStickers(false)} disabled={submitting}
                                     style={{
                                         padding: '10px 20px', borderRadius: 6, border: 'none',
                                         background: '#7c3aed', color: '#fff',

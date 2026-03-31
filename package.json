@@ -1,6 +1,6 @@
 {
-      "name": "Build Inventory Forecasting System",
-      "version": "0.3.2",
+      "name": "warehouse-management-system",
+      "version": "0.5.1",
       "private": true,
       "dependencies": {
             "@jsr/supabase__supabase-js": "^2.49.8",
@@ -31,12 +31,10 @@
             "@radix-ui/react-toggle-group": "^1.1.2",
             "@radix-ui/react-tooltip": "^1.1.8",
             "@supabase/supabase-js": "*",
-            "@types/qrcode": "^1.5.6",
             "class-variance-authority": "^0.7.1",
             "clsx": "*",
             "cmdk": "^1.1.1",
             "embla-carousel-react": "^8.6.0",
-            "hono": "*",
             "input-otp": "^1.4.2",
             "lucide-react": "^0.487.0",
             "next-themes": "^0.4.6",
@@ -49,12 +47,14 @@
             "recharts": "^2.15.2",
             "sonner": "^2.0.3",
             "tailwind-merge": "*",
-            "vaul": "^1.1.2"
+            "vaul": "^1.1.2",
+            "xlsx": "^0.18.5"
       },
       "devDependencies": {
             "@types/node": "^20.10.0",
             "@types/react": "^19.2.10",
             "@types/react-dom": "^19.2.3",
+            "@types/qrcode": "^1.5.6",
             "@vitejs/plugin-react-swc": "^3.10.2",
             "vite": "6.3.5"
       },

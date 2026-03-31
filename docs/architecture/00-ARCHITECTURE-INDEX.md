@@ -1,8 +1,8 @@
 # 🏗️ WMS — Enterprise Architecture Documentation
 
 > **Project**: AutoCrat Engineers — Warehouse Management System (WMS)  
-> **Version**: 0.3.2  
-> **Last Updated**: February 2026  
+> **Version**: 0.5.0  
+> **Last Updated**: March 2026  
 > **Document Owner**: Team Optimus
 
 ---
@@ -35,6 +35,13 @@ This directory contains the **complete, decomposed architecture documentation** 
 - **"I need to understand auth/RBAC"** → [04-AUTHENTICATION-RBAC](./04-AUTHENTICATION-RBAC.md)
 - **"I need to add a new module"** → [09-MODULE-BREAKDOWN](./09-MODULE-BREAKDOWN.md) → [03-FRONTEND-ARCHITECTURE](./03-FRONTEND-ARCHITECTURE.md)
 - **"I need to deploy changes"** → [11-DEPLOYMENT-ARCHITECTURE](./11-DEPLOYMENT-ARCHITECTURE.md)
+- **"I need to understand the PDF microservice"** → See `micro-services/pdf-service/` and `src/services/pdfServiceClient.ts`
+
+### 📝 Architecture Notes (v0.5.0)
+
+- **PDF Generation** has been extracted into a standalone microservice (`micro-services/pdf-service/`) with Docker + Azure Container Apps deployment. The main app communicates via `pdfServiceClient.ts` with automatic fallback.
+- **Server-side filtering** is now the standard for all data modules — filters are applied at the database query level before pagination.
+- **Dependencies cleaned** — 6 unused packages removed (hono, canvas, html2canvas, jspdf, jsbarcode, puppeteer).
 
 ---
 

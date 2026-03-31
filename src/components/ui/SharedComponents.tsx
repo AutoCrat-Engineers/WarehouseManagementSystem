@@ -26,6 +26,8 @@ import {
     RefreshCw,
     Plus,
     CalendarDays,
+    ChevronLeft,
+    ChevronRight,
 } from 'lucide-react';
 import { Card } from './EnterpriseUI';
 
@@ -217,7 +219,7 @@ export function RefreshButton({
 export function ExportCSVButton({ onClick }: { onClick: () => void }) {
     return (
         <ActionButton
-            label="Export CSV"
+            label="Export Excel"
             icon={<Download size={14} />}
             onClick={onClick}
             variant="secondary"
@@ -595,6 +597,55 @@ export function SummaryCardsGrid({
             }}
         >
             {children}
+        </div>
+    );
+}
+
+// ============================================================================
+// PAGINATION — Standardized footer across all grids
+// ============================================================================
+
+export interface PaginationProps {
+    page: number;          // 0-indexed
+    pageSize: number;
+    totalCount: number;
+    onPageChange: (newPage: number) => void;
+}
+
+export function Pagination({ page, pageSize, totalCount, onPageChange }: PaginationProps) {
+    const totalPages = Math.ceil(totalCount / pageSize);
+
+    if (totalCount === 0 || totalPages <= 1) {
+        return (
+            <div style={{ padding: '12px 16px', borderTop: '1px solid var(--table-border)', fontSize: '13px', color: 'var(--enterprise-gray-600)' }}>
+                Showing {totalCount > 0 ? `all ${totalCount}` : '0'} records
+            </div>
+        );
+    }
+
+    const startItem = page * pageSize + 1;
+    const endItem = Math.min((page + 1) * pageSize, totalCount);
+
+    return (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderTop: '1px solid var(--table-border)', fontSize: 13, color: 'var(--enterprise-gray-600)' }}>
+            <span>Showing {startItem}–{endItem} of {totalCount}</span>
+            <div style={{ display: 'flex', gap: 4 }}>
+                <button 
+                    onClick={() => onPageChange(Math.max(0, page - 1))} 
+                    disabled={page === 0} 
+                    style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #d1d5db', backgroundColor: page === 0 ? '#f9fafb' : '#fff', cursor: page === 0 ? 'default' : 'pointer', opacity: page === 0 ? 0.5 : 1 }}
+                >
+                    <ChevronLeft size={14} />
+                </button>
+                <span style={{ padding: '6px 12px', fontWeight: 600 }}>{page + 1} / {totalPages}</span>
+                <button 
+                    onClick={() => onPageChange(Math.min(totalPages - 1, page + 1))} 
+                    disabled={page >= totalPages - 1} 
+                    style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #d1d5db', backgroundColor: page >= totalPages - 1 ? '#f9fafb' : '#fff', cursor: page >= totalPages - 1 ? 'default' : 'pointer', opacity: page >= totalPages - 1 ? 0.5 : 1 }}
+                >
+                    <ChevronRight size={14} />
+                </button>
+            </div>
         </div>
     );
 }

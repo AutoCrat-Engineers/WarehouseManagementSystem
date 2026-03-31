@@ -3,8 +3,9 @@
  *
  * ERP-standard layout: breadcrumb, search/filter, table, add/create, status column.
  */
-import React, { useState } from 'react';
-import { Card } from '../ui/EnterpriseUI';
+import React, { useState, useEffect } from 'react';
+import { Card, ModuleLoader } from '../ui/EnterpriseUI';
+import { FileMinus } from 'lucide-react';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
@@ -37,6 +38,16 @@ export function PackingListSubInvoice({ accessToken, userRole, onNavigate }: Pac
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState('All Statuses');
     const [showCreateModal, setShowCreateModal] = useState(false);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const timer = setTimeout(() => setLoading(false), 600);
+        return () => clearTimeout(timer);
+    }, []);
+
+    if (loading) {
+        return <ModuleLoader moduleName="Packing List - Against Sub Invoice" icon={<FileMinus size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
+    }
 
     const filtered = SAMPLE_DATA.filter(row => {
         const matchSearch = !searchTerm ||
@@ -170,7 +181,7 @@ export function PackingListSubInvoice({ accessToken, userRole, onNavigate }: Pac
                         color: '#374151',
                     }}
                 >
-                    Export CSV
+                    Export Excel
                 </button>
                 <button
                     style={{

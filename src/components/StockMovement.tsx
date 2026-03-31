@@ -30,17 +30,19 @@ import {
   Eye,
   CalendarDays,
   Printer,
+  Package,
 } from 'lucide-react';
 import { Card, Button, Badge, Modal, LoadingSpinner, EmptyState, ModuleLoader } from './ui/EnterpriseUI';
 import {
-  SummaryCard, SummaryCardsGrid,
-  FilterBar, ActionBar,
-  SearchBox, StatusFilter, DateRangeFilter,
-  ExportCSVButton, ClearFiltersButton, AddButton,
+  SummaryCard, SummaryCardsGrid, SearchBox, FilterBar, ActionBar, ActionButton, RefreshButton,
+  StatusFilter, AddButton, ExportCSVButton, DateRangeFilter, ClearFiltersButton, Pagination
 } from './ui/SharedComponents';
 import { getSupabaseClient } from '../utils/supabase/client';
 import { createPackingFromMovementApproval, createPackingFromMovementRejection } from './packing/packingService';
 import { notifyOnRequestCreated, notifyOnRequestDecision } from '../utils/notifications/notificationService';
+import { calculatePalletImpact } from './packing-engine/packingEngineService';
+import type { PalletImpact } from './packing-engine/packingEngineService';
+import { useSessionPersistence } from '../hooks/useSessionPersistence';
 
 // ============================================================================
 // TYPES
@@ -51,6 +53,7 @@ type UserRole = 'L1' | 'L2' | 'L3' | null;
 interface StockMovementProps {
   accessToken: string;
   userRole?: UserRole;
+  userPerms?: Record<string, boolean>;
 }
 
 interface ItemResult {
@@ -140,12 +143,9 @@ const LOCATIONS: Record<LocationCode, { name: string; icon: React.ElementType; c
 };
 
 const VALID_ROUTES: MovementRoute[] = [
+  // Stock In: Only Production → FG Warehouse (positive flow)
   { from: 'PRODUCTION', to: 'PW', movementType: 'PRODUCTION_RECEIPT', flow: 'FORWARD', label: 'Production → FG Warehouse' },
-  { from: 'PW', to: 'IT', movementType: 'DISPATCH_TO_TRANSIT', flow: 'FORWARD', label: 'PW → In-Transit' },
-  { from: 'IT', to: 'SV', movementType: 'TRANSFER_TO_WAREHOUSE', flow: 'FORWARD', label: 'In-Transit → S&V' },
-  { from: 'IT', to: 'US', movementType: 'TRANSFER_TO_WAREHOUSE', flow: 'FORWARD', label: 'In-Transit → US' },
-  { from: 'SV', to: 'CUSTOMER', movementType: 'CUSTOMER_SALE', flow: 'FORWARD', label: 'S&V → Customer' },
-  { from: 'US', to: 'CUSTOMER', movementType: 'CUSTOMER_SALE', flow: 'FORWARD', label: 'US → Customer' },
+  // Negative flows: ALL kept as-is from original
   { from: 'CUSTOMER', to: 'SV', movementType: 'CUSTOMER_RETURN', flow: 'REVERSE', label: 'Customer → S&V' },
   { from: 'CUSTOMER', to: 'US', movementType: 'CUSTOMER_RETURN', flow: 'REVERSE', label: 'Customer → US' },
   { from: 'SV', to: 'IT', movementType: 'RETURN_TO_PRODUCTION_FLOW', flow: 'REVERSE', label: 'S&V → In-Transit' },
@@ -181,12 +181,26 @@ const DB_CODE_MAP: Record<string, LocationCode> = {
   'WH-US-TRANSIT': 'US',
 };
 
-const REFERENCE_TYPES = [
+
+// Stock In: only Work Order + Inventory Adjustment
+const STOCK_IN_REFERENCE_TYPES = [
+  { value: 'WORK_ORDER', label: 'Work Order' },
+  { value: 'INVENTORY_ADJUSTMENT', label: 'Inventory Adjustment' },
+];
+
+// Rejection: all original reference types
+const REJECTION_REFERENCE_TYPES = [
   { value: 'DELIVERY_NOTE', label: 'Delivery Note' },
   { value: 'RETURN_NOTE', label: 'Return Note' },
   { value: 'WORK_ORDER', label: 'Work Order' },
   { value: 'TRANSFER_ORDER', label: 'Transfer Order' },
   { value: 'ADJUSTMENT_MEMO', label: 'Adjustment Memo' },
+];
+
+// Combined for display in review/print (all types)
+const REFERENCE_TYPES = [
+  ...STOCK_IN_REFERENCE_TYPES,
+  ...REJECTION_REFERENCE_TYPES.filter(r => !STOCK_IN_REFERENCE_TYPES.some(s => s.value === r.value)),
 ];
 
 const STATUS_CONFIG: Record<string, { color: string; bg: string; label: string }> = {
@@ -200,18 +214,26 @@ const STATUS_CONFIG: Record<string, { color: string; bg: string; label: string }
   COMPLETED: { color: '#16a34a', bg: '#f0fdf4', label: 'Completed' },
 };
 
-function getRoutesForWarehouse(warehouse: LocationCode, stockType: StockType): MovementRoute[] {
+function getRoutesForWarehouse(warehouse: string, stockType: StockType): MovementRoute[] {
   if (stockType === 'STOCK_IN') {
     return VALID_ROUTES.filter(r => r.to === warehouse && r.flow === 'FORWARD');
   }
-  return VALID_ROUTES.filter(r => r.to === warehouse && r.flow === 'REVERSE');
+  // For rejection: show routes FROM or TO this warehouse (both directions relevant)
+  if (warehouse === 'CUSTOMER') {
+    return VALID_ROUTES.filter(r => r.from === 'CUSTOMER' && r.flow === 'REVERSE');
+  }
+  return VALID_ROUTES.filter(r => (r.from === warehouse || r.to === warehouse) && r.flow === 'REVERSE');
 }
 
-function getWarehousesForStockType(stockType: StockType): LocationCode[] {
-  const whs = new Set<LocationCode>();
+function getWarehousesForStockType(stockType: StockType): string[] {
+  const whs = new Set<string>();
   VALID_ROUTES.forEach(r => {
-    if ((stockType === 'STOCK_IN' && r.flow === 'FORWARD') || (stockType === 'REJECTION' && r.flow === 'REVERSE')) {
-      if (r.to in LOCATIONS) whs.add(r.to as LocationCode);
+    if (stockType === 'STOCK_IN' && r.flow === 'FORWARD') {
+      if (r.to in LOCATIONS) whs.add(r.to);
+    } else if (stockType === 'REJECTION' && r.flow === 'REVERSE') {
+      // Show all endpoints involved in reverse flows
+      if (r.from in LOCATIONS) whs.add(r.from);
+      if (r.from === 'CUSTOMER') whs.add('CUSTOMER');
     }
   });
   return Array.from(whs);
@@ -256,10 +278,12 @@ const tdStyle: React.CSSProperties = {
 // MAIN COMPONENT
 // ============================================================================
 
-export function StockMovement({ accessToken, userRole }: StockMovementProps) {
-  // RBAC helpers
-  const isOperator = userRole === 'L1';
-  const canApprove = userRole === 'L2' || userRole === 'L3'; // Supervisor or Manager
+export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMovementProps) {
+  // RBAC helpers — granular permissions with role-based fallback
+  const hasPerms = Object.keys(userPerms).length > 0;
+  const canCreate = userRole === 'L3' || (hasPerms ? userPerms['stock-movements.create'] === true : true); // all roles can create by default
+  const canApprove = userRole === 'L3' || (hasPerms ? userPerms['stock-movements.edit'] === true : userRole === 'L2'); // L2+ can approve
+  const isOperator = !canApprove; // if you can't approve, you're effectively an operator
   const supabase = getSupabaseClient();
 
   // Main page state
@@ -294,7 +318,12 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   const [innerBoxQty, setInnerBoxQty] = useState<number>(0);
   const [loadingPackingSpec, setLoadingPackingSpec] = useState(false);
   const [packingSpecError, setPackingSpecError] = useState<string | null>(null);
+  // Pallet intelligence state
+  const [palletImpact, setPalletImpact] = useState<PalletImpact | null>(null);
+  const [loadingPalletImpact, setLoadingPalletImpact] = useState(false);
+  const [adjustmentAcknowledged, setAdjustmentAcknowledged] = useState(false);
   const noteRef = useRef<HTMLTextAreaElement>(null);
+  const palletImpactTimer = useRef<any>(null);
   const [submitting, setSubmitting] = useState(false);
   const [formMessage, setFormMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -306,6 +335,34 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   const [referenceType, setReferenceType] = useState<string>('');
   const [referenceId, setReferenceId] = useState<string>('');
 
+  // ── SESSION PERSISTENCE (stock movement form) ──
+  const {
+    patchSession: patchSmSession,
+    completeSession: completeSmSession,
+    abandonSession: abandonSmSession,
+  } = useSessionPersistence(
+    'stock_movement_form',
+    undefined,
+    undefined,
+    {
+      onRecover: (data, isNew) => {
+        if (!isNew && data && data.showModal) {
+          // Restore modal form state
+          setShowModal(true);
+          if (data.selectedItem) setSelectedItem(data.selectedItem);
+          if (data.stockType) setStockType(data.stockType);
+          if (data.selectedWarehouse) setSelectedWarehouse(data.selectedWarehouse);
+          if (data.quantity) setQuantity(data.quantity);
+          if (data.boxCount) setBoxCount(data.boxCount);
+          if (data.note) setNote(data.note);
+          if (data.referenceType) setReferenceType(data.referenceType);
+          if (data.referenceId) setReferenceId(data.referenceId);
+          if (data.selectedCategory) setSelectedCategory(data.selectedCategory);
+        }
+      },
+    }
+  );
+
   // Supervisor review modal state
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [reviewMovement, setReviewMovement] = useState<MovementRecord | null>(null);
@@ -313,6 +370,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   const [approvedQty, setApprovedQty] = useState<number>(0);
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [reviewReasonCode, setReviewReasonCode] = useState<ReasonCode | null>(null);
+  const [reviewBoxInfo, setReviewBoxInfo] = useState<{ boxes: number; perBox: number; total: number; adjQty?: number; adjBoxCount?: number; adjIncluded?: boolean } | null>(null);
 
   // Toast notification state
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; title: string; text: string } | null>(null);
@@ -329,17 +387,58 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
 
   const searchRef = useRef<HTMLDivElement>(null);
   const PAGE_SIZE = 20;
-  const [displayCount, setDisplayCount] = useState(PAGE_SIZE);
+  const [page, setPage] = useState(0);
+  const [totalDbCount, setTotalDbCount] = useState(0);
+  const realtimeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounced search for server-side queries (300ms delay after last keystroke)
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchTerm), 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  // Ref holds current filter values — enables stable useCallback while reading latest filters
+  const filtersRef = useRef({ status: 'ALL', type: 'ALL', stockType: 'ALL', dateFrom: '', dateTo: '', search: '' });
+  filtersRef.current = { status: filterStatus, type: filterType, stockType: filterStockType, dateFrom: filterDateFrom, dateTo: filterDateTo, search: debouncedSearch };
 
   // ============================================================================
   // FETCH MOVEMENTS FOR MAIN PAGE
   // ============================================================================
 
-  const fetchMovements = useCallback(async () => {
+  /**
+   * Fetch a page of movements with SERVER-SIDE filtering.
+   * Filters are read from filtersRef (kept current on every render).
+   * Query order: SELECT → WHERE (filters) → ORDER BY → LIMIT/OFFSET
+   */
+  const fetchMovements = useCallback(async (offset = 0) => {
     setLoading(true);
     try {
-      // STEP 1: Fetch headers (must be first — everything depends on it)
-      const { data: headers, error: headErr } = await supabase
+      const filters = filtersRef.current;
+
+      // ── PRE-SEARCH: Cross-table text search (item_code, part_number, MSN) ──
+      let searchHeaderIds: string[] | null = null;
+      if (filters.search) {
+        const term = filters.search;
+        const { data: matchingItems } = await supabase
+          .from('items')
+          .select('item_code')
+          .or(`item_code.ilike.%${term}%,part_number.ilike.%${term}%,master_serial_no.ilike.%${term}%`)
+          .limit(200);
+        const matchingItemCodes = (matchingItems || []).map((i: any) => i.item_code);
+        if (matchingItemCodes.length > 0) {
+          const { data: matchingLines } = await supabase
+            .from('inv_movement_lines')
+            .select('header_id')
+            .in('item_code', matchingItemCodes);
+          searchHeaderIds = [...new Set((matchingLines || []).map((l: any) => l.header_id as string))];
+        } else {
+          searchHeaderIds = [];
+        }
+      }
+
+      // ── BUILD QUERY: Filters applied BEFORE pagination (critical fix) ──
+      let query = supabase
         .from('inv_movement_headers')
         .select(`
           id, movement_number, movement_date, movement_type, status,
@@ -349,10 +448,53 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
           source_warehouse_id, destination_warehouse_id,
           source_warehouse:source_warehouse_id ( warehouse_name, warehouse_code ),
           destination_warehouse:destination_warehouse_id ( warehouse_name, warehouse_code )
-        `)
+        `, { count: 'exact' });
+
+      // Status filter (server-side)
+      if (filters.status !== 'ALL') {
+        if (filters.status === 'COMPLETED' || filters.status === 'PARTIALLY_APPROVED') {
+          // DB stores both as 'APPROVED'; client distinguishes full vs partial after fetch
+          query = query.eq('status', 'APPROVED');
+        } else {
+          query = query.eq('status', filters.status);
+        }
+      }
+
+      // Movement type filter
+      if (filters.type !== 'ALL') {
+        query = query.eq('movement_type', filters.type);
+      }
+
+      // Stock type filter (maps to movement type groups)
+      if (filters.stockType !== 'ALL') {
+        if (filters.stockType === 'REJECTION') {
+          query = query.in('movement_type', REVERSE_MOVEMENT_TYPES);
+        } else {
+          query = query.not('movement_type', 'in', `(${REVERSE_MOVEMENT_TYPES.join(',')})`);
+        }
+      }
+
+      // Date range filter
+      if (filters.dateFrom) query = query.gte('movement_date', filters.dateFrom);
+      if (filters.dateTo) query = query.lte('movement_date', filters.dateTo);
+
+      // Search filter (movement_number + pre-searched item matches)
+      if (filters.search) {
+        const term = filters.search;
+        if (searchHeaderIds && searchHeaderIds.length > 0) {
+          const limitedIds = searchHeaderIds.slice(0, 100);
+          query = query.or(`movement_number.ilike.%${term}%,id.in.(${limitedIds.join(',')})`);
+        } else {
+          query = query.ilike('movement_number', `%${term}%`);
+        }
+      }
+
+      // STEP 1: Ordering + Pagination applied AFTER all filters
+      const { data: headers, count, error: headErr } = await query
         .order('created_at', { ascending: false })
-        .limit(200);
+        .range(offset, offset + PAGE_SIZE - 1);
       if (headErr) throw headErr;
+      setTotalDbCount(count ?? 0);
 
       const headerIds = (headers || []).map((h: any) => h.id);
       const userIds = [...new Set((headers || []).map((h: any) => h.requested_by).filter(Boolean))];
@@ -441,14 +583,39 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
           reference_document_number: h.reference_document_number || null,
         };
       });
+
       setMovements(records);
     } catch (err) { console.error('Error fetching movements:', err); }
     finally { setLoading(false); }
   }, [supabase]);
 
-  useEffect(() => { fetchMovements(); }, [fetchMovements]);
+  // Fetch summary counts separately (lightweight, no enrichment)
+  const [summaryCounts, setSummaryCounts] = useState({ total: 0, pending: 0, completed: 0, rejected: 0 });
+  const fetchSummaryCounts = useCallback(async () => {
+    try {
+      const [totalR, pendingR, approvedR, rejectedR] = await Promise.all([
+        supabase.from('inv_movement_headers').select('id', { count: 'exact', head: true }),
+        supabase.from('inv_movement_headers').select('id', { count: 'exact', head: true }).eq('status', 'PENDING_APPROVAL'),
+        supabase.from('inv_movement_headers').select('id', { count: 'exact', head: true }).eq('status', 'APPROVED'),
+        supabase.from('inv_movement_headers').select('id', { count: 'exact', head: true }).eq('status', 'REJECTED'),
+      ]);
+      setSummaryCounts({
+        total: totalR.count ?? 0,
+        pending: pendingR.count ?? 0,
+        completed: approvedR.count ?? 0,
+        rejected: rejectedR.count ?? 0,
+      });
+    } catch { /* non-critical */ }
+  }, [supabase]);
 
-  // Real-time subscription: auto-refresh on approval/status changes
+  // Fetch data when page changes
+  useEffect(() => { fetchMovements(page * PAGE_SIZE); }, [fetchMovements, page]);
+  // Reset to page 0 and re-fetch when any filter changes
+  useEffect(() => { setPage(0); fetchMovements(0); }, [filterStatus, filterType, filterStockType, filterDateFrom, filterDateTo, debouncedSearch, fetchMovements]);
+  // Load summary counts on mount
+  useEffect(() => { fetchSummaryCounts(); }, [fetchSummaryCounts]);
+
+  // Real-time subscription: debounced auto-refresh on approval/status changes
   useEffect(() => {
     const channel = supabase
       .channel('stock-movements-realtime')
@@ -456,16 +623,21 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'inv_movement_headers' },
         () => {
-          // Auto-refresh when any movement header is inserted, updated, or deleted
-          fetchMovements();
+          // Debounce: avoid rapid-fire refetches when multiple changes occur
+          if (realtimeDebounce.current) clearTimeout(realtimeDebounce.current);
+          realtimeDebounce.current = setTimeout(() => {
+            fetchMovements(0); setPage(0);
+            fetchSummaryCounts();
+          }, 1000);
         }
       )
       .subscribe();
 
     return () => {
+      if (realtimeDebounce.current) clearTimeout(realtimeDebounce.current);
       supabase.removeChannel(channel);
     };
-  }, [supabase, fetchMovements]);
+  }, [supabase, fetchMovements, fetchSummaryCounts]);
 
   // Fetch current logged-in user's full_name for print slip Verified By
   useEffect(() => {
@@ -519,6 +691,14 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   }, [supabase]);
 
   useEffect(() => { fetchReasonCodes(); }, [fetchReasonCodes]);
+
+  // Auto-default reason code for Stock In if reason codes load after stock type was set
+  useEffect(() => {
+    if (stockType === 'STOCK_IN' && !selectedCategory && reasonCodes.length > 0) {
+      const prodRc = reasonCodes.find(r => r.reason_code.toUpperCase().includes('PROD'));
+      if (prodRc) handleCategoryChange(prodRc.reason_code);
+    }
+  }, [reasonCodes, stockType, selectedCategory]);
 
   // ============================================================================
   // MODAL FORM LOGIC
@@ -598,12 +778,19 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
 
   const handleSelectItem = (item: ItemResult) => {
     setSelectedItem(item);
+    patchSmSession({ selectedItem: item });
     setSearchQuery(item.part_number || item.item_code);
     setShowDropdown(false);
     fetchWarehouseStocks(item.item_code);
-    setSelectedWarehouse(''); setStockType(''); setSelectedRoute(null);
+    
+    // Apply user-requested defaults automatically
+    setStockType('STOCK_IN');
+    setSelectedWarehouse('PW');
+    setReferenceType('WORK_ORDER');
+    setReferenceId('AE/WO/D/');
+    
     setQuantity(0); setNote(''); setFormMessage(null);
-    setSelectedCategory(''); setReferenceType(''); setReferenceId('');
+    setSelectedCategory(''); 
     setBoxCount(0); setInnerBoxQty(0); setPackingSpecError(null);
   };
 
@@ -637,10 +824,11 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
     setNote(''); setNotePrefix(''); setFormMessage(null);
     setSelectedCategory(''); setReferenceType(''); setReferenceId('');
     setBoxCount(0); setInnerBoxQty(0); setPackingSpecError(null);
+    setPalletImpact(null); setAdjustmentAcknowledged(false);
   };
 
-  const openModal = () => { resetForm(); setShowModal(true); };
-  const closeModal = () => { setShowModal(false); resetForm(); };
+  const openModal = () => { resetForm(); setShowModal(true); patchSmSession({ showModal: true }); };
+  const closeModal = () => { setShowModal(false); resetForm(); abandonSmSession(); };
 
   // ============================================================================
   // SUBMIT REQUEST (PENDING — No Stock Movement) or IMMEDIATE for REJECTION_DISPOSAL
@@ -648,8 +836,18 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
 
   const handleSubmitRequest = async () => {
     // For PRODUCTION_RECEIPT, calculate quantity from boxes × inner qty
+    // When pallet engine auto-includes adjustment box, use the adjusted total
     const isProductionReceipt = selectedRoute?.movementType === 'PRODUCTION_RECEIPT';
-    const finalQty = isProductionReceipt ? (boxCount * innerBoxQty) : quantity;
+    const finalQty = isProductionReceipt
+      ? (palletImpact?.adjustmentBoxIncluded ? palletImpact.adjustedTotalQty : (boxCount * innerBoxQty))
+      : quantity;
+
+    // ENFORCEMENT: Block if adjustment box is required but not acknowledged
+    if (isProductionReceipt && palletImpact?.mustCreateAdjustmentFirst && !adjustmentAcknowledged) {
+      setFormMessage({ type: 'error', text: `Cannot submit: You must acknowledge the Top-off Box requirement (${palletImpact.adjustmentBoxQty} PCS) to complete the current pallet before starting a new one.` });
+      showToast('error', 'Pallet Completion Required', `Create the Top-off Box of ${palletImpact.adjustmentBoxQty} PCS first.`);
+      return;
+    }
 
     if (!selectedItem || !stockType || !selectedWarehouse || !selectedRoute || finalQty <= 0) {
       setFormMessage({ type: 'error', text: isProductionReceipt ? 'Please fill all required fields. Ensure box count and inner qty are valid.' : 'Please fill all required fields.' });
@@ -667,7 +865,11 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
       setFormMessage({ type: 'error', text: 'Reference Type is required.' });
       showToast('error', 'Validation Error', 'Please select a Reference Type.'); return;
     }
-    const effectiveRefId = referenceType === 'WORK_ORDER' ? referenceId.replace(/^AE\/WO\/D\//, '').trim() : referenceId.trim();
+    const effectiveRefId = referenceType === 'WORK_ORDER'
+      ? referenceId.replace(/^AE\/WO\/D\//, '').trim()
+      : referenceType === 'INVENTORY_ADJUSTMENT'
+        ? referenceId.replace(/^AE\/M\/D\//, '').trim()
+        : referenceId.trim();
     if (!effectiveRefId) {
       setFormMessage({ type: 'error', text: 'Reference ID is required.' });
       showToast('error', 'Validation Error', 'Please enter a Reference ID.'); return;
@@ -724,11 +926,13 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
         status: 'PENDING_APPROVAL',
         approval_status: 'PENDING',
         reason_code: selectedCategory || null,
-        reason_description: note,
+        reason_description: (isProductionReceipt && palletImpact?.adjustmentBoxIncluded) ? `${note.trim()} [Top-off: ${palletImpact.totalAdjustmentBoxes || 1} Box of ${palletImpact.adjustmentBoxQty} PCS]` : note.trim(),
         reference_document_type: referenceType || null,
         reference_document_number: referenceId || null,
         notes: isProductionReceipt
-          ? `${selectedRoute.label} | Boxes: ${boxCount} × ${innerBoxQty} PCS/box = ${finalQty} PCS | Stock Type: ${stockType}`
+          ? (palletImpact?.adjustmentBoxIncluded
+            ? `${selectedRoute.label} | Boxes: ${palletImpact.adjustedInnerBoxCount} x ${innerBoxQty} PCS/box + ${palletImpact.totalAdjustmentBoxes || 1} Top-off Box${(palletImpact.totalAdjustmentBoxes || 1) > 1 ? 'es' : ''} x ${palletImpact.adjustmentBoxQty} PCS = ${finalQty} PCS | Stock Type: ${stockType}`
+            : `${selectedRoute.label} | Boxes: ${boxCount} x ${innerBoxQty} PCS/box = ${finalQty} PCS | Stock Type: ${stockType}`)
           : `${selectedRoute.label} | Requested Qty: ${finalQty} | Stock Type: ${stockType}`,
         requested_by: userId,
         created_by: userId,
@@ -743,7 +947,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
 
       setFormMessage({ type: 'success', text: `Request ${movNum} submitted for approval.` });
       showToast('success', 'Request Submitted', `Movement ${movNum} has been submitted for supervisor approval.`);
-      fetchMovements();
+      fetchMovements(); fetchSummaryCounts();
 
       // ── NOTIFICATION: Notify supervisors (L2/L3) about new request ──
       notifyOnRequestCreated(
@@ -754,7 +958,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
         header.id,
       ).catch(err => console.error('Notification send failed (non-blocking):', err));
 
-      setTimeout(() => closeModal(), 1500);
+      setTimeout(() => { closeModal(); completeSmSession(); }, 1500);
     } catch (err: any) {
       console.error('Submit error:', err);
       setFormMessage({ type: 'error', text: err.message || 'Failed to submit request.' });
@@ -771,6 +975,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
     setApprovedQty(m.requested_quantity || 0);
     setSupervisorNote('');
     setReviewReasonCode(null);
+    setReviewBoxInfo(null);
 
     // Look up reason code from cached data by matching reason_code string
     if (m.reason_code) {
@@ -787,6 +992,87 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
         if (data) setReviewReasonCode(data as any);
       }
     }
+
+    // For Production Receipts, fetch packing spec + ADJUSTMENT_REQUIRED pallets
+    // to show CORRECT box breakdown (multi-pallet aware)
+    if (m.movement_type === 'PRODUCTION_RECEIPT' && m.item_code) {
+      try {
+        // Parallel fetch: packing spec + ADJUSTMENT_REQUIRED pallets
+        const [specResult, adjPalletsResult] = await Promise.all([
+          supabase
+            .from('packing_specifications')
+            .select('inner_box_quantity, outer_box_quantity')
+            .eq('item_code', m.item_code)
+            .eq('is_active', true)
+            .single(),
+          supabase
+            .from('pack_pallets')
+            .select('id')
+            .eq('item_code', m.item_code)
+            .eq('state', 'ADJUSTMENT_REQUIRED'),
+        ]);
+
+        const spec = specResult.data;
+        const adjPalletsCount = adjPalletsResult.data?.length || 0;
+
+        if (spec && spec.inner_box_quantity > 0) {
+          const reqQty = m.requested_quantity || 0;
+          const perBox = spec.inner_box_quantity;
+          const outerQty = spec.outer_box_quantity || 0;
+          const adjQty = outerQty > 0 ? outerQty % perBox : 0;
+
+          // MULTI-PALLET AWARE BREAKDOWN:
+          // The total qty includes both adjustment boxes and inner boxes.
+          // We query ADJUSTMENT_REQUIRED pallets to know exactly how many
+          // adj boxes will be created, instead of using a naive heuristic.
+          let adjBoxCount = 0;
+          let innerBoxCount = 0;
+
+          if (adjQty > 0 && adjPalletsCount > 0) {
+            // Determine how many adj boxes fit in the total qty
+            // Cap by actual pallets needing adjustment
+            const maxAdjFromQty = Math.floor(reqQty / adjQty);
+            adjBoxCount = Math.min(adjPalletsCount, maxAdjFromQty);
+            const adjTotal = adjBoxCount * adjQty;
+            const remainingQty = reqQty - adjTotal;
+            innerBoxCount = Math.floor(remainingQty / perBox);
+            // Check if remainder matches (validation)
+            const calculatedTotal = (adjBoxCount * adjQty) + (innerBoxCount * perBox);
+            if (calculatedTotal !== reqQty) {
+              // Remainder doesn't match perfectly — might have a boundary adj too
+              const leftover = reqQty - calculatedTotal;
+              if (leftover === adjQty) {
+                adjBoxCount += 1; // boundary adjustment for current filling pallet
+              }
+            }
+          } else if (adjQty > 0) {
+            // No ADJUSTMENT_REQUIRED pallets — check if qty has remainder
+            innerBoxCount = Math.floor(reqQty / perBox);
+            const leftover = reqQty - (innerBoxCount * perBox);
+            if (leftover === adjQty) {
+              adjBoxCount = 1; // single boundary adjustment
+            } else {
+              innerBoxCount = Math.round(reqQty / perBox);
+            }
+          } else {
+            innerBoxCount = Math.round(reqQty / perBox);
+          }
+
+          const hasAdj = adjBoxCount > 0;
+          setReviewBoxInfo({
+            boxes: innerBoxCount,
+            perBox,
+            total: reqQty,
+            adjQty: hasAdj ? adjQty : undefined,
+            adjBoxCount: hasAdj ? adjBoxCount : undefined,
+            adjIncluded: hasAdj,
+          });
+        }
+      } catch {
+        // Non-critical — box breakdown just won't show
+      }
+    }
+
     setShowReviewModal(true);
   };
 
@@ -945,7 +1231,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
       }
 
       setShowReviewModal(false);
-      fetchMovements();
+      fetchMovements(); fetchSummaryCounts();
 
       // Show success toast
       const movNum = reviewMovement.movement_number;
@@ -989,31 +1275,20 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   // FILTER / SEARCH
   // ============================================================================
 
-  const filteredMovements = movements.filter(m => {
-    const matchesSearch = !searchTerm ||
-      m.movement_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      m.part_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      m.master_serial_no?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      m.item_code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      m.source_warehouse?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      m.destination_warehouse?.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesFilter = filterType === 'ALL' || m.movement_type === filterType;
-    const matchesStatus = filterStatus === 'ALL' ||
-      (filterStatus === 'COMPLETED' ? ['COMPLETED', 'APPROVED'].includes(m.status) : m.status === filterStatus);
-    const matchesStockType = filterStockType === 'ALL' || getStockType(m.movement_type) === filterStockType;
-    const matchesDateFrom = !filterDateFrom || (m.movement_date && m.movement_date >= filterDateFrom);
-    const matchesDateTo = !filterDateTo || (m.movement_date && m.movement_date <= filterDateTo);
-    return matchesSearch && matchesFilter && matchesStatus && matchesStockType && matchesDateFrom && matchesDateTo;
-  });
+  // ── DISPLAY: Most filters applied server-side. Only client-side post-filter
+  // is COMPLETED vs PARTIALLY_APPROVED (DB stores both as 'APPROVED'). ──
+  const filteredMovements = (filterStatus === 'COMPLETED' || filterStatus === 'PARTIALLY_APPROVED')
+    ? movements.filter(m => m.status === filterStatus)
+    : movements;
 
-  const displayedMovements = filteredMovements.slice(0, displayCount);
-  const hasMore = displayCount < filteredMovements.length;
+  const displayedMovements = filteredMovements;
+  const hasMore = movements.length < totalDbCount;
 
-  // Summary counts
-  const totalMovements = movements.length;
-  const pendingCount = movements.filter(m => m.status === 'PENDING_APPROVAL').length;
-  const completedCount = movements.filter(m => ['APPROVED', 'COMPLETED'].includes(m.status)).length;
-  const rejectedCount = movements.filter(m => m.status === 'REJECTED').length;
+  // Summary counts from lightweight server query
+  const totalMovements = summaryCounts.total;
+  const pendingCount = summaryCounts.pending;
+  const completedCount = summaryCounts.completed;
+  const rejectedCount = summaryCounts.rejected;
 
   // All active reason codes (no reason_type filtering needed)
   const filteredReasonCodes = reasonCodes;
@@ -1023,18 +1298,18 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   // ============================================================================
 
   const handleExport = () => {
-    const headers = ['Movement #', 'Date', 'Type', 'Status', 'Part Number', 'MSN', 'Qty', 'From', 'To', 'Reason'];
-    const rows = filteredMovements.map(m => [
-      m.movement_number, m.movement_date, MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type,
-      m.status, m.part_number || m.item_code || '', m.master_serial_no || '', m.quantity ?? '', m.source_warehouse || '—',
-      m.destination_warehouse || '—', m.reason_description || '',
-    ]);
-    const csv = [headers.join(','), ...rows.map(r => r.map(c => typeof c === 'string' && c.includes(',') ? `"${c}"` : c).join(','))].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `stock_movements_${new Date().toISOString().split('T')[0]}.csv`;
-    link.click();
+    import('xlsx').then(XLSX => {
+      const headers = ['Movement #', 'Date', 'Type', 'Status', 'Part Number', 'MSN', 'Qty', 'From', 'To', 'Reason'];
+      const rows = filteredMovements.map(m => ([
+        m.movement_number, m.movement_date, MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type,
+        m.status, m.part_number || m.item_code || '', m.master_serial_no || '', m.quantity ?? '', m.source_warehouse || '—',
+        m.destination_warehouse || '—', m.reason_description || '',
+      ]));
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Stock Movements');
+      XLSX.writeFile(wb, `stock_movements_${new Date().toISOString().split('T')[0]}.xlsx`);
+    });
   };
 
   // ============================================================================
@@ -1065,6 +1340,47 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
     const requestedQty = m.requested_quantity ?? m.quantity ?? 0;
     const movementTypeLabel = MOVEMENT_TYPE_LABELS[m.movement_type] || m.movement_type;
     const stockTypeDisplay = stockTypeLabel === 'REJECTION' ? 'Rejection' : 'Stock In';
+
+    // Parse box breakdown from notes field for Production Receipt movements
+    // Notes format: "Production → FI Warehouse | Boxes: 5 × 100 PCS/box = 500 PCS | Stock Type: ..."
+    // Parse box breakdown from notes field for Production Receipt movements
+    // New format: "... | Boxes: 67 x 450 PCS/box + 1 Adj Box x 300 PCS = 30450 PCS | ..."
+    // Old format: "... | Boxes: 68 × 450 PCS/box = 30450 PCS | ..."
+    let boxBreakdown: { boxes: number; perBox: number; total: number; adjBoxes?: number; adjQty?: number } | null = null;
+    if ((m.movement_type === 'PRODUCTION_RECEIPT' || m.reference_document_type === 'INVENTORY_ADJUSTMENT') && m.notes) {
+      // Try new format with adj box first
+      const adjMatch = m.notes.match(/Boxes:\s*(\d+)\s*x\s*(\d+)\s*PCS\/box\s*\+\s*(\d+)\s*(?:Adj|Top-off)\s*Box\s*x\s*(\d+)\s*PCS\s*=\s*([\d,]+)\s*PCS/i);
+      if (adjMatch) {
+        boxBreakdown = {
+          boxes: parseInt(adjMatch[1], 10),
+          perBox: parseInt(adjMatch[2], 10),
+          adjBoxes: parseInt(adjMatch[3], 10),
+          adjQty: parseInt(adjMatch[4], 10),
+          total: parseInt(adjMatch[5].replace(/,/g, ''), 10),
+        };
+      } else {
+        // Try old format (× or x)
+        const boxMatch = m.notes.match(/Boxes:\s*(\d+)\s*[×x]\s*(\d+)\s*PCS\/box\s*=\s*([\d,]+)\s*PCS/i);
+        if (boxMatch) {
+          const innerBoxes = parseInt(boxMatch[1], 10);
+          const perBox = parseInt(boxMatch[2], 10);
+          const total = parseInt(boxMatch[3].replace(/,/g, ''), 10);
+          const expectedTotal = innerBoxes * perBox;
+          // Detect adjustment from math mismatch
+          if (total !== expectedTotal && total < expectedTotal) {
+            // total is less than boxes × perBox → adj box is included, calculate adj qty
+            const adjQtyCalc = total - ((innerBoxes - 1) * perBox);
+            if (adjQtyCalc > 0 && adjQtyCalc < perBox) {
+              boxBreakdown = { boxes: innerBoxes - 1, perBox, total, adjBoxes: 1, adjQty: adjQtyCalc };
+            } else {
+              boxBreakdown = { boxes: innerBoxes, perBox, total };
+            }
+          } else {
+            boxBreakdown = { boxes: innerBoxes, perBox, total };
+          }
+        }
+      }
+    }
     const printTimestamp = new Date().toLocaleString('en-IN', {
       day: '2-digit', month: 'short', year: 'numeric',
       hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
@@ -1083,36 +1399,34 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
 <title>SM-${m.movement_number} | Stock Movement Slip | Autocrat Engineers</title>
 <style>
   /* ═══════════════════════════════════════════════════════════════
-     ENTERPRISE PRINT DOCUMENT — A4 PORTRAIT
-     A4 = 210mm × 297mm
+     ENTERPRISE PRINT DOCUMENT — A4 LANDSCAPE
+     A4 Landscape = 297mm × 210mm
      Margins: 12mm left/right, 10mm top, 8mm bottom
-     Printable area: 186mm × 279mm
+     Printable area: 273mm × 192mm
      ═══════════════════════════════════════════════════════════════ */
   @page {
-    size: 210mm 297mm;
-    margin: 10mm 12mm 8mm 12mm;
+    size: A4 landscape;
+    margin: 10mm;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html {
-    width: 210mm;
-  }
-  body {
+  html, body {
+    width: 100%;
+    margin: 0;
+    padding: 0;
     font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
     color: #000;
     font-size: 10px;
     line-height: 1.35;
     background: #fff;
-    width: 186mm;
-    margin: 0 auto;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
 
-  /* Page container — exactly fits A4 printable area */
+  /* Page container — fills available printable area */
   .doc {
-    width: 186mm;
-    max-width: 186mm;
-    margin: 0 auto;
+    width: 100%;
+    margin: 0;
+    padding: 0;
     position: relative;
     overflow: hidden;
   }
@@ -1252,7 +1566,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   /* Print-specific overrides */
   @media print {
     html, body {
-      width: 186mm;
+      width: 100%;
       height: auto;
       margin: 0;
       padding: 0;
@@ -1260,14 +1574,13 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
     }
     .doc {
       width: 100%;
-      max-width: 100%;
       margin: 0;
+      padding: 0;
       page-break-after: avoid;
     }
     .no-print { display: none !important; }
     table { page-break-inside: avoid; }
-    /* Remove browser default headers/footers in print */
-    @page { margin: 10mm 12mm 8mm 12mm; }
+    @page { size: A4 landscape; margin: 10mm; }
   }
 </style>
 </head>
@@ -1387,6 +1700,22 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
       <td class="bdr-b bdr-r cp-sm tr mono fw700 fs10">${movedQty.toLocaleString()}</td>
       <td class="bdr-b cp-sm mono fs9">${m.master_serial_no || '—'}</td>
     </tr>
+    ${boxBreakdown ? `
+    <!-- Box Breakdown Row (Production Receipt) -->
+    <tr>
+      <td colspan="8" class="bdr-b cp-sm" style="padding:6px 12px;">
+        <span class="fs8 fw800 uc ls1" style="color:#000; margin-right:8px;">BOX BREAKDOWN:</span>
+        ${boxBreakdown.adjBoxes && boxBreakdown.adjQty ? `
+          <span class="mono fw700 fs10" style="color:#000;">${boxBreakdown.boxes} Inner Boxes x ${boxBreakdown.perBox} PCS/Box = ${(boxBreakdown.boxes * boxBreakdown.perBox).toLocaleString()} PCS</span>
+          <span class="mono fw700 fs10" style="color:#000; margin-left:12px;">+</span>
+          <span class="mono fw700 fs10" style="color:#000; margin-left:12px;">${boxBreakdown.adjBoxes} Top-off Box x ${boxBreakdown.adjQty} PCS = ${(boxBreakdown.adjBoxes * boxBreakdown.adjQty).toLocaleString()} PCS</span>
+          <span class="mono fw800 fs10" style="color:#000; margin-left:16px;">TOTAL: ${boxBreakdown.total.toLocaleString()} PCS</span>
+        ` : `
+          <span class="mono fw700 fs10" style="color:#000;">${boxBreakdown.boxes} Boxes x ${boxBreakdown.perBox} PCS/Box = ${boxBreakdown.total.toLocaleString()} PCS</span>
+        `}
+      </td>
+    </tr>
+    ` : ''}
     <!-- Blank rows for manual additions -->
     <tr><td class="bdr-b bdr-r cp-sm tc">&nbsp;</td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b cp-sm"></td></tr>
     <tr><td class="bdr-b bdr-r cp-sm tc">&nbsp;</td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b bdr-r cp-sm"></td><td class="bdr-b cp-sm"></td></tr>
@@ -1420,37 +1749,6 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   </table>
 
   <!-- ╔══════════════════════════════════════════════════════════════╗
-       ║  SECTION 5: AUTHORIZATION                                   ║
-       ╚══════════════════════════════════════════════════════════════╝ -->
-  <table class="w100 bdr mt4" cellspacing="0" cellpadding="0">
-    <tr><td colspan="2" class="sec-hdr">Authorization</td></tr>
-    <tr>
-      <!-- Verified By (auto-populated from current session user) -->
-      <td class="vt bdr-r" style="width:50%; padding:10px 14px;">
-        <div class="fs9 fw800 uc tc ls1 c000" style="padding-bottom:4px; margin-bottom:8px; border-bottom:1px solid #ccc;">Verified By</div>
-        <table class="w100" cellspacing="0" cellpadding="0" style="border:none;">
-          <tr><td class="fs9 fw700" style="width:70px; padding:3px 0;">Name</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px; font-weight:600;">${currentUserName || 'System User'}</td></tr>
-          <tr><td class="fs9 fw700" style="padding:3px 0;">Designation</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px; font-weight:500;">Supervisor</td></tr>
-          <tr><td class="fs9 fw700" style="padding:3px 0;">Date</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px; font-weight:500;">${printTimestamp.split(',')[0]}</td></tr>
-        </table>
-        <div class="sig-box" style="margin-top:8px; height:60px;"></div>
-        <div class="sig-caption">Signature</div>
-      </td>
-      <!-- Authorized By -->
-      <td class="vt" style="width:50%; padding:10px 14px;">
-        <div class="fs9 fw800 uc tc ls1 c000" style="padding-bottom:4px; margin-bottom:8px; border-bottom:1px solid #ccc;">Authorized By</div>
-        <table class="w100" cellspacing="0" cellpadding="0" style="border:none;">
-          <tr><td class="fs9 fw700" style="width:70px; padding:3px 0;">Name</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px;">&nbsp;</td></tr>
-          <tr><td class="fs9 fw700" style="padding:3px 0;">Designation</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px;">Manager</td></tr>
-          <tr><td class="fs9 fw700" style="padding:3px 0;">Date</td><td style="padding:3px 0; border-bottom:1px dotted #aaa; font-size:10px;">&nbsp;</td></tr>
-        </table>
-        <div class="sig-box" style="margin-top:8px; height:60px;"></div>
-        <div class="sig-caption">Signature</div>
-      </td>
-    </tr>
-  </table>
-
-  <!-- ╔══════════════════════════════════════════════════════════════╗
        ║  SECTION 6: FOOTER                                          ║
        ╚══════════════════════════════════════════════════════════════╝ -->
   <table class="w100 mt8" cellspacing="0" cellpadding="0" style="border-top:1.5px solid #000;">
@@ -1476,7 +1774,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
 <script>window.onload = function() { window.print(); };<\/script>
 </body></html>`;
 
-    const printWindow = window.open('', '_blank', 'width=850,height=1100');
+    const printWindow = window.open('', '_blank', 'width=1100,height=800');
     if (printWindow) {
       printWindow.document.write(html);
       printWindow.document.close();
@@ -1534,6 +1832,11 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
   // ============================================================================
   // RENDER: MAIN PAGE
   // ============================================================================
+
+  // ── FIRST-LOAD: full-page skeleton ──
+  if (loading && movements.length === 0) {
+    return <ModuleLoader moduleName="Stock Movements" icon={<ArrowRightLeft size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
+  }
 
   return (
     <div>
@@ -1611,27 +1914,28 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
             <ClearFiltersButton onClick={() => { setSearchTerm(''); setFilterType('ALL'); setFilterStatus('ALL'); setFilterStockType('ALL'); setFilterDateFrom(''); setFilterDateTo(''); }} />
           )}
           <ExportCSVButton onClick={handleExport} />
-          <AddButton label="New Movement" onClick={openModal} />
+          {canCreate && <AddButton label="New Movement" onClick={openModal} />}
         </ActionBar>
       </FilterBar>
 
       {/* ─── MOVEMENT RECORDS TABLE ─── */}
-      {loading ? (
+      {loading && movements.length === 0 ? (
         <ModuleLoader moduleName="Stock Movements" icon={<ArrowRightLeft size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
       ) : movements.length === 0 ? (
         <EmptyState
           icon={<ArrowRightLeft size={48} style={{ color: 'var(--enterprise-gray-400)' }} />}
           title="No Stock Movements"
           description={'Click "New Movement" to record your first stock movement.'}
-          action={{ label: 'New Movement', onClick: openModal }}
+          action={canCreate ? { label: 'New Movement', onClick: openModal } : undefined}
         />
       ) : (
         <>
           <div style={{
             background: 'white', borderRadius: '8px', border: '1px solid var(--enterprise-gray-200)',
             overflow: 'hidden', boxShadow: 'var(--shadow-sm)',
+            opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto',
           }}>
-            <div className="table-responsive" style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 380px)', overflowY: 'auto' }}>
+            <div className="table-responsive" style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                 <colgroup>
                   <col style={{ width: '12%' }} />
@@ -1643,7 +1947,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
                   <col style={{ width: '14%' }} />
                   <col style={{ width: '11%' }} />
                 </colgroup>
-                <thead style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--enterprise-gray-50)' }}>
+                <thead style={{ background: 'var(--enterprise-gray-50)' }}>
                   <tr>
                     <th style={thStyle}>Movement #</th>
                     <th style={thStyle}>Date</th>
@@ -1709,50 +2013,32 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
                 </tbody>
               </table>
 
-              {/* Load More — inside the scrollable area so it only shows at the bottom */}
-              {hasMore && (
-                <div style={{
-                  padding: '20px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  gap: '10px',
-                  borderTop: '1px solid var(--enterprise-gray-200)',
-                  background: 'white',
-                }}>
-                  <p style={{
-                    fontSize: '13px',
-                    color: 'var(--enterprise-gray-500)',
-                    margin: 0,
-                  }}>
-                    Showing {displayedMovements.length} of {filteredMovements.length} movements
-                  </p>
-                  <button className="load-more-btn" onClick={() => setDisplayCount(prev => prev + PAGE_SIZE)}>
-                    Load More ({Math.min(PAGE_SIZE, filteredMovements.length - displayCount)} more)
-                  </button>
-                </div>
-              )}
-
-              {/* Show total when all loaded */}
-              {!hasMore && displayedMovements.length > 0 && (
-                <div style={{
-                  padding: '14px',
-                  textAlign: 'center',
-                  borderTop: '1px solid var(--enterprise-gray-200)',
-                }}>
-                  <p style={{
-                    fontSize: '13px',
-                    color: 'var(--enterprise-gray-500)',
-                    margin: 0,
-                  }}>
-                    Showing all {filteredMovements.length} movements
-                  </p>
-                </div>
+              {filteredMovements.length > 0 && (
+                <Pagination
+                  page={page}
+                  pageSize={PAGE_SIZE}
+                  totalCount={totalDbCount}
+                  onPageChange={setPage}
+                />
               )}
             </div>
           </div>
         </>
       )}
+
+      {/* Results Summary */}
+      <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          fontSize: '12px',
+          color: 'var(--enterprise-gray-600)',
+          marginTop: '16px'
+      }}>
+          <span>
+              Total Records: {totalDbCount}
+          </span>
+      </div>
 
       {/* ─── NEW MOVEMENT MODAL ─── */}
       <Modal isOpen={showModal} onClose={closeModal} title="New Stock Movement" maxWidth="780px">
@@ -1785,12 +2071,20 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
                 placeholder="Type to search..." style={{ ...mInputStyle, paddingLeft: '38px' }} />
               <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
               {searching && <Loader2 size={16} style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', color: '#3b82f6', animation: 'spin 1s linear infinite' }} />}
-              {showDropdown && searchResults.length > 0 && (
-                <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', boxShadow: '0 10px 25px rgba(0,0,0,0.12)', marginTop: '4px', maxHeight: '200px', overflowY: 'auto' }}>
+            </div>
+            {showDropdown && searchResults.length > 0 && (
+              <>
+                <style>{`
+                  @keyframes smDropdownSlideIn {
+                    from { opacity: 0; transform: translateY(-6px); }
+                    to { opacity: 1; transform: translateY(0); }
+                  }
+                `}</style>
+                <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', marginTop: '4px', animation: 'smDropdownSlideIn 0.35s cubic-bezier(0.4, 0, 0.2, 1)' }}>
                   {searchResults.map(item => (
                     <button key={item.id} onClick={() => handleSelectItem(item)} style={{
-                      width: '100%', padding: '8px 14px', border: 'none', background: 'none', textAlign: 'left',
-                      cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '1px',
+                      width: '100%', padding: '10px 14px', border: 'none', background: 'none', textAlign: 'left',
+                      cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '2px',
                       borderBottom: '1px solid #f3f4f6', transition: 'background 0.15s',
                     }}
                       onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#f0f9ff'; }}
@@ -1803,8 +2097,8 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
                     </button>
                   ))}
                 </div>
-              )}
-            </div>
+              </>
+            )}
           </div>
 
           {/* Item Details + Stock (after selection) */}
@@ -1848,9 +2142,31 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '16px', alignItems: 'end' }}>
                 <div>
                   <label style={mLabelStyle}>Stock Type *</label>
-                  <select value={stockType} onChange={e => { setStockType(e.target.value as StockType); setSelectedWarehouse(''); setSelectedRoute(null); setAvailableRoutes([]); }} style={mSelectStyle}>
+                  <select value={stockType} onChange={e => {
+                    const newType = e.target.value as StockType;
+                    setStockType(newType);
+                    if (newType === 'STOCK_IN') {
+                      // Auto-default: FG Warehouse + Production Receipt route + Prod Receive reason
+                      setSelectedWarehouse('PW');
+                      const routes = getRoutesForWarehouse('PW', 'STOCK_IN');
+                      setAvailableRoutes(routes);
+                      setSelectedRoute(routes.length >= 1 ? routes[0] : null);
+                      // Auto-default reason code to Prod Receive
+                      const prodRc = reasonCodes.find(r =>
+                        r.reason_code.toUpperCase().includes('PROD')
+                      );
+                      if (prodRc) {
+                        handleCategoryChange(prodRc.reason_code);
+                      } else if (reasonCodes.length > 0) {
+                        handleCategoryChange(reasonCodes[0].reason_code);
+                      }
+                    } else {
+                      setSelectedWarehouse(''); setSelectedRoute(null); setAvailableRoutes([]);
+                      setSelectedCategory(''); setNote(''); setNotePrefix('');
+                    }
+                  }} style={mSelectStyle}>
                     <option value="">Select stock type...</option>
-                    <option value="STOCK_IN">Stock In</option>
+                    <option value="STOCK_IN">Stock In (Production → FG)</option>
                     <option value="REJECTION">From Rejection</option>
                   </select>
                 </div>
@@ -1879,12 +2195,20 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div>
                   <label style={mLabelStyle}>Select Warehouse *</label>
-                  <select value={selectedWarehouse} onChange={e => setSelectedWarehouse(e.target.value as LocationCode)} style={mSelectStyle}>
-                    <option value="">Choose warehouse...</option>
-                    {getWarehousesForStockType(stockType).map(code => (
-                      <option key={code} value={code}>{LOCATIONS[code].name} ({code})</option>
-                    ))}
-                  </select>
+                  {stockType === 'STOCK_IN' ? (
+                    <div style={{ padding: '0 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '13px', backgroundColor: '#f9fafb', color: '#111827', display: 'flex', alignItems: 'center', height: '42px', fontWeight: 500, userSelect: 'none' }}>
+                      FG Warehouse (PW)
+                    </div>
+                  ) : (
+                    <select value={selectedWarehouse} onChange={e => setSelectedWarehouse(e.target.value as LocationCode)} style={mSelectStyle}>
+                      <option value="">Choose warehouse...</option>
+                      {getWarehousesForStockType(stockType).map(code => (
+                        <option key={code} value={code}>
+                          {code === 'CUSTOMER' ? 'Customer' : `${LOCATIONS[code as LocationCode]?.name || code} (${code})`}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
                 <div>
                   <label style={mLabelStyle}>Movement Route</label>
@@ -1966,11 +2290,18 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
                       <div>
                         <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 4 }}>Total Quantity</div>
                         <div style={{ fontSize: 18, fontWeight: 700, color: boxCount > 0 ? '#16a34a' : '#9ca3af' }}>
-                          {boxCount > 0 ? `${boxCount * innerBoxQty} PCS` : '—'}
+                          {boxCount > 0
+                            ? palletImpact?.adjustmentBoxIncluded
+                              ? `${palletImpact.adjustedTotalQty.toLocaleString()} PCS`
+                              : `${(boxCount * innerBoxQty).toLocaleString()} PCS`
+                            : '—'}
                         </div>
                         {boxCount > 0 && (
-                          <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
-                            {boxCount} box(es) × {innerBoxQty} PCS = {boxCount * innerBoxQty} PCS
+                          <div style={{ fontSize: 11, color: palletImpact?.adjustmentBoxIncluded ? '#b45309' : '#6b7280', marginTop: 2, fontWeight: palletImpact?.adjustmentBoxIncluded ? 600 : 400 }}>
+                            {palletImpact?.adjustmentBoxIncluded
+                              ? palletImpact.breakdownText
+                              : `${boxCount} × ${innerBoxQty} = ${(boxCount * innerBoxQty).toLocaleString()} PCS`
+                            }
                           </div>
                         )}
                       </div>
@@ -1979,46 +2310,18 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
                 </div>
               )}
 
-              {/* Row 3: Reason Code + Quantity */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                <div>
-                  <label style={mLabelStyle}>Reason Code *</label>
-                  <select value={selectedCategory} onChange={e => handleCategoryChange(e.target.value)} style={mSelectStyle}>
-                    <option value="">Select reason code...</option>
-                    {filteredReasonCodes.map(rc => <option key={rc.id} value={rc.reason_code}>{rc.reason_code.replace(/_/g, ' ')}</option>)}
-                  </select>
-                </div>
-                {selectedRoute?.movementType === 'PRODUCTION_RECEIPT' ? (
-                  /* BOX-BASED ENTRY FOR PRODUCTION RECEIPT */
-                  <div>
-                    <label style={mLabelStyle}>Number of Boxes *</label>
-                    <input type="number" min={1} value={boxCount || ''}
-                      onChange={e => {
-                        const val = parseInt(e.target.value) || 0;
-                        setBoxCount(val);
-                        setQuantity(val * innerBoxQty);
-                      }}
-                      placeholder="Enter number of boxes"
-                      style={mInputStyle}
-                      disabled={loadingPackingSpec || innerBoxQty <= 0}
-                    />
-                  </div>
-                ) : (
-                  <div>
-                    <label style={mLabelStyle}>Quantity ({selectedItem.uom}) *</label>
-                    <input type="number" min={1} value={quantity || ''} onChange={e => setQuantity(parseInt(e.target.value) || 0)}
-                      placeholder="Enter quantity" style={mInputStyle} />
-                  </div>
-                )}
-              </div>
-
-              {/* Row 2: Reference Type + Reference ID (mandatory) */}
+              {/* Row 2: Reference Type + Reference ID (FIRST per requirement 6) */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div>
                   <label style={mLabelStyle}>Reference Type *</label>
-                  <select value={referenceType} onChange={e => { setReferenceType(e.target.value); if (e.target.value === 'WORK_ORDER') { setReferenceId('AE/WO/D/'); } else { setReferenceId(''); } }} style={mSelectStyle}>
+                  <select value={referenceType} onChange={e => {
+                    setReferenceType(e.target.value);
+                    if (e.target.value === 'WORK_ORDER') { setReferenceId('AE/WO/D/'); }
+                    else if (e.target.value === 'INVENTORY_ADJUSTMENT') { setReferenceId('AE/M/D/'); }
+                    else { setReferenceId(''); }
+                  }} style={mSelectStyle}>
                     <option value="">Select type...</option>
-                    {REFERENCE_TYPES.map(rt => <option key={rt.value} value={rt.value}>{rt.label}</option>)}
+                    {(stockType === 'STOCK_IN' ? STOCK_IN_REFERENCE_TYPES : REJECTION_REFERENCE_TYPES).map(rt => <option key={rt.value} value={rt.value}>{rt.label}</option>)}
                   </select>
                 </div>
                 <div>
@@ -2036,12 +2339,296 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
                         style={{ ...mInputStyle, paddingLeft: '88px' }}
                       />
                     </div>
+                  ) : referenceType === 'INVENTORY_ADJUSTMENT' ? (
+                    <div style={{ position: 'relative' }}>
+                      <span style={{
+                        position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)',
+                        fontSize: '13px', fontWeight: 600, color: '#7c3aed', pointerEvents: 'none', userSelect: 'none',
+                      }}>AE/M/D/</span>
+                      <input type="text"
+                        value={referenceId.startsWith('AE/M/D/') ? referenceId.slice(7) : referenceId}
+                        onChange={e => setReferenceId('AE/M/D/' + e.target.value)}
+                        placeholder="Enter ID..."
+                        style={{ ...mInputStyle, paddingLeft: '72px' }}
+                      />
+                    </div>
                   ) : (
                     <input type="text" value={referenceId} onChange={e => setReferenceId(e.target.value)}
-                      placeholder="Enter reference ID..." style={mInputStyle} />
+                      placeholder="Select reference type first..." style={mInputStyle} disabled={!referenceType} />
                   )}
                 </div>
               </div>
+
+              {/* Row 3: Reason Code + Number of Boxes/Quantity (SECOND per requirement 6) */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                <div>
+                  <label style={mLabelStyle}>Reason Code *</label>
+                  <select value={selectedCategory} onChange={e => handleCategoryChange(e.target.value)} style={mSelectStyle}>
+                    <option value="">Select reason code...</option>
+                    {filteredReasonCodes.map(rc => <option key={rc.id} value={rc.reason_code}>{rc.reason_code.replace(/_/g, ' ')}</option>)}
+                  </select>
+                </div>
+                {selectedRoute?.movementType === 'PRODUCTION_RECEIPT' ? (
+                  /* BOX-BASED ENTRY FOR PRODUCTION RECEIPT */
+                  <div>
+                    <label style={mLabelStyle}>Number of Boxes *</label>
+                    <input type="number" min={1} value={boxCount || ''}
+                      onChange={e => {
+                        const val = parseInt(e.target.value) || 0;
+                        setBoxCount(val);
+                        setQuantity(val * innerBoxQty);
+                        setAdjustmentAcknowledged(false);
+                        // Debounced pallet impact calculation
+                        if (palletImpactTimer.current) clearTimeout(palletImpactTimer.current);
+                        if (val > 0 && selectedItem) {
+                          setLoadingPalletImpact(true);
+                          palletImpactTimer.current = setTimeout(async () => {
+                            try {
+                              const impact = await calculatePalletImpact(selectedItem.item_code, val);
+                              setPalletImpact(impact);
+                            } catch (err: any) {
+                              console.warn('[PalletImpact] Calculation failed:', err.message);
+                              setPalletImpact(null);
+                            } finally {
+                              setLoadingPalletImpact(false);
+                            }
+                          }, 400);
+                        } else {
+                          setPalletImpact(null);
+                          setLoadingPalletImpact(false);
+                        }
+                      }}
+                      placeholder="Enter number of boxes"
+                      style={mInputStyle}
+                      disabled={loadingPackingSpec || innerBoxQty <= 0}
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label style={mLabelStyle}>Quantity ({selectedItem.uom}) *</label>
+                    <input type="number" min={1} value={quantity || ''} onChange={e => setQuantity(parseInt(e.target.value) || 0)}
+                      placeholder="Enter quantity" style={mInputStyle} />
+                  </div>
+                )}
+              </div>
+
+              {/* ═══════════════ PALLET INTELLIGENCE PANEL — ERP STANDARD ═══════════════ */}
+              {selectedRoute?.movementType === 'PRODUCTION_RECEIPT' && boxCount > 0 && (
+                <div style={{
+                  borderRadius: 'var(--border-radius-lg, 12px)', overflow: 'hidden',
+                  background: 'var(--card-background, #fff)',
+                  border: '1px solid var(--border-color, #e5e7eb)',
+                  boxShadow: 'var(--shadow-sm, 0 1px 2px rgba(0,0,0,0.05))',
+                }}>
+                  {/* ── HEADER ── */}
+                  <div style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '10px 14px',
+                    background: 'var(--enterprise-primary, #1e3a8a)',
+                    borderBottom: '1px solid var(--border-color, #e5e7eb)',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Package size={15} style={{ color: '#fff' }} />
+                      <span style={{ fontSize: 13, fontWeight: 700, color: '#fff', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
+                        Pallet Intelligence
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {loadingPalletImpact && (
+                        <span style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                      )}
+                      {palletImpact && !loadingPalletImpact && (
+                        <span style={{
+                          fontSize: 11, fontWeight: 700, padding: '4px 12px', borderRadius: 4,
+                          background: 'rgba(255,255,255,0.15)',
+                          color: '#fff',
+                          border: '1px solid rgba(255,255,255,0.3)',
+                        }}>
+                          {palletImpact.mustCreateAdjustmentFirst ? 'ACTION REQUIRED' : palletImpact.adjustmentBoxRequired ? 'TOP-OFF INCLUDED' : 'READY'}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {palletImpact && !loadingPalletImpact && (
+                    <div style={{ padding: '12px' }}>
+                      {/* ── PALLET STATUS ── */}
+                      {palletImpact.currentPallet && (
+                        <div style={{ marginBottom: 10 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--enterprise-primary, #1e3a8a)' }}>
+                              {palletImpact.currentPallet.pallet_number}
+                            </span>
+                            <span style={{
+                              fontSize: 11, fontWeight: 600, padding: '2px 10px', borderRadius: 4,
+                              background: 'var(--enterprise-gray-100, #f3f4f6)',
+                              color: 'var(--enterprise-gray-700, #374151)',
+                              border: '1px solid var(--enterprise-gray-200, #e5e7eb)',
+                            }}>
+                              {palletImpact.currentPallet.state.replace(/_/g, ' ')}
+                            </span>
+                          </div>
+                          {/* Progress Bar */}
+                          <div style={{ marginBottom: 10 }}>
+                            <div style={{ height: 8, borderRadius: 4, background: 'var(--enterprise-gray-200, #e5e7eb)', overflow: 'hidden' }}>
+                              <div style={{
+                                height: '100%', borderRadius: 4, transition: 'width 0.4s ease',
+                                width: `${Math.min(100, (palletImpact.currentPallet.containers_filled / palletImpact.total_containers_per_pallet) * 100)}%`,
+                                background: 'var(--enterprise-primary, #1e3a8a)',
+                              }} />
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, fontSize: 11, color: 'var(--enterprise-gray-500, #6b7280)', fontWeight: 500 }}>
+                              <span>{palletImpact.currentPallet.containers_filled} of {palletImpact.total_containers_per_pallet} inner boxes filled</span>
+                              <span style={{ fontWeight: 700 }}>{Math.round((palletImpact.currentPallet.containers_filled / palletImpact.total_containers_per_pallet) * 100)}%</span>
+                            </div>
+                          </div>
+                          {/* Stat Row */}
+                          <div style={{ display: 'grid', gridTemplateColumns: palletImpact.adjustment_qty_per_pallet > 0 ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 6 }}>
+                            <div style={{ background: 'var(--enterprise-gray-50, #f9fafb)', borderRadius: 8, padding: '10px', textAlign: 'center', border: '1px solid var(--enterprise-gray-200, #e5e7eb)' }}>
+                              <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500, #6b7280)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 3 }}>Current</div>
+                              <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--enterprise-primary, #1e3a8a)' }}>{palletImpact.currentPallet.current_qty.toLocaleString()}</div>
+                            </div>
+                            <div style={{ background: 'var(--enterprise-gray-50, #f9fafb)', borderRadius: 8, padding: '10px', textAlign: 'center', border: '1px solid var(--enterprise-gray-200, #e5e7eb)' }}>
+                              <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500, #6b7280)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 3 }}>Target</div>
+                              <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--enterprise-gray-700, #374151)' }}>{palletImpact.currentPallet.target_qty.toLocaleString()}</div>
+                            </div>
+                            <div style={{ background: 'var(--enterprise-gray-50, #f9fafb)', borderRadius: 8, padding: '10px', textAlign: 'center', border: '1px solid var(--enterprise-gray-200, #e5e7eb)' }}>
+                              <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500, #6b7280)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 3 }}>Still Needed</div>
+                              <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--enterprise-primary, #1e3a8a)' }}>
+                                {palletImpact.currentPallet.containers_needed} box{palletImpact.currentPallet.containers_needed !== 1 ? 'es' : ''}
+                              </div>
+                            </div>
+                            {palletImpact.adjustment_qty_per_pallet > 0 && (
+                              <div style={{ background: '#f5f3ff', borderRadius: 8, padding: '10px', textAlign: 'center', border: '1px solid #e9d5ff' }}>
+                                <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500, #6b7280)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 3 }}>Top-off Box</div>
+                                <div style={{ fontSize: 18, fontWeight: 800, color: '#7c3aed' }}>{palletImpact.adjustment_qty_per_pallet} PCS</div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ── MOVEMENT BREAKDOWN ── */}
+                      <div style={{
+                        background: 'var(--enterprise-gray-50, #f9fafb)', borderRadius: 8, padding: '14px',
+                        marginBottom: 10, border: '1px solid var(--enterprise-gray-200, #e5e7eb)',
+                      }}>
+                        <div style={{ fontSize: 11, color: 'var(--enterprise-gray-500, #6b7280)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 6, textAlign: 'center' }}>
+                          This Movement
+                        </div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--enterprise-gray-900, #111827)', lineHeight: 1.5, textAlign: 'center' }}>
+                          {palletImpact.breakdownText}
+                        </div>
+                        {palletImpact.adjustmentBoxIncluded && (
+                          <div style={{
+                            marginTop: 8, padding: '8px 12px', borderRadius: 6,
+                            background: '#f5f3ff', border: '1px solid #e9d5ff',
+                            fontSize: 12, fontWeight: 600, color: '#7c3aed',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                          }}>
+                            <Info size={14} style={{ flexShrink: 0 }} />
+                            {(palletImpact.totalAdjustmentBoxes || 1)} Box{(palletImpact.totalAdjustmentBoxes || 1) > 1 ? 'es' : ''} will be auto-converted to Top-off Box{(palletImpact.totalAdjustmentBoxes || 1) > 1 ? 'es' : ''} ({palletImpact.adjustmentBoxQty} PCS each)
+                          </div>
+                        )}
+
+                        {/* Distribution */}
+                        <div style={{ display: 'grid', gridTemplateColumns: palletImpact.boxesToNewPallet > 0 ? '1fr 1fr' : '1fr', gap: 8, marginTop: 10 }}>
+                          <div style={{
+                            background: '#fff', borderRadius: 6, padding: '12px 14px',
+                            border: '1px solid var(--enterprise-gray-200, #e5e7eb)',
+                            borderLeft: '4px solid var(--enterprise-primary, #1e3a8a)',
+                            textAlign: 'center',
+                          }}>
+                            <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500, #6b7280)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>Current Pallet</div>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--enterprise-primary, #1e3a8a)' }}>
+                              {palletImpact.boxesToCurrentPallet} Box{palletImpact.boxesToCurrentPallet !== 1 ? 'es' : ''}
+                              {palletImpact.adjustmentBoxIncluded && <span style={{ color: '#7c3aed' }}> + {palletImpact.totalAdjustmentBoxes || 1} Top-off</span>}
+                            </div>
+                            <div style={{ fontSize: 12, color: 'var(--enterprise-gray-500, #6b7280)', marginTop: 2, fontWeight: 500 }}>
+                              {((palletImpact.boxesToCurrentPallet * palletImpact.inner_box_qty) + (palletImpact.adjustmentBoxIncluded ? palletImpact.adjustmentBoxQty : 0)).toLocaleString()} PCS total
+                            </div>
+                          </div>
+                          {palletImpact.boxesToNewPallet > 0 && (
+                            <div style={{
+                              background: '#fff', borderRadius: 6, padding: '12px 14px',
+                              border: '1px solid var(--enterprise-gray-200, #e5e7eb)',
+                              borderLeft: '4px solid var(--enterprise-success, #16a34a)',
+                              textAlign: 'center',
+                            }}>
+                              <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500, #6b7280)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>New Pallet</div>
+                              <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--enterprise-success, #16a34a)' }}>
+                                {palletImpact.boxesToNewPallet} Box{palletImpact.boxesToNewPallet !== 1 ? 'es' : ''}
+                              </div>
+                              <div style={{ fontSize: 12, color: 'var(--enterprise-gray-500, #6b7280)', marginTop: 2, fontWeight: 500 }}>
+                                {(palletImpact.boxesToNewPallet * palletImpact.inner_box_qty).toLocaleString()} PCS total
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* ── WARNINGS ── */}
+                      {palletImpact.warnings.map((w, i) => (
+                        <div key={i} style={{
+                          padding: '10px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+                          marginBottom: 8, lineHeight: 1.5,
+                          background: 'var(--enterprise-warning-bg, #fffbeb)',
+                          color: 'var(--enterprise-warning, #d97706)',
+                          border: '1px solid #fde68a',
+                          display: 'flex', alignItems: 'flex-start', gap: 8,
+                        }}>
+                          <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 2 }} />
+                          <span>{w}</span>
+                        </div>
+                      ))}
+
+                      {/* ── ACKNOWLEDGMENT ── */}
+                      {palletImpact.mustCreateAdjustmentFirst && (
+                        <label style={{
+                          display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer',
+                          padding: '12px 14px', borderRadius: 8,
+                          background: adjustmentAcknowledged ? 'var(--enterprise-success-bg, #f0fdf4)' : 'var(--enterprise-gray-50, #f9fafb)',
+                          border: `1.5px solid ${adjustmentAcknowledged ? 'var(--enterprise-success, #16a34a)' : 'var(--border-color, #e5e7eb)'}`,
+                          transition: 'all 0.2s ease',
+                        }}>
+                          <div style={{
+                            width: 20, height: 20, borderRadius: 4, flexShrink: 0, marginTop: 1,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            background: adjustmentAcknowledged ? 'var(--enterprise-success, #16a34a)' : '#fff',
+                            transition: 'all 0.2s ease',
+                            border: adjustmentAcknowledged ? '1px solid var(--enterprise-success, #16a34a)' : '1px solid var(--enterprise-gray-300, #d1d5db)',
+                          }}>
+                            {adjustmentAcknowledged && <CheckCircle2 size={13} style={{ color: '#fff' }} />}
+                          </div>
+                          <input type="checkbox" checked={adjustmentAcknowledged} onChange={e => setAdjustmentAcknowledged(e.target.checked)}
+                            style={{ display: 'none' }} />
+                          <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--enterprise-gray-700, #374151)', lineHeight: 1.5 }}>
+                            I confirm that <strong>{palletImpact.totalAdjustmentBoxes || 1} Top-off Box{(palletImpact.totalAdjustmentBoxes || 1) > 1 ? 'es' : ''}</strong> of <strong>{palletImpact.adjustmentBoxQty} PCS each</strong> will be
+                            created during packing to complete{' '}
+                            {(palletImpact.adjustmentBoxesForExistingPallets || 0) > 0
+                              ? <strong>{palletImpact.adjustmentBoxesForExistingPallets} existing pallet{(palletImpact.adjustmentBoxesForExistingPallets || 0) > 1 ? 's' : ''}</strong>
+                              : <strong>{palletImpact.currentPallet?.pallet_number || 'the current pallet'}</strong>
+                            } before
+                            starting a new pallet.
+                          </span>
+                        </label>
+                      )}
+
+                      {/* ── FOOTER ── */}
+                      <div style={{
+                        marginTop: 8, padding: '8px 12px', borderRadius: 6,
+                        background: 'var(--enterprise-gray-50, #f9fafb)',
+                        fontSize: 12, color: 'var(--enterprise-gray-500, #6b7280)', fontStyle: 'italic',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                        border: '1px solid var(--enterprise-gray-200, #e5e7eb)',
+                      }}>
+                        <Info size={13} style={{ flexShrink: 0 }} />
+                        {palletImpact.palletSummary}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Row 4: Note (full width) */}
               <div>
@@ -2138,7 +2725,7 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
             <Button
               variant="primary"
               onClick={handleSubmitRequest}
-              disabled={submitting || !selectedRoute || (selectedRoute?.movementType === 'PRODUCTION_RECEIPT' ? (boxCount <= 0 || innerBoxQty <= 0) : quantity <= 0) || !selectedCategory || !note.trim() || !referenceType || !(referenceType === 'WORK_ORDER' ? referenceId.replace(/^AE\/WO\/D\//, '').trim() : referenceId.trim())}
+              disabled={submitting || !selectedRoute || (selectedRoute?.movementType === 'PRODUCTION_RECEIPT' ? (boxCount <= 0 || innerBoxQty <= 0) : quantity <= 0) || !selectedCategory || !note.trim() || !referenceType || !(referenceType === 'WORK_ORDER' ? referenceId.replace(/^AE\/WO\/D\//, '').trim() : referenceType === 'INVENTORY_ADJUSTMENT' ? referenceId.replace(/^AE\/M\/D\//, '').trim() : referenceId.trim())}
               icon={submitting ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <Shield size={16} />}
             >
               {submitting ? 'Submitting...' : 'Submit Request'}
@@ -2381,6 +2968,80 @@ export function StockMovement({ accessToken, userRole }: StockMovementProps) {
                   </div>
                 </div>
               </div>
+
+              {/* ══════════ SECTION 3.5: BOX BREAKDOWN (Production Receipt only) ══════════ */}
+              {reviewMovement.movement_type === 'PRODUCTION_RECEIPT' && reviewBoxInfo && (reviewBoxInfo.boxes > 0 || reviewBoxInfo.adjIncluded) && (
+                <div style={{ padding: '16px 0', borderBottom: '1px solid #f0f2f5' }}>
+                  <div style={{ ...labelStyle, marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Package size={13} style={{ color: '#1e3a8a' }} />
+                    Box Breakdown
+                  </div>
+                  <div style={{
+                    background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)',
+                    borderRadius: '10px', border: '1px solid #bfdbfe',
+                    padding: '16px 20px',
+                  }}>
+                    {/* Inner boxes row */}
+                    {reviewBoxInfo.boxes > 0 && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr', alignItems: 'center' }}>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Inner Boxes</div>
+                        <div style={{ fontSize: '28px', fontWeight: 800, color: '#1e3a8a', lineHeight: '1', letterSpacing: '-0.5px' }}>
+                          {reviewBoxInfo.boxes}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>×</div>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Qty per Box</div>
+                        <div style={{ fontSize: '28px', fontWeight: 800, color: '#1e3a8a', lineHeight: '1', letterSpacing: '-0.5px' }}>
+                          {reviewBoxInfo.perBox}
+                          <span style={{ fontSize: '13px', fontWeight: 500, color: '#6b7a8d', marginLeft: '4px' }}>PCS</span>
+                        </div>
+                      </div>
+                      <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>=</div>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>
+                          {reviewBoxInfo.adjIncluded ? 'Subtotal' : 'Total Pieces'}
+                        </div>
+                        <div style={{ fontSize: '28px', fontWeight: 800, color: reviewBoxInfo.adjIncluded ? '#1e3a8a' : '#16a34a', lineHeight: '1', letterSpacing: '-0.5px' }}>
+                          {(reviewBoxInfo.boxes * reviewBoxInfo.perBox).toLocaleString()}
+                          <span style={{ fontSize: '13px', fontWeight: 500, color: '#6b7a8d', marginLeft: '4px' }}>PCS</span>
+                        </div>
+                      </div>
+                    </div>
+                    )}
+
+                    {/* Top-off box row (if applicable) */}
+                    {reviewBoxInfo.adjIncluded && reviewBoxInfo.adjQty !== undefined && (
+                      <>
+                        {reviewBoxInfo.boxes > 0 && <div style={{ margin: '12px 0 8px', borderTop: '1px dashed #93a8d2' }} />}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr', alignItems: 'center' }}>
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Top-off Box{(reviewBoxInfo.adjBoxCount || 1) > 1 ? 'es' : ''}</div>
+                            <div style={{ fontSize: '22px', fontWeight: 800, color: '#b45309', lineHeight: '1' }}>{reviewBoxInfo.adjBoxCount || 1}</div>
+                          </div>
+                          <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>×</div>
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Top-off Qty</div>
+                            <div style={{ fontSize: '22px', fontWeight: 800, color: '#b45309', lineHeight: '1' }}>
+                              {reviewBoxInfo.adjQty}
+                              <span style={{ fontSize: '13px', fontWeight: 500, color: '#6b7a8d', marginLeft: '4px' }}>PCS</span>
+                            </div>
+                          </div>
+                          <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>=</div>
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Grand Total</div>
+                            <div style={{ fontSize: '28px', fontWeight: 800, color: '#16a34a', lineHeight: '1', letterSpacing: '-0.5px' }}>
+                              {reviewBoxInfo.total.toLocaleString()}
+                              <span style={{ fontSize: '13px', fontWeight: 500, color: '#6b7a8d', marginLeft: '4px' }}>PCS</span>
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* ══════════ SECTION 4: METRICS ══════════ */}
               <div style={{

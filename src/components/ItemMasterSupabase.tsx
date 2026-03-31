@@ -9,13 +9,9 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Plus, Edit2, Trash2, Search, Package, Eye, ChevronDown, ChevronRight, AlertTriangle, Clock, Calendar, Download, X, XCircle, CheckCircle, Settings, CheckCircle2, Info } from 'lucide-react';
-import { Card, Button, Badge, Input, Select, Label, Modal, LoadingSpinner, EmptyState, Textarea, ModuleLoader } from './ui/EnterpriseUI';
-import {
-  SummaryCard, SummaryCardsGrid,
-  FilterBar as SharedFilterBar, ActionBar,
-  SearchBox, ExportCSVButton, ClearFiltersButton, AddButton,
-} from './ui/SharedComponents';
+import { Plus, Search, X, Package, CheckCircle2, CheckCircle, XCircle, AlertTriangle, Info, Edit2, Trash2, Settings, ChevronDown, ChevronRight, Eye, Calendar, Clock, Box, Download } from 'lucide-react';
+import { Card, Button, Input, Select, Label, Badge, Modal, EmptyState, Textarea, LoadingSpinner, ModuleLoader } from './ui/EnterpriseUI';
+import { SummaryCard, SummaryCardsGrid, FilterBar as SharedFilterBar, ActionBar, SearchBox, ActionButton, ExportCSVButton, ClearFiltersButton, AddButton, sharedThStyle, sharedTdStyle, Pagination } from './ui/SharedComponents';
 import * as itemsApi from '../utils/api/itemsSupabase';
 import { getSupabaseClient } from '../utils/supabase/client';
 
@@ -118,6 +114,7 @@ const formDefault: itemsApi.ItemFormData = {
   uom: 'PCS',
   unit_price: null,
   standard_cost: null,
+  weight: null,
   lead_time_days: '',
   is_active: true,
   master_serial_no: '',
@@ -158,57 +155,28 @@ type CardFilter = 'ALL' | 'ACTIVE' | 'INACTIVE';
 
 
 // ============================================================================
-// CSV EXPORT UTILITY
+// EXCEL EXPORT UTILITY
 // ============================================================================
 
-function exportItemsToCSV(data: itemsApi.Item[], filename: string = 'items_export') {
-  const headers = [
-    'Item Code',
-    'Part Number',
-    'Master Serial No',
-    'Item Name',
-    'Revision',
-    'UOM',
-    'Unit Price',
-    'Standard Cost',
-    'Lead Time',
-    'Status',
-    'Deleted By',
-  ];
+function exportItemsToExcel(data: itemsApi.Item[], filename: string = 'items_export') {
+  import('xlsx').then(XLSX => {
+    const headers = [
+      'Item Code', 'Part Number', 'Master Serial No', 'Item Name', 'Revision',
+      'UOM', 'Weight (G)', 'Unit Price', 'Standard Cost', 'Lead Time', 'Status', 'Deleted By',
+    ];
 
-  const rows = data.map(item => [
-    item.item_code,
-    item.part_number || '',
-    item.master_serial_no || '',
-    item.item_name || '',
-    item.revision || '',
-    item.uom,
-    item.unit_price ?? '',
-    item.standard_cost ?? '',
-    item.lead_time_days,
-    item.is_active ? 'Active' : 'Inactive',
-    item.deleted_by || '',
-  ]);
+    const rows = data.map(item => [
+      item.item_code, item.part_number || '', item.master_serial_no || '',
+      item.item_name || '', item.revision || '', item.uom,
+      item.weight ?? '', item.unit_price ?? '', item.standard_cost ?? '', item.lead_time_days,
+      item.is_active ? 'Active' : 'Inactive', item.deleted_by || '',
+    ]);
 
-  const csvContent = [
-    headers.join(','),
-    ...rows.map(row => row.map(cell =>
-      typeof cell === 'string' && (cell.includes(',') || cell.includes('"'))
-        ? `"${cell.replace(/"/g, '""')}"`
-        : cell
-    ).join(','))
-  ].join('\n');
-
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const link = document.createElement('a');
-  const url = URL.createObjectURL(blob);
-
-  link.setAttribute('href', url);
-  link.setAttribute('download', `${filename}_${new Date().toISOString().split('T')[0]}.csv`);
-  link.style.visibility = 'hidden';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Items');
+    XLSX.writeFile(wb, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
+  });
 }
 
 /* ========== DELETE CONFIRMATION MODAL ========== */
@@ -817,10 +785,10 @@ function ItemViewModal({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
             <div><Label>Lead Time</Label><Input value={item.lead_time_days || '-'} disabled /></div>
           </div>
           <div style={{ borderTop: '1px solid var(--enterprise-gray-200)', paddingTop: '16px', marginTop: '8px' }}>
-            <p style={{ fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-gray-600)', marginBottom: '12px' }}>Pricing</p>
+            <p style={{ fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-gray-600)', marginBottom: '12px' }}>Cost & Weight</p>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
-              <div><Label>Unit Price</Label><Input value={item.unit_price != null ? `₹${item.unit_price.toLocaleString()}` : '-'} disabled /></div>
-              <div><Label>Standard Cost</Label><Input value={item.standard_cost != null ? `₹${item.standard_cost.toLocaleString()}` : '-'} disabled /></div>
+              <div><Label>Weight (kg)</Label><Input value={item.weight != null ? item.weight.toLocaleString() : '-'} disabled /></div>
+              <div><Label>Standard Cost</Label><Input value={item.standard_cost != null ? `$${item.standard_cost.toLocaleString()}` : '-'} disabled /></div>
               <div><Label>Status</Label><Input value={item.is_active ? 'Active' : 'Inactive'} disabled /></div>
             </div>
           </div>
@@ -1056,12 +1024,16 @@ type UserRole = 'L1' | 'L2' | 'L3' | null;
 
 interface ItemMasterProps {
   userRole?: UserRole;
+  userPerms?: Record<string, boolean>;
 }
 
-export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
-  // RBAC helpers
-  const canAddItem = userRole === 'L2' || userRole === 'L3'; // Supervisor or Manager
-  const canEditDelete = userRole === 'L3'; // Manager only
+export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps) {
+  // RBAC helpers — use granular permissions if available, fall back to role checks
+  const hasPerms = Object.keys(userPerms).length > 0;
+  const canAddItem = userRole === 'L3' || (hasPerms ? userPerms['items.create'] === true : userRole === 'L2');
+  const canEditItem = userRole === 'L3' || (hasPerms ? userPerms['items.edit'] === true : false);
+  const canDeleteItem = userRole === 'L3' || (hasPerms ? userPerms['items.delete'] === true : false);
+  const canEditDelete = canEditItem || canDeleteItem;
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1069,6 +1041,10 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [formData, setFormData] = useState<itemsApi.ItemFormData>(formDefault);
+  // Raw string states to preserve decimal points during typing
+  const [weightStr, setWeightStr] = useState('');
+  const [unitPriceStr, setUnitPriceStr] = useState('');
+  const [standardCostStr, setStandardCostStr] = useState('');
   const [viewItem, setViewItem] = useState<Item | null>(null);
   const [showViewModal, setShowViewModal] = useState(false);
 
@@ -1079,12 +1055,13 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<Item | null>(null);
 
-  // Pagination state - show 20 items at a time
-  const [displayCount, setDisplayCount] = useState(20);
+  // Pagination state
+  const [page, setPage] = useState<number>(0);
   const ITEMS_PER_PAGE = 20;
 
   // Actions dropdown state (matches UserManagement pattern)
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+  const [dropdownDirection, setDropdownDirection] = useState<'up' | 'down'>('down');
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
   // Toast notification state (same pattern as StockMovement)
@@ -1157,17 +1134,14 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
     return result;
   }, [items, cardFilter, searchTerm]);
 
-  // Paginated items - only show displayCount items
+  // Paginated items
   const displayedItems = useMemo(() => {
-    return filteredItems.slice(0, displayCount);
-  }, [filteredItems, displayCount]);
+    return filteredItems.slice(page * ITEMS_PER_PAGE, (page + 1) * ITEMS_PER_PAGE);
+  }, [filteredItems, page]);
 
-  // Check if there are more items to load
-  const hasMoreItems = displayCount < filteredItems.length;
-
-  // Reset display count when filters change
+  // Reset page when filters change
   useEffect(() => {
-    setDisplayCount(ITEMS_PER_PAGE);
+    setPage(0);
   }, [cardFilter, searchTerm]);
 
   // Check if any CARD filters are active (not search - search has its own X button)
@@ -1183,23 +1157,27 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
     setCardFilter('ALL');
   };
 
-  // Handle load more
-  const handleLoadMore = () => {
-    setDisplayCount(prev => prev + ITEMS_PER_PAGE);
-  };
+
 
   // Handle export
   const handleExport = () => {
-    exportItemsToCSV(filteredItems, 'item_master');
+    exportItemsToExcel(filteredItems, 'item_master');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const isEditing = !!editingItem;
     const itemName = formData.part_number || formData.item_code;
+    // Parse raw string values into numbers for submission
+    const submitData = {
+      ...formData,
+      weight: weightStr ? parseFloat(weightStr) : null,
+      unit_price: unitPriceStr ? parseFloat(unitPriceStr) : null,
+      standard_cost: standardCostStr ? parseFloat(standardCostStr) : null,
+    };
     const result = editingItem
-      ? await itemsApi.updateItem(editingItem.id, formData)
-      : await itemsApi.createItem(formData);
+      ? await itemsApi.updateItem(editingItem.id, submitData)
+      : await itemsApi.createItem(submitData);
 
     if (result.error) {
       showToast('error', isEditing ? 'Update Failed' : 'Creation Failed', result.error);
@@ -1212,12 +1190,16 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
 
   const handleEdit = (item: Item) => {
     setEditingItem(item);
+    setWeightStr(item.weight != null ? String(item.weight) : '');
+    setUnitPriceStr(item.unit_price != null ? String(item.unit_price) : '');
+    setStandardCostStr(item.standard_cost != null ? String(item.standard_cost) : '');
     setFormData({
       item_code: item.item_code,
       item_name: item.item_name || '',
       uom: item.uom,
       unit_price: item.unit_price ?? null,
       standard_cost: item.standard_cost ?? null,
+      weight: item.weight ?? null,
       lead_time_days: item.lead_time_days ?? '',
       is_active: item.is_active,
       master_serial_no: item.master_serial_no || '',
@@ -1260,6 +1242,9 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
     setShowModal(false);
     setEditingItem(null);
     setFormData(formDefault);
+    setWeightStr('');
+    setUnitPriceStr('');
+    setStandardCostStr('');
   };
 
   if (loading) return <ModuleLoader moduleName="Item Master" icon={<Package size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
@@ -1391,7 +1376,7 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
       </SharedFilterBar>
 
       {/* Items Table - PRIMARY IDENTIFIER: Part Number */}
-      <Card style={{ padding: 0, overflow: 'hidden' }}>
+      <Card style={{ padding: 0 }}>
         {filteredItems.length === 0 ? (
           <EmptyState
             icon={<Package size={48} />}
@@ -1448,7 +1433,17 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
                         <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px', position: 'relative' }}>
                           <div ref={activeDropdown === item.id ? dropdownRef : null} style={{ position: 'relative', display: 'inline-block' }}>
                             <button
-                              onClick={() => setActiveDropdown(activeDropdown === item.id ? null : item.id)}
+                              onClick={(e) => {
+                                if (activeDropdown === item.id) {
+                                  setActiveDropdown(null);
+                                } else {
+                                  // Detect if we should open upward based on available space
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  const spaceBelow = window.innerHeight - rect.bottom;
+                                  setDropdownDirection(spaceBelow < 160 ? 'up' : 'down');
+                                  setActiveDropdown(item.id);
+                                }
+                              }}
                               style={{
                                 padding: '8px 12px',
                                 border: '1px solid #e5e7eb',
@@ -1472,35 +1467,42 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
                               <div
                                 style={{
                                   position: 'absolute',
-                                  top: '100%',
+                                  ...(dropdownDirection === 'up'
+                                    ? { bottom: '100%', marginBottom: '4px' }
+                                    : { top: '100%', marginTop: '4px' }),
                                   right: '0',
-                                  marginTop: '4px',
-                                  zIndex: 50,
+                                  zIndex: 9999,
                                   width: '180px',
                                   backgroundColor: 'white',
                                   borderRadius: '12px',
-                                  boxShadow: '0 10px 40px rgba(0,0,0,0.15)',
+                                  boxShadow: dropdownDirection === 'up'
+                                    ? '0 -10px 40px rgba(0,0,0,0.15)'
+                                    : '0 10px 40px rgba(0,0,0,0.15)',
                                   border: '1px solid #e5e7eb',
                                   overflow: 'hidden',
                                 }}
                               >
-                                <button
-                                  onClick={() => { handleEdit(item); setActiveDropdown(null); }}
-                                  style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
-                                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
-                                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-                                >
-                                  <Edit2 size={16} /> Edit Item
-                                </button>
-                                <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
-                                <button
-                                  onClick={() => { handleDeleteClick(item); setActiveDropdown(null); }}
-                                  style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
-                                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#fef2f2'; }}
-                                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-                                >
-                                  <Trash2 size={16} /> Delete Item
-                                </button>
+                                {canEditItem && (
+                                  <button
+                                    onClick={() => { handleEdit(item); setActiveDropdown(null); }}
+                                    style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#374151' }}
+                                    onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#f8fafc'; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                  >
+                                    <Edit2 size={16} /> Edit Item
+                                  </button>
+                                )}
+                                {canEditItem && canDeleteItem && <div style={{ borderTop: '1px solid #f3f4f6' }}></div>}
+                                {canDeleteItem && (
+                                  <button
+                                    onClick={() => { handleDeleteClick(item); setActiveDropdown(null); }}
+                                    style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
+                                    onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#fef2f2'; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                  >
+                                    <Trash2 size={16} /> Delete Item
+                                  </button>
+                                )}
                               </div>
                             )}
                           </div>
@@ -1511,54 +1513,29 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
                 </tbody>
               </table>
             </div>
-
-            {/* Load More Button - Outside scrollable area */}
-            {hasMoreItems && (
-              <div style={{
-                padding: '20px',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: '12px',
-                borderTop: '1px solid var(--table-border)',
-                position: 'relative',
-                zIndex: 10,
-                backgroundColor: 'white',
-              }}>
-                <p style={{
-                  fontSize: '13px',
-                  color: 'var(--enterprise-gray-500)',
-                  margin: 0,
-                }}>
-                  Showing {displayedItems.length} of {filteredItems.length} items
-                </p>
-                <Button
-                  variant="primary"
-                  onClick={handleLoadMore}
-                >
-                  Load More ({Math.min(ITEMS_PER_PAGE, filteredItems.length - displayedItems.length)} more)
-                </Button>
-              </div>
-            )}
-
-            {/* Show total when all loaded */}
-            {!hasMoreItems && displayedItems.length > 0 && (
-              <div style={{
-                padding: '16px',
-                textAlign: 'center',
-                borderTop: '1px solid var(--table-border)',
-              }}>
-                <p style={{
-                  fontSize: '13px',
-                  color: 'var(--enterprise-gray-500)',
-                }}>
-                  Showing all {filteredItems.length} items
-                </p>
-              </div>
-            )}
+            <Pagination
+              page={page}
+              pageSize={ITEMS_PER_PAGE}
+              totalCount={filteredItems.length}
+              onPageChange={setPage}
+            />
           </>
         )}
       </Card>
+
+      {/* Results Summary */}
+      <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          fontSize: '12px',
+          color: 'var(--enterprise-gray-600)',
+      }}>
+          <span>
+              Showing {filteredItems.length} of {items.length} items
+              {hasActiveFilters && ' (filtered)'}
+          </span>
+      </div>
 
       {/* ADD/EDIT MODAL */}
       <Modal isOpen={showModal} onClose={handleCloseModal} title={editingItem ? 'Edit Item' : 'Create New Item'} maxWidth="800px">
@@ -1619,14 +1596,18 @@ export function ItemMasterSupabase({ userRole }: ItemMasterProps) {
                 </Select>
               </div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '16px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginTop: '16px' }}>
               <div>
-                <Label>Unit Price (₹)</Label>
-                <Input type="number" value={formData.unit_price != null ? String(formData.unit_price) : ''} onChange={(e) => setFormData({ ...formData, unit_price: e.target.value ? parseFloat(e.target.value) : null })} placeholder="0.00" min={0} step="0.01" />
+                <Label>Weight (G)</Label>
+                <Input type="text" value={weightStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setWeightStr(v); }} placeholder="0.0000" />
               </div>
               <div>
-                <Label>Standard Cost (₹)</Label>
-                <Input type="number" value={formData.standard_cost != null ? String(formData.standard_cost) : ''} onChange={(e) => setFormData({ ...formData, standard_cost: e.target.value ? parseFloat(e.target.value) : null })} placeholder="0.00" min={0} step="0.01" />
+                <Label>Unit Price (₹)</Label>
+                <Input type="text" value={unitPriceStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setUnitPriceStr(v); }} placeholder="0.00" />
+              </div>
+              <div>
+                <Label>Standard Cost ($)</Label>
+                <Input type="text" value={standardCostStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setStandardCostStr(v); }} placeholder="0.00" />
               </div>
             </div>
           </div>
