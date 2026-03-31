@@ -40,6 +40,7 @@ import { ROLE_CONFIG, type UserRole } from '../services/authService';
 import { RoleBadge } from '../components/RoleBadge';
 import { GrantAccessModal, type PermissionMap } from '../components/GrantAccessModal';
 import { getUserOverrides, saveUserPermissions, getBulkUserOverrides, invalidateUserPermCache, type OverrideMode } from '../services/permissionService';
+import { Modal, Label, Button } from '../../components/ui/EnterpriseUI';
 
 interface UserManagementProps {
     currentUserId: string;
@@ -1035,32 +1036,24 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
 
             {/* Enhanced Delete Confirmation Modal — Employee ID verification */}
             {showDeleteConfirm && selectedUser && (
-                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-                    <div style={{ backgroundColor: 'white', padding: '32px', borderRadius: '20px', width: '100%', maxWidth: '500px', maxHeight: '90vh', overflowY: 'auto', userSelect: 'none' }} onCopy={(e) => e.preventDefault()}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-                            <h2 style={{ fontSize: '20px', fontWeight: '700', color: '#111827', margin: 0 }}>Confirm User Deletion</h2>
-                            <button onClick={() => { setShowDeleteConfirm(false); setSelectedUser(null); setDeleteEmpIdInput(''); setDeleteReason(''); setDeleteError(''); }} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>
-                                <X size={20} style={{ color: '#6b7280' }} />
-                            </button>
-                        </div>
-
+                <Modal isOpen={showDeleteConfirm} onClose={() => { setShowDeleteConfirm(false); setSelectedUser(null); setDeleteEmpIdInput(''); setDeleteReason(''); setDeleteError(''); }} title="Confirm User Deletion" maxWidth="500px">
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', userSelect: 'none' }} onCopy={(e) => e.preventDefault()}>
                         {/* Warning Banner */}
                         <div style={{
                             background: 'linear-gradient(135deg, rgba(220,38,38,0.05) 0%, rgba(220,38,38,0.1) 100%)',
                             border: '1px solid rgba(220,38,38,0.2)',
-                            borderRadius: '12px',
+                            borderRadius: 'var(--border-radius-md)',
                             padding: '16px',
                             display: 'flex',
                             gap: '12px',
                             alignItems: 'flex-start',
-                            marginBottom: '20px',
                         }}>
-                            <AlertTriangle size={24} style={{ color: '#ef4444', flexShrink: 0 }} />
+                            <AlertTriangle size={24} style={{ color: 'var(--enterprise-error)', flexShrink: 0 }} />
                             <div>
-                                <p style={{ fontWeight: '600', color: '#ef4444', marginBottom: '4px', fontSize: '14px' }}>
+                                <p style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-error)', marginBottom: '4px' }}>
                                     This action cannot be undone
                                 </p>
-                                <p style={{ fontSize: '13px', color: '#6b7280' }}>
+                                <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--enterprise-gray-600)' }}>
                                     You are about to <strong>permanently delete</strong> this user and <strong>all associated data</strong> from the system. Please confirm by entering the Employee ID below.
                                 </p>
                             </div>
@@ -1068,36 +1061,35 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
 
                         {/* User Info Display */}
                         <div style={{
-                            background: '#f8fafc',
-                            borderRadius: '12px',
+                            background: 'var(--enterprise-gray-50)',
+                            borderRadius: 'var(--border-radius-md)',
                             padding: '16px',
-                            marginBottom: '20px',
                         }}>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                                 <div>
-                                    <p style={{ fontSize: '11px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px', fontWeight: 600 }}>Employee ID</p>
-                                    <p style={{ fontWeight: '700', color: '#1e3a8a', fontSize: '14px' }}>{selectedUser.employee_id || '---'}</p>
+                                    <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', marginBottom: '4px' }}>Employee ID</p>
+                                    <p style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-primary)' }}>{selectedUser.employee_id || '---'}</p>
                                 </div>
                                 <div>
-                                    <p style={{ fontSize: '11px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px', fontWeight: 600 }}>Full Name</p>
-                                    <p style={{ fontWeight: '600', color: '#111827', fontSize: '14px' }}>{selectedUser.full_name}</p>
+                                    <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', marginBottom: '4px' }}>Full Name</p>
+                                    <p style={{ fontWeight: 'var(--font-weight-semibold)' }}>{selectedUser.full_name}</p>
                                 </div>
-                                <div>
-                                    <p style={{ fontSize: '11px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px', fontWeight: 600 }}>Role</p>
-                                    <RoleBadge role={selectedUser.role} />
-                                </div>
-                                <div>
-                                    <p style={{ fontSize: '11px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px', fontWeight: 600 }}>Email</p>
-                                    <p style={{ fontSize: '13px', color: '#6b7280', fontFamily: 'monospace' }}>{selectedUser.email}</p>
+                                <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                    <div>
+                                        <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', marginBottom: '4px' }}>Role</p>
+                                        <RoleBadge role={selectedUser.role} />
+                                    </div>
+                                    <div>
+                                        <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', marginBottom: '4px' }}>Email</p>
+                                        <p style={{ fontFamily: 'monospace' }}>{selectedUser.email}</p>
+                                    </div>
                                 </div>
                             </div>
                         </div>
 
                         {/* Employee ID Confirmation Input */}
-                        <div style={{ marginBottom: '16px' }}>
-                            <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
-                                Type Employee ID to Confirm <span style={{ color: '#ef4444' }}>*</span>
-                            </label>
+                        <div>
+                            <Label required>Type Employee ID to Confirm</Label>
                             <input
                                 type="text"
                                 value={deleteEmpIdInput}
@@ -1111,27 +1103,26 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                                 autoComplete="off"
                                 style={{
                                     width: '100%',
-                                    padding: '12px',
-                                    border: '1px solid #e5e7eb',
-                                    borderRadius: '10px',
-                                    fontSize: '14px',
-                                    boxSizing: 'border-box',
+                                    padding: '8px 12px',
+                                    fontSize: 'var(--font-size-base)',
+                                    fontWeight: 'var(--font-weight-normal)',
+                                    color: 'var(--foreground)',
+                                    backgroundColor: 'var(--background)',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: 'var(--border-radius-md)',
                                     outline: 'none',
-                                    transition: 'border-color 0.2s',
+                                    transition: 'all var(--transition-fast)',
+                                    boxSizing: 'border-box'
                                 }}
-                                onFocus={(e) => { e.target.style.borderColor = '#ef4444'; e.target.style.boxShadow = '0 0 0 3px rgba(239,68,68,0.1)'; }}
-                                onBlur={(e) => { e.target.style.borderColor = '#e5e7eb'; e.target.style.boxShadow = 'none'; }}
                             />
-                            <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>
+                            <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '6px' }}>
                                 Must match exactly: <strong>{selectedUser.employee_id || '---'}</strong>
                             </p>
                         </div>
 
                         {/* Deletion Reason */}
-                        <div style={{ marginBottom: '16px' }}>
-                            <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
-                                Reason for Deletion <span style={{ color: '#ef4444' }}>*</span>
-                            </label>
+                        <div>
+                            <Label required>Reason for Deletion</Label>
                             <textarea
                                 value={deleteReason}
                                 onChange={(e) => setDeleteReason(e.target.value)}
@@ -1139,18 +1130,18 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                                 rows={3}
                                 style={{
                                     width: '100%',
-                                    padding: '12px',
-                                    border: '1px solid #e5e7eb',
-                                    borderRadius: '10px',
-                                    fontSize: '14px',
-                                    boxSizing: 'border-box',
+                                    padding: '8px 12px',
+                                    fontSize: 'var(--font-size-base)',
+                                    color: 'var(--foreground)',
+                                    backgroundColor: 'var(--background)',
+                                    border: '1px solid var(--border-color)',
+                                    borderRadius: 'var(--border-radius-md)',
                                     outline: 'none',
                                     resize: 'vertical',
                                     fontFamily: 'inherit',
-                                    transition: 'border-color 0.2s',
+                                    transition: 'all var(--transition-fast)',
+                                    boxSizing: 'border-box'
                                 }}
-                                onFocus={(e) => { e.target.style.borderColor = '#ef4444'; e.target.style.boxShadow = '0 0 0 3px rgba(239,68,68,0.1)'; }}
-                                onBlur={(e) => { e.target.style.borderColor = '#e5e7eb'; e.target.style.boxShadow = 'none'; }}
                             />
                         </div>
 
@@ -1159,11 +1150,10 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                             <div style={{
                                 background: 'rgba(220,38,38,0.1)',
                                 border: '1px solid rgba(220,38,38,0.3)',
-                                borderRadius: '8px',
+                                borderRadius: 'var(--border-radius-md)',
                                 padding: '12px',
-                                color: '#ef4444',
-                                fontSize: '13px',
-                                marginBottom: '16px',
+                                color: 'var(--enterprise-error)',
+                                fontSize: 'var(--font-size-sm)',
                                 display: 'flex',
                                 alignItems: 'center',
                                 gap: '8px',
@@ -1174,41 +1164,26 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                         )}
 
                         {/* Action Buttons */}
-                        <div style={{ display: 'flex', gap: '12px' }}>
-                            <button
-                                onClick={() => { setShowDeleteConfirm(false); setSelectedUser(null); setDeleteEmpIdInput(''); setDeleteReason(''); setDeleteError(''); }}
-                                style={{ flex: 1, padding: '14px', border: 'none', borderRadius: '12px', backgroundColor: '#f3f4f6', color: '#4b5563', fontWeight: '600', cursor: 'pointer', transition: 'all 0.2s' }}
-                                onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#e5e7eb'; }}
-                                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#f3f4f6'; }}
+                        <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', marginTop: '8px' }}>
+                            <Button 
+                                variant="secondary" 
+                                onClick={() => { setShowDeleteConfirm(false); setSelectedUser(null); setDeleteEmpIdInput(''); setDeleteReason(''); setDeleteError(''); }} 
+                                style={{ flex: 1 }}
                             >
                                 Cancel
-                            </button>
-                            <button
-                                onClick={handleDeleteUser}
+                            </Button>
+                            <Button
+                                variant="danger"
                                 disabled={!deleteEmpIdInput.trim() || !deleteReason.trim()}
-                                style={{
-                                    flex: 1,
-                                    padding: '14px',
-                                    border: 'none',
-                                    borderRadius: '12px',
-                                    backgroundColor: !deleteEmpIdInput.trim() || !deleteReason.trim() ? '#fca5a5' : '#ef4444',
-                                    color: 'white',
-                                    fontWeight: '600',
-                                    cursor: !deleteEmpIdInput.trim() || !deleteReason.trim() ? 'not-allowed' : 'pointer',
-                                    opacity: !deleteEmpIdInput.trim() || !deleteReason.trim() ? 0.6 : 1,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    gap: '8px',
-                                    transition: 'all 0.2s',
-                                }}
+                                onClick={handleDeleteUser}
+                                style={{ flex: 1, gap: '8px' }}
                             >
                                 <Trash2 size={16} />
                                 Delete User
-                            </button>
+                            </Button>
                         </div>
                     </div>
-                </div>
+                </Modal>
             )}
 
             {/* Activate/Deactivate Confirmation Modal */}

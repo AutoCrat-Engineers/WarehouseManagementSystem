@@ -19,6 +19,7 @@ import { UserManagement } from './auth/users/UserManagement';
 import { NotificationBell } from './components/notifications/NotificationBell';
 import { getUserPermissions } from './auth/services/permissionService';
 import type { PermissionMap } from './auth/components/GrantAccessModal';
+import { canAccessView as _canAccessView, canAccessAnyPackingModule, canAccessAnyDispatchModule } from './auth/utils/permissionUtils';
 import {
   LayoutDashboard,
   Package,
@@ -170,43 +171,15 @@ export default function App() {
   const [userPerms, setUserPerms] = useState<PermissionMap>({});
 
   // ============================================================================
-  // PERMISSION ENFORCEMENT: Map view IDs → permission keys
+  // PERMISSION ENFORCEMENT: Uses centralized permission utility
   // ============================================================================
-  const VIEW_PERMISSION_MAP: Record<string, string> = {
-    'dashboard': 'dashboard.view',
-    'items': 'items.view',
-    'inventory': 'inventory.view',
-    'stock-movements': 'stock-movements.view',
-    'rack-view': 'rack-view.view',
-    'packing': 'packing.sticker-generation.view',
-    'packing-sticker': 'packing.sticker-generation.view',
-    'packing-details': 'packing.packing-details.view',
-    'packing-list-invoice': 'packing.packing-list-invoice.view',
-    'packing-list-sub-invoice': 'packing.packing-list-sub-invoice.view',
-    'pe-pallet-dashboard': 'packing.pallet-dashboard.view',
-    'pe-contract-configs': 'packing.contract-configs.view',
-    'pe-dispatch': 'packing.dispatch.view',
-    'pe-mpl-home': 'packing.mpl-home.view',
-    'pe-performa-invoice': 'packing.performa-invoice.view',
-    'pe-traceability': 'packing.traceability.view',
-    'orders': 'orders.view',
-    'releases': 'releases.view',
-    'forecast': 'forecast.view',
-    'planning': 'planning.view',
-    'users': 'users.view',
-  };
 
   /**
    * Check if the current user can access a view.
-   * L3 users always have full access (they grant permissions).
-   * L1/L2 users must have the specific view permission.
+   * Delegates to the centralized canAccessView utility.
    */
-  const canAccessView = (view: string): boolean => {
-    if (userRole === 'L3') return true;
-    const permKeys = Object.keys(userPerms);
-    if (permKeys.length === 0) return true;
-    const permKey = VIEW_PERMISSION_MAP[view];
-    return permKey ? userPerms[permKey] === true : true;
+  const canAccessViewLocal = (view: string): boolean => {
+    return _canAccessView(view, userRole, userPerms);
   };
 
   // ============================================================================
@@ -438,60 +411,60 @@ export default function App() {
       case 'dashboard':
         return <DashboardNew accessToken={accessToken} onNavigate={(view) => setCurrentView(view as View)} />;
       case 'items':
-        if (!canAccessView('items')) return renderAccessDenied('Item Master');
+        if (!canAccessViewLocal('items')) return renderAccessDenied('Item Master');
         return <ItemMasterSupabase userRole={userRole} userPerms={userPerms} />;
       case 'inventory':
-        if (!canAccessView('inventory')) return renderAccessDenied('Inventory');
+        if (!canAccessViewLocal('inventory')) return renderAccessDenied('Inventory');
         return <InventoryGrid />;
       case 'stock-movements':
-        if (!canAccessView('stock-movements')) return renderAccessDenied('Stock Movements');
+        if (!canAccessViewLocal('stock-movements')) return renderAccessDenied('Stock Movements');
         return <StockMovement accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
       case 'rack-view':
-        if (!canAccessView('rack-view')) return renderAccessDenied('Rack View');
+        if (!canAccessViewLocal('rack-view')) return renderAccessDenied('Rack View');
         return <RackView userRole={userRole} userPerms={userPerms} />;
       case 'packing':
       case 'packing-sticker':
-        if (!canAccessView('packing-sticker')) return renderAccessDenied('Packing — Sticker Generation');
+        if (!canAccessViewLocal('packing-sticker')) return renderAccessDenied('Packing — Sticker Generation');
         return <PackingModule accessToken={accessToken} userRole={userRole} />;
       case 'packing-details':
-        if (!canAccessView('packing-details')) return renderAccessDenied('Packing — Details');
+        if (!canAccessViewLocal('packing-details')) return renderAccessDenied('Packing — Details');
         return <PackingDetails accessToken={accessToken} userRole={userRole} userPerms={userPerms} onNavigate={(v) => setCurrentView(v as View)} />;
       case 'packing-list-invoice':
-        if (!canAccessView('packing-list-invoice')) return renderAccessDenied('Packing List — Invoice');
+        if (!canAccessViewLocal('packing-list-invoice')) return renderAccessDenied('Packing List — Invoice');
         return <PackingListInvoice accessToken={accessToken} userRole={userRole} onNavigate={(v) => setCurrentView(v as View)} />;
       case 'packing-list-sub-invoice':
-        if (!canAccessView('packing-list-sub-invoice')) return renderAccessDenied('Packing List — Sub Invoice');
+        if (!canAccessViewLocal('packing-list-sub-invoice')) return renderAccessDenied('Packing List — Sub Invoice');
         return <PackingListSubInvoice accessToken={accessToken} userRole={userRole} onNavigate={(v) => setCurrentView(v as View)} />;
       case 'pe-pallet-dashboard':
-        if (!canAccessView('pe-pallet-dashboard')) return renderAccessDenied('Pallet Dashboard');
+        if (!canAccessViewLocal('pe-pallet-dashboard')) return renderAccessDenied('Pallet Dashboard');
         return <PalletDashboard accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
       case 'pe-contract-configs':
-        if (!canAccessView('pe-contract-configs')) return renderAccessDenied('Contract Configs');
+        if (!canAccessViewLocal('pe-contract-configs')) return renderAccessDenied('Contract Configs');
         return <ContractConfigManager accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
       case 'pe-dispatch':
-        if (!canAccessView('pe-dispatch')) return renderAccessDenied('Dispatch Selection');
+        if (!canAccessViewLocal('pe-dispatch')) return renderAccessDenied('Dispatch Selection');
         return <DispatchSelection accessToken={accessToken} userRole={userRole} userPerms={userPerms} onNavigate={(v) => handleNavigation(v as View)} />;
       case 'pe-traceability':
-        if (!canAccessView('pe-traceability')) return renderAccessDenied('Traceability');
+        if (!canAccessViewLocal('pe-traceability')) return renderAccessDenied('Traceability');
         return <TraceabilityViewer accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
       // pe-pl-print removed — integrated into pe-mpl-home
       case 'pe-mpl-home':
-        if (!canAccessView('pe-mpl-home')) return renderAccessDenied('MPL Home');
+        if (!canAccessViewLocal('pe-mpl-home')) return renderAccessDenied('MPL Home');
         return <MasterPackingListHome accessToken={accessToken} userRole={userRole} userPerms={userPerms} onNavigate={(v) => handleNavigation(v as View)} />;
       case 'pe-performa-invoice':
-        if (!canAccessView('pe-performa-invoice')) return renderAccessDenied('Performa Invoice');
+        if (!canAccessViewLocal('pe-performa-invoice')) return renderAccessDenied('Performa Invoice');
         return <PerformaInvoice accessToken={accessToken} userRole={userRole} userPerms={userPerms} onNavigate={(v) => handleNavigation(v as View)} />;
       case 'orders':
-        if (!canAccessView('orders')) return renderAccessDenied('Blanket Orders');
+        if (!canAccessViewLocal('orders')) return renderAccessDenied('Blanket Orders');
         return <BlanketOrders accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
       case 'releases':
-        if (!canAccessView('releases')) return renderAccessDenied('Blanket Releases');
+        if (!canAccessViewLocal('releases')) return renderAccessDenied('Blanket Releases');
         return <BlanketReleases accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
       case 'forecast':
-        if (!canAccessView('forecast')) return renderAccessDenied('Forecasting');
+        if (!canAccessViewLocal('forecast')) return renderAccessDenied('Forecasting');
         return <ForecastingModule accessToken={accessToken} />;
       case 'planning':
-        if (!canAccessView('planning')) return renderAccessDenied('MRP Planning');
+        if (!canAccessViewLocal('planning')) return renderAccessDenied('MRP Planning');
         return <PlanningModule accessToken={accessToken} />;
       case 'users':
         // Only L3 can access user management
@@ -547,28 +520,18 @@ export default function App() {
     // For L1/L2 users with loaded permissions, filter menu items
     // Only skip filtering if NO permissions have been loaded at all (empty object)
     if (userRole !== 'L3') {
+      // For L1/L2 users with loaded permissions, filter menu items
       const permKeys = Object.keys(userPerms);
       if (permKeys.length > 0) {
         items = items.filter(item => {
           // Packing parent: show if ANY packing submodule has view permission
           if (item.id === 'packing') {
-            return (
-              userPerms['packing.sticker-generation.view'] ||
-              userPerms['packing.packing-details.view'] ||
-              userPerms['packing.pallet-dashboard.view'] ||
-              userPerms['packing.contract-configs.view'] ||
-              userPerms['packing.packing-lists.view'] ||
-              userPerms['packing.traceability.view']
-            );
+            return canAccessAnyPackingModule(userRole, userPerms);
           }
           if (item.id === 'dispatch') {
-            return (
-              userPerms['packing.dispatch.view'] ||
-              userPerms['packing.mpl-home.view'] ||
-              userPerms['packing.performa-invoice.view']
-            );
+            return canAccessAnyDispatchModule(userRole, userPerms);
           }
-          return canAccessView(item.id);
+          return canAccessViewLocal(item.id);
         });
       }
     }
@@ -807,7 +770,7 @@ export default function App() {
                       backgroundColor: 'rgba(30, 58, 138, 0.02)',
                     }}>
                       {/* 1. Generate Sticker */}
-                      {canAccessView('packing-sticker') && (
+                      {canAccessViewLocal('packing-sticker') && (
                         <button
                           onClick={() => handleNavigation('packing-sticker')}
                           style={{
@@ -828,7 +791,7 @@ export default function App() {
                       )}
 
                       {/* 2. Packing Details */}
-                      {canAccessView('packing-details') && (
+                      {canAccessViewLocal('packing-details') && (
                         <button
                           onClick={() => handleNavigation('packing-details')}
                           style={{
@@ -851,7 +814,7 @@ export default function App() {
                       {/* ─── Packing Engine Views ─── */}
 
                       {/* Pallet Dashboard */}
-                      {canAccessView('pe-pallet-dashboard') && (
+                      {canAccessViewLocal('pe-pallet-dashboard') && (
                         <button
                           onClick={() => handleNavigation('pe-pallet-dashboard')}
                           style={{
@@ -871,8 +834,8 @@ export default function App() {
                         </button>
                       )}
 
-                      {/* Traceability */}
-                      {canAccessView('pe-traceability') && (
+                      {/* Traceability
+                      {canAccessViewLocal('pe-traceability') && (
                         <button
                           onClick={() => handleNavigation('pe-traceability')}
                           style={{
@@ -890,7 +853,7 @@ export default function App() {
                           <Eye size={15} strokeWidth={currentView === 'pe-traceability' ? 2.2 : 1.8} style={{ flexShrink: 0, opacity: currentView === 'pe-traceability' ? 1 : 0.6 }} />
                           <span>Traceability</span>
                         </button>
-                      )}
+                      )} */}
                     </div>
                   </div>
                 );
@@ -951,7 +914,7 @@ export default function App() {
                       backgroundColor: 'rgba(30, 58, 138, 0.02)',
                     }}>
                       {/* Dispatch Selection */}
-                      {canAccessView('pe-dispatch') && (
+                      {canAccessViewLocal('pe-dispatch') && (
                         <button
                           onClick={() => handleNavigation('pe-dispatch')}
                           style={{
@@ -972,7 +935,7 @@ export default function App() {
                       )}
 
                       {/* Packing List */}
-                      {canAccessView('pe-mpl-home') && (
+                      {canAccessViewLocal('pe-mpl-home') && (
                         <button
                           onClick={() => handleNavigation('pe-mpl-home')}
                           style={{
@@ -993,7 +956,7 @@ export default function App() {
                       )}
 
                       {/* Performa Invoice */}
-                      {canAccessView('pe-performa-invoice') && (
+                      {canAccessViewLocal('pe-performa-invoice') && (
                         <button
                           onClick={() => handleNavigation('pe-performa-invoice')}
                           style={{

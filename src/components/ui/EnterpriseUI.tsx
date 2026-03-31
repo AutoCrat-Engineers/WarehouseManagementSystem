@@ -410,6 +410,7 @@ export function Modal({ isOpen, onClose, title, children, maxWidth = '600px' }: 
             position: 'sticky',
             top: 0,
             backgroundColor: 'var(--card-background)',
+            zIndex: 10,
           }}
         >
           <h2

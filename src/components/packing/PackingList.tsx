@@ -4,8 +4,9 @@
  * Shows box size, item qty, inner box qty, and other packing specifications.
  * ERP-standard layout: breadcrumb, search/filter, table, add/create, status column.
  */
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Card } from '../ui/EnterpriseUI';
+import { Pagination } from '../ui/SharedComponents';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
@@ -36,9 +37,10 @@ const STATUS_COLORS: Record<string, { color: string; bg: string }> = {
 export function PackingList({ accessToken, userRole, onNavigate }: PackingListProps) {
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState('All Statuses');
+    const [page, setPage] = useState(0);
     const [showCreateModal, setShowCreateModal] = useState(false);
 
-    const filtered = SAMPLE_DATA.filter(row => {
+    const filtered = useMemo(() => SAMPLE_DATA.filter(row => {
         const matchSearch = !searchTerm ||
             row.partNo.toLowerCase().includes(searchTerm.toLowerCase()) ||
             row.partName.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -46,7 +48,15 @@ export function PackingList({ accessToken, userRole, onNavigate }: PackingListPr
             row.id.toLowerCase().includes(searchTerm.toLowerCase());
         const matchStatus = statusFilter === 'All Statuses' || row.status === statusFilter;
         return matchSearch && matchStatus;
-    });
+    }), [searchTerm, statusFilter]);
+
+    useEffect(() => {
+        setPage(0);
+    }, [searchTerm, statusFilter]);
+
+    const displayedRecords = useMemo(() => {
+        return filtered.slice(page * 20, (page + 1) * 20);
+    }, [filtered, page]);
 
     const counts = {
         total: SAMPLE_DATA.length,
@@ -208,7 +218,7 @@ export function PackingList({ accessToken, userRole, onNavigate }: PackingListPr
                                         No records match your search criteria.
                                     </td>
                                 </tr>
-                            ) : filtered.map(row => {
+                            ) : displayedRecords.map(row => {
                                 const sc = STATUS_COLORS[row.status] || STATUS_COLORS['Active'];
                                 return (
                                     <tr key={row.id}
@@ -261,13 +271,29 @@ export function PackingList({ accessToken, userRole, onNavigate }: PackingListPr
                         </tbody>
                     </table>
                 </div>
-            </Card>
-
-            {filtered.length > 0 && (
-                <div style={{ marginTop: 8, fontSize: 12, color: '#9ca3af', textAlign: 'right' }}>
-                    Showing {filtered.length} of {SAMPLE_DATA.length} specification{SAMPLE_DATA.length !== 1 ? 's' : ''}
-                </div>
+            {displayedRecords.length > 0 && (
+                <Pagination
+                    page={page}
+                    pageSize={20}
+                    totalCount={filtered.length}
+                    onPageChange={setPage}
+                />
             )}
+        </Card>
+
+        {/* Results Summary */}
+        <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            fontSize: '12px',
+            color: 'var(--enterprise-gray-600)',
+            marginTop: '16px'
+        }}>
+            <span>
+                Showing {filtered.length} items
+            </span>
+        </div>
 
             {/* Create Modal */}
             {showCreateModal && (

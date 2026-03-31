@@ -1,6 +1,6 @@
 # Architecture Overview
 
-> **Version:** 0.4.1 | **Last Updated:** 2026-03-06
+> **Version:** 0.5.0 | **Last Updated:** 2026-03-31
 
 ## System Architecture
 

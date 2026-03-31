@@ -9,13 +9,9 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Plus, Edit2, Trash2, Search, Package, Eye, ChevronDown, ChevronRight, AlertTriangle, Clock, Calendar, Download, X, XCircle, CheckCircle, Settings, CheckCircle2, Info } from 'lucide-react';
-import { Card, Button, Badge, Input, Select, Label, Modal, LoadingSpinner, EmptyState, Textarea, ModuleLoader } from './ui/EnterpriseUI';
-import {
-  SummaryCard, SummaryCardsGrid,
-  FilterBar as SharedFilterBar, ActionBar,
-  SearchBox, ExportCSVButton, ClearFiltersButton, AddButton,
-} from './ui/SharedComponents';
+import { Plus, Search, X, Package, CheckCircle2, CheckCircle, XCircle, AlertTriangle, Info, Edit2, Trash2, Settings, ChevronDown, ChevronRight, Eye, Calendar, Clock, Box, Download } from 'lucide-react';
+import { Card, Button, Input, Select, Label, Badge, Modal, EmptyState, Textarea, LoadingSpinner, ModuleLoader } from './ui/EnterpriseUI';
+import { SummaryCard, SummaryCardsGrid, FilterBar as SharedFilterBar, ActionBar, SearchBox, ActionButton, ExportCSVButton, ClearFiltersButton, AddButton, sharedThStyle, sharedTdStyle, Pagination } from './ui/SharedComponents';
 import * as itemsApi from '../utils/api/itemsSupabase';
 import { getSupabaseClient } from '../utils/supabase/client';
 
@@ -789,9 +785,9 @@ function ItemViewModal({ isOpen, onClose, item }: { isOpen: boolean; onClose: ()
             <div><Label>Lead Time</Label><Input value={item.lead_time_days || '-'} disabled /></div>
           </div>
           <div style={{ borderTop: '1px solid var(--enterprise-gray-200)', paddingTop: '16px', marginTop: '8px' }}>
-            <p style={{ fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-gray-600)', marginBottom: '12px' }}>Pricing</p>
+            <p style={{ fontSize: 'var(--font-size-sm)', fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-gray-600)', marginBottom: '12px' }}>Cost & Weight</p>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
-              <div><Label>Unit Price</Label><Input value={item.unit_price != null ? `₹${item.unit_price.toLocaleString()}` : '-'} disabled /></div>
+              <div><Label>Weight (kg)</Label><Input value={item.weight != null ? item.weight.toLocaleString() : '-'} disabled /></div>
               <div><Label>Standard Cost</Label><Input value={item.standard_cost != null ? `$${item.standard_cost.toLocaleString()}` : '-'} disabled /></div>
               <div><Label>Status</Label><Input value={item.is_active ? 'Active' : 'Inactive'} disabled /></div>
             </div>
@@ -1059,8 +1055,8 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<Item | null>(null);
 
-  // Pagination state - show 20 items at a time
-  const [displayCount, setDisplayCount] = useState(20);
+  // Pagination state
+  const [page, setPage] = useState<number>(0);
   const ITEMS_PER_PAGE = 20;
 
   // Actions dropdown state (matches UserManagement pattern)
@@ -1138,17 +1134,14 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
     return result;
   }, [items, cardFilter, searchTerm]);
 
-  // Paginated items - only show displayCount items
+  // Paginated items
   const displayedItems = useMemo(() => {
-    return filteredItems.slice(0, displayCount);
-  }, [filteredItems, displayCount]);
+    return filteredItems.slice(page * ITEMS_PER_PAGE, (page + 1) * ITEMS_PER_PAGE);
+  }, [filteredItems, page]);
 
-  // Check if there are more items to load
-  const hasMoreItems = displayCount < filteredItems.length;
-
-  // Reset display count when filters change
+  // Reset page when filters change
   useEffect(() => {
-    setDisplayCount(ITEMS_PER_PAGE);
+    setPage(0);
   }, [cardFilter, searchTerm]);
 
   // Check if any CARD filters are active (not search - search has its own X button)
@@ -1164,10 +1157,7 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
     setCardFilter('ALL');
   };
 
-  // Handle load more
-  const handleLoadMore = () => {
-    setDisplayCount(prev => prev + ITEMS_PER_PAGE);
-  };
+
 
   // Handle export
   const handleExport = () => {
@@ -1523,54 +1513,29 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
                 </tbody>
               </table>
             </div>
-
-            {/* Load More Button - Outside scrollable area */}
-            {hasMoreItems && (
-              <div style={{
-                padding: '20px',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: '12px',
-                borderTop: '1px solid var(--table-border)',
-                position: 'relative',
-                zIndex: 10,
-                backgroundColor: 'white',
-              }}>
-                <p style={{
-                  fontSize: '13px',
-                  color: 'var(--enterprise-gray-500)',
-                  margin: 0,
-                }}>
-                  Showing {displayedItems.length} of {filteredItems.length} items
-                </p>
-                <Button
-                  variant="primary"
-                  onClick={handleLoadMore}
-                >
-                  Load More ({Math.min(ITEMS_PER_PAGE, filteredItems.length - displayedItems.length)} more)
-                </Button>
-              </div>
-            )}
-
-            {/* Show total when all loaded */}
-            {!hasMoreItems && displayedItems.length > 0 && (
-              <div style={{
-                padding: '16px',
-                textAlign: 'center',
-                borderTop: '1px solid var(--table-border)',
-              }}>
-                <p style={{
-                  fontSize: '13px',
-                  color: 'var(--enterprise-gray-500)',
-                }}>
-                  Showing all {filteredItems.length} items
-                </p>
-              </div>
-            )}
+            <Pagination
+              page={page}
+              pageSize={ITEMS_PER_PAGE}
+              totalCount={filteredItems.length}
+              onPageChange={setPage}
+            />
           </>
         )}
       </Card>
+
+      {/* Results Summary */}
+      <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          fontSize: '12px',
+          color: 'var(--enterprise-gray-600)',
+      }}>
+          <span>
+              Showing {filteredItems.length} of {items.length} items
+              {hasActiveFilters && ' (filtered)'}
+          </span>
+      </div>
 
       {/* ADD/EDIT MODAL */}
       <Modal isOpen={showModal} onClose={handleCloseModal} title={editingItem ? 'Edit Item' : 'Create New Item'} maxWidth="800px">

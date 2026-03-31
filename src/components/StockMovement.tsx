@@ -34,16 +34,15 @@ import {
 } from 'lucide-react';
 import { Card, Button, Badge, Modal, LoadingSpinner, EmptyState, ModuleLoader } from './ui/EnterpriseUI';
 import {
-  SummaryCard, SummaryCardsGrid,
-  FilterBar, ActionBar,
-  SearchBox, StatusFilter, DateRangeFilter,
-  ExportCSVButton, ClearFiltersButton, AddButton,
+  SummaryCard, SummaryCardsGrid, SearchBox, FilterBar, ActionBar, ActionButton, RefreshButton,
+  StatusFilter, AddButton, ExportCSVButton, DateRangeFilter, ClearFiltersButton, Pagination
 } from './ui/SharedComponents';
 import { getSupabaseClient } from '../utils/supabase/client';
 import { createPackingFromMovementApproval, createPackingFromMovementRejection } from './packing/packingService';
 import { notifyOnRequestCreated, notifyOnRequestDecision } from '../utils/notifications/notificationService';
 import { calculatePalletImpact } from './packing-engine/packingEngineService';
 import type { PalletImpact } from './packing-engine/packingEngineService';
+import { useSessionPersistence } from '../hooks/useSessionPersistence';
 
 // ============================================================================
 // TYPES
@@ -336,6 +335,34 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   const [referenceType, setReferenceType] = useState<string>('');
   const [referenceId, setReferenceId] = useState<string>('');
 
+  // ── SESSION PERSISTENCE (stock movement form) ──
+  const {
+    patchSession: patchSmSession,
+    completeSession: completeSmSession,
+    abandonSession: abandonSmSession,
+  } = useSessionPersistence(
+    'stock_movement_form',
+    undefined,
+    undefined,
+    {
+      onRecover: (data, isNew) => {
+        if (!isNew && data && data.showModal) {
+          // Restore modal form state
+          setShowModal(true);
+          if (data.selectedItem) setSelectedItem(data.selectedItem);
+          if (data.stockType) setStockType(data.stockType);
+          if (data.selectedWarehouse) setSelectedWarehouse(data.selectedWarehouse);
+          if (data.quantity) setQuantity(data.quantity);
+          if (data.boxCount) setBoxCount(data.boxCount);
+          if (data.note) setNote(data.note);
+          if (data.referenceType) setReferenceType(data.referenceType);
+          if (data.referenceId) setReferenceId(data.referenceId);
+          if (data.selectedCategory) setSelectedCategory(data.selectedCategory);
+        }
+      },
+    }
+  );
+
   // Supervisor review modal state
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [reviewMovement, setReviewMovement] = useState<MovementRecord | null>(null);
@@ -360,17 +387,58 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
 
   const searchRef = useRef<HTMLDivElement>(null);
   const PAGE_SIZE = 20;
-  const [displayCount, setDisplayCount] = useState(PAGE_SIZE);
+  const [page, setPage] = useState(0);
+  const [totalDbCount, setTotalDbCount] = useState(0);
+  const realtimeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounced search for server-side queries (300ms delay after last keystroke)
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchTerm), 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  // Ref holds current filter values — enables stable useCallback while reading latest filters
+  const filtersRef = useRef({ status: 'ALL', type: 'ALL', stockType: 'ALL', dateFrom: '', dateTo: '', search: '' });
+  filtersRef.current = { status: filterStatus, type: filterType, stockType: filterStockType, dateFrom: filterDateFrom, dateTo: filterDateTo, search: debouncedSearch };
 
   // ============================================================================
   // FETCH MOVEMENTS FOR MAIN PAGE
   // ============================================================================
 
-  const fetchMovements = useCallback(async () => {
+  /**
+   * Fetch a page of movements with SERVER-SIDE filtering.
+   * Filters are read from filtersRef (kept current on every render).
+   * Query order: SELECT → WHERE (filters) → ORDER BY → LIMIT/OFFSET
+   */
+  const fetchMovements = useCallback(async (offset = 0) => {
     setLoading(true);
     try {
-      // STEP 1: Fetch headers (must be first — everything depends on it)
-      const { data: headers, error: headErr } = await supabase
+      const filters = filtersRef.current;
+
+      // ── PRE-SEARCH: Cross-table text search (item_code, part_number, MSN) ──
+      let searchHeaderIds: string[] | null = null;
+      if (filters.search) {
+        const term = filters.search;
+        const { data: matchingItems } = await supabase
+          .from('items')
+          .select('item_code')
+          .or(`item_code.ilike.%${term}%,part_number.ilike.%${term}%,master_serial_no.ilike.%${term}%`)
+          .limit(200);
+        const matchingItemCodes = (matchingItems || []).map((i: any) => i.item_code);
+        if (matchingItemCodes.length > 0) {
+          const { data: matchingLines } = await supabase
+            .from('inv_movement_lines')
+            .select('header_id')
+            .in('item_code', matchingItemCodes);
+          searchHeaderIds = [...new Set((matchingLines || []).map((l: any) => l.header_id as string))];
+        } else {
+          searchHeaderIds = [];
+        }
+      }
+
+      // ── BUILD QUERY: Filters applied BEFORE pagination (critical fix) ──
+      let query = supabase
         .from('inv_movement_headers')
         .select(`
           id, movement_number, movement_date, movement_type, status,
@@ -380,10 +448,53 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
           source_warehouse_id, destination_warehouse_id,
           source_warehouse:source_warehouse_id ( warehouse_name, warehouse_code ),
           destination_warehouse:destination_warehouse_id ( warehouse_name, warehouse_code )
-        `)
+        `, { count: 'exact' });
+
+      // Status filter (server-side)
+      if (filters.status !== 'ALL') {
+        if (filters.status === 'COMPLETED' || filters.status === 'PARTIALLY_APPROVED') {
+          // DB stores both as 'APPROVED'; client distinguishes full vs partial after fetch
+          query = query.eq('status', 'APPROVED');
+        } else {
+          query = query.eq('status', filters.status);
+        }
+      }
+
+      // Movement type filter
+      if (filters.type !== 'ALL') {
+        query = query.eq('movement_type', filters.type);
+      }
+
+      // Stock type filter (maps to movement type groups)
+      if (filters.stockType !== 'ALL') {
+        if (filters.stockType === 'REJECTION') {
+          query = query.in('movement_type', REVERSE_MOVEMENT_TYPES);
+        } else {
+          query = query.not('movement_type', 'in', `(${REVERSE_MOVEMENT_TYPES.join(',')})`);
+        }
+      }
+
+      // Date range filter
+      if (filters.dateFrom) query = query.gte('movement_date', filters.dateFrom);
+      if (filters.dateTo) query = query.lte('movement_date', filters.dateTo);
+
+      // Search filter (movement_number + pre-searched item matches)
+      if (filters.search) {
+        const term = filters.search;
+        if (searchHeaderIds && searchHeaderIds.length > 0) {
+          const limitedIds = searchHeaderIds.slice(0, 100);
+          query = query.or(`movement_number.ilike.%${term}%,id.in.(${limitedIds.join(',')})`);
+        } else {
+          query = query.ilike('movement_number', `%${term}%`);
+        }
+      }
+
+      // STEP 1: Ordering + Pagination applied AFTER all filters
+      const { data: headers, count, error: headErr } = await query
         .order('created_at', { ascending: false })
-        .limit(200);
+        .range(offset, offset + PAGE_SIZE - 1);
       if (headErr) throw headErr;
+      setTotalDbCount(count ?? 0);
 
       const headerIds = (headers || []).map((h: any) => h.id);
       const userIds = [...new Set((headers || []).map((h: any) => h.requested_by).filter(Boolean))];
@@ -472,14 +583,39 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
           reference_document_number: h.reference_document_number || null,
         };
       });
+
       setMovements(records);
     } catch (err) { console.error('Error fetching movements:', err); }
     finally { setLoading(false); }
   }, [supabase]);
 
-  useEffect(() => { fetchMovements(); }, [fetchMovements]);
+  // Fetch summary counts separately (lightweight, no enrichment)
+  const [summaryCounts, setSummaryCounts] = useState({ total: 0, pending: 0, completed: 0, rejected: 0 });
+  const fetchSummaryCounts = useCallback(async () => {
+    try {
+      const [totalR, pendingR, approvedR, rejectedR] = await Promise.all([
+        supabase.from('inv_movement_headers').select('id', { count: 'exact', head: true }),
+        supabase.from('inv_movement_headers').select('id', { count: 'exact', head: true }).eq('status', 'PENDING_APPROVAL'),
+        supabase.from('inv_movement_headers').select('id', { count: 'exact', head: true }).eq('status', 'APPROVED'),
+        supabase.from('inv_movement_headers').select('id', { count: 'exact', head: true }).eq('status', 'REJECTED'),
+      ]);
+      setSummaryCounts({
+        total: totalR.count ?? 0,
+        pending: pendingR.count ?? 0,
+        completed: approvedR.count ?? 0,
+        rejected: rejectedR.count ?? 0,
+      });
+    } catch { /* non-critical */ }
+  }, [supabase]);
 
-  // Real-time subscription: auto-refresh on approval/status changes
+  // Fetch data when page changes
+  useEffect(() => { fetchMovements(page * PAGE_SIZE); }, [fetchMovements, page]);
+  // Reset to page 0 and re-fetch when any filter changes
+  useEffect(() => { setPage(0); fetchMovements(0); }, [filterStatus, filterType, filterStockType, filterDateFrom, filterDateTo, debouncedSearch, fetchMovements]);
+  // Load summary counts on mount
+  useEffect(() => { fetchSummaryCounts(); }, [fetchSummaryCounts]);
+
+  // Real-time subscription: debounced auto-refresh on approval/status changes
   useEffect(() => {
     const channel = supabase
       .channel('stock-movements-realtime')
@@ -487,16 +623,21 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
         'postgres_changes',
         { event: '*', schema: 'public', table: 'inv_movement_headers' },
         () => {
-          // Auto-refresh when any movement header is inserted, updated, or deleted
-          fetchMovements();
+          // Debounce: avoid rapid-fire refetches when multiple changes occur
+          if (realtimeDebounce.current) clearTimeout(realtimeDebounce.current);
+          realtimeDebounce.current = setTimeout(() => {
+            fetchMovements(0); setPage(0);
+            fetchSummaryCounts();
+          }, 1000);
         }
       )
       .subscribe();
 
     return () => {
+      if (realtimeDebounce.current) clearTimeout(realtimeDebounce.current);
       supabase.removeChannel(channel);
     };
-  }, [supabase, fetchMovements]);
+  }, [supabase, fetchMovements, fetchSummaryCounts]);
 
   // Fetch current logged-in user's full_name for print slip Verified By
   useEffect(() => {
@@ -637,12 +778,19 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
 
   const handleSelectItem = (item: ItemResult) => {
     setSelectedItem(item);
+    patchSmSession({ selectedItem: item });
     setSearchQuery(item.part_number || item.item_code);
     setShowDropdown(false);
     fetchWarehouseStocks(item.item_code);
-    setSelectedWarehouse(''); setStockType(''); setSelectedRoute(null);
+    
+    // Apply user-requested defaults automatically
+    setStockType('STOCK_IN');
+    setSelectedWarehouse('PW');
+    setReferenceType('WORK_ORDER');
+    setReferenceId('AE/WO/D/');
+    
     setQuantity(0); setNote(''); setFormMessage(null);
-    setSelectedCategory(''); setReferenceType(''); setReferenceId('');
+    setSelectedCategory(''); 
     setBoxCount(0); setInnerBoxQty(0); setPackingSpecError(null);
   };
 
@@ -679,8 +827,8 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
     setPalletImpact(null); setAdjustmentAcknowledged(false);
   };
 
-  const openModal = () => { resetForm(); setShowModal(true); };
-  const closeModal = () => { setShowModal(false); resetForm(); };
+  const openModal = () => { resetForm(); setShowModal(true); patchSmSession({ showModal: true }); };
+  const closeModal = () => { setShowModal(false); resetForm(); abandonSmSession(); };
 
   // ============================================================================
   // SUBMIT REQUEST (PENDING — No Stock Movement) or IMMEDIATE for REJECTION_DISPOSAL
@@ -799,7 +947,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
 
       setFormMessage({ type: 'success', text: `Request ${movNum} submitted for approval.` });
       showToast('success', 'Request Submitted', `Movement ${movNum} has been submitted for supervisor approval.`);
-      fetchMovements();
+      fetchMovements(); fetchSummaryCounts();
 
       // ── NOTIFICATION: Notify supervisors (L2/L3) about new request ──
       notifyOnRequestCreated(
@@ -810,7 +958,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
         header.id,
       ).catch(err => console.error('Notification send failed (non-blocking):', err));
 
-      setTimeout(() => closeModal(), 1500);
+      setTimeout(() => { closeModal(); completeSmSession(); }, 1500);
     } catch (err: any) {
       console.error('Submit error:', err);
       setFormMessage({ type: 'error', text: err.message || 'Failed to submit request.' });
@@ -1083,7 +1231,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
       }
 
       setShowReviewModal(false);
-      fetchMovements();
+      fetchMovements(); fetchSummaryCounts();
 
       // Show success toast
       const movNum = reviewMovement.movement_number;
@@ -1127,31 +1275,20 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   // FILTER / SEARCH
   // ============================================================================
 
-  const filteredMovements = movements.filter(m => {
-    const matchesSearch = !searchTerm ||
-      m.movement_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      m.part_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      m.master_serial_no?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      m.item_code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      m.source_warehouse?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      m.destination_warehouse?.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesFilter = filterType === 'ALL' || m.movement_type === filterType;
-    const matchesStatus = filterStatus === 'ALL' ||
-      (filterStatus === 'COMPLETED' ? ['COMPLETED', 'APPROVED'].includes(m.status) : m.status === filterStatus);
-    const matchesStockType = filterStockType === 'ALL' || getStockType(m.movement_type) === filterStockType;
-    const matchesDateFrom = !filterDateFrom || (m.movement_date && m.movement_date >= filterDateFrom);
-    const matchesDateTo = !filterDateTo || (m.movement_date && m.movement_date <= filterDateTo);
-    return matchesSearch && matchesFilter && matchesStatus && matchesStockType && matchesDateFrom && matchesDateTo;
-  });
+  // ── DISPLAY: Most filters applied server-side. Only client-side post-filter
+  // is COMPLETED vs PARTIALLY_APPROVED (DB stores both as 'APPROVED'). ──
+  const filteredMovements = (filterStatus === 'COMPLETED' || filterStatus === 'PARTIALLY_APPROVED')
+    ? movements.filter(m => m.status === filterStatus)
+    : movements;
 
-  const displayedMovements = filteredMovements.slice(0, displayCount);
-  const hasMore = displayCount < filteredMovements.length;
+  const displayedMovements = filteredMovements;
+  const hasMore = movements.length < totalDbCount;
 
-  // Summary counts
-  const totalMovements = movements.length;
-  const pendingCount = movements.filter(m => m.status === 'PENDING_APPROVAL').length;
-  const completedCount = movements.filter(m => ['APPROVED', 'COMPLETED'].includes(m.status)).length;
-  const rejectedCount = movements.filter(m => m.status === 'REJECTED').length;
+  // Summary counts from lightweight server query
+  const totalMovements = summaryCounts.total;
+  const pendingCount = summaryCounts.pending;
+  const completedCount = summaryCounts.completed;
+  const rejectedCount = summaryCounts.rejected;
 
   // All active reason codes (no reason_type filtering needed)
   const filteredReasonCodes = reasonCodes;
@@ -1798,7 +1935,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
             overflow: 'hidden', boxShadow: 'var(--shadow-sm)',
             opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto',
           }}>
-            <div className="table-responsive" style={{ overflowX: 'auto', maxHeight: 'calc(100vh - 380px)', overflowY: 'auto' }}>
+            <div className="table-responsive" style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                 <colgroup>
                   <col style={{ width: '12%' }} />
@@ -1810,7 +1947,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                   <col style={{ width: '14%' }} />
                   <col style={{ width: '11%' }} />
                 </colgroup>
-                <thead style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--enterprise-gray-50)' }}>
+                <thead style={{ background: 'var(--enterprise-gray-50)' }}>
                   <tr>
                     <th style={thStyle}>Movement #</th>
                     <th style={thStyle}>Date</th>
@@ -1876,50 +2013,32 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                 </tbody>
               </table>
 
-              {/* Load More — inside the scrollable area so it only shows at the bottom */}
-              {hasMore && (
-                <div style={{
-                  padding: '20px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  gap: '10px',
-                  borderTop: '1px solid var(--enterprise-gray-200)',
-                  background: 'white',
-                }}>
-                  <p style={{
-                    fontSize: '13px',
-                    color: 'var(--enterprise-gray-500)',
-                    margin: 0,
-                  }}>
-                    Showing {displayedMovements.length} of {filteredMovements.length} movements
-                  </p>
-                  <button className="load-more-btn" onClick={() => setDisplayCount(prev => prev + PAGE_SIZE)}>
-                    Load More ({Math.min(PAGE_SIZE, filteredMovements.length - displayCount)} more)
-                  </button>
-                </div>
-              )}
-
-              {/* Show total when all loaded */}
-              {!hasMore && displayedMovements.length > 0 && (
-                <div style={{
-                  padding: '14px',
-                  textAlign: 'center',
-                  borderTop: '1px solid var(--enterprise-gray-200)',
-                }}>
-                  <p style={{
-                    fontSize: '13px',
-                    color: 'var(--enterprise-gray-500)',
-                    margin: 0,
-                  }}>
-                    Showing all {filteredMovements.length} movements
-                  </p>
-                </div>
+              {filteredMovements.length > 0 && (
+                <Pagination
+                  page={page}
+                  pageSize={PAGE_SIZE}
+                  totalCount={totalDbCount}
+                  onPageChange={setPage}
+                />
               )}
             </div>
           </div>
         </>
       )}
+
+      {/* Results Summary */}
+      <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          fontSize: '12px',
+          color: 'var(--enterprise-gray-600)',
+          marginTop: '16px'
+      }}>
+          <span>
+              Total Records: {totalDbCount}
+          </span>
+      </div>
 
       {/* ─── NEW MOVEMENT MODAL ─── */}
       <Modal isOpen={showModal} onClose={closeModal} title="New Stock Movement" maxWidth="780px">
@@ -1952,12 +2071,20 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                 placeholder="Type to search..." style={{ ...mInputStyle, paddingLeft: '38px' }} />
               <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
               {searching && <Loader2 size={16} style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', color: '#3b82f6', animation: 'spin 1s linear infinite' }} />}
-              {showDropdown && searchResults.length > 0 && (
-                <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', boxShadow: '0 10px 25px rgba(0,0,0,0.12)', marginTop: '4px', maxHeight: '200px', overflowY: 'auto' }}>
+            </div>
+            {showDropdown && searchResults.length > 0 && (
+              <>
+                <style>{`
+                  @keyframes smDropdownSlideIn {
+                    from { opacity: 0; transform: translateY(-6px); }
+                    to { opacity: 1; transform: translateY(0); }
+                  }
+                `}</style>
+                <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', marginTop: '4px', animation: 'smDropdownSlideIn 0.35s cubic-bezier(0.4, 0, 0.2, 1)' }}>
                   {searchResults.map(item => (
                     <button key={item.id} onClick={() => handleSelectItem(item)} style={{
-                      width: '100%', padding: '8px 14px', border: 'none', background: 'none', textAlign: 'left',
-                      cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '1px',
+                      width: '100%', padding: '10px 14px', border: 'none', background: 'none', textAlign: 'left',
+                      cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '2px',
                       borderBottom: '1px solid #f3f4f6', transition: 'background 0.15s',
                     }}
                       onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#f0f9ff'; }}
@@ -1970,8 +2097,8 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                     </button>
                   ))}
                 </div>
-              )}
-            </div>
+              </>
+            )}
           </div>
 
           {/* Item Details + Stock (after selection) */}
@@ -2068,14 +2195,20 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <div>
                   <label style={mLabelStyle}>Select Warehouse *</label>
-                  <select value={selectedWarehouse} onChange={e => setSelectedWarehouse(e.target.value as LocationCode)} style={mSelectStyle}>
-                    <option value="">Choose warehouse...</option>
-                    {getWarehousesForStockType(stockType).map(code => (
-                      <option key={code} value={code}>
-                        {code === 'CUSTOMER' ? 'Customer' : `${LOCATIONS[code as LocationCode]?.name || code} (${code})`}
-                      </option>
-                    ))}
-                  </select>
+                  {stockType === 'STOCK_IN' ? (
+                    <div style={{ padding: '0 12px', border: '1px solid #e5e7eb', borderRadius: '8px', fontSize: '13px', backgroundColor: '#f9fafb', color: '#111827', display: 'flex', alignItems: 'center', height: '42px', fontWeight: 500, userSelect: 'none' }}>
+                      FG Warehouse (PW)
+                    </div>
+                  ) : (
+                    <select value={selectedWarehouse} onChange={e => setSelectedWarehouse(e.target.value as LocationCode)} style={mSelectStyle}>
+                      <option value="">Choose warehouse...</option>
+                      {getWarehousesForStockType(stockType).map(code => (
+                        <option key={code} value={code}>
+                          {code === 'CUSTOMER' ? 'Customer' : `${LOCATIONS[code as LocationCode]?.name || code} (${code})`}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
                 <div>
                   <label style={mLabelStyle}>Movement Route</label>
