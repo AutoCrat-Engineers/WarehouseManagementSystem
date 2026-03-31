@@ -42,14 +42,11 @@ export const VIEW_PERMISSION_MAP: Record<string, string> = {
     'packing':                  'packing.sticker-generation.view',
     'packing-sticker':          'packing.sticker-generation.view',
     'packing-details':          'packing.packing-details.view',
-    'packing-list-invoice':     'packing.packing-list-invoice.view',
-    'packing-list-sub-invoice': 'packing.packing-list-sub-invoice.view',
     'pe-pallet-dashboard':      'packing.pallet-dashboard.view',
     'pe-contract-configs':      'packing.contract-configs.view',
     'pe-dispatch':              'packing.dispatch.view',
     'pe-mpl-home':              'packing.mpl-home.view',
     'pe-performa-invoice':      'packing.performa-invoice.view',
-    'pe-traceability':          'packing.traceability.view',
     'orders':                   'orders.view',
     'releases':                 'releases.view',
     'forecast':                 'forecast.view',
@@ -156,12 +153,8 @@ export function canAccessAnyPackingModule(userRole: UserRole, userPerms: Permiss
     const packingModules = [
         'packing.sticker-generation',
         'packing.packing-details',
-        'packing.packing-list-invoice',
-        'packing.packing-list-sub-invoice',
         'packing.pallet-dashboard',
         'packing.contract-configs',
-        'packing.packing-lists',
-        'packing.traceability',
     ];
 
     return packingModules.some(mod => userPerms[`${mod}.view`] === true);

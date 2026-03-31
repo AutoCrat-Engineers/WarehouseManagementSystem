@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-> **Version:** 0.4.1 | **Last Updated:** 2026-03-06  
+> **Version:** 0.5.0 | **Last Updated:** 2026-03-31  
 > **Full Schema:** See `.db_reference/presentschema.sql` for the complete SQL definition.
 
 ## Table Groups

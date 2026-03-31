@@ -104,14 +104,15 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
         fetchUser();
     }, [supabase]);
 
-    // Fetch packing requests — server-side paginated with filters
+    // Fetch packing requests — server-side paginated with filters + enrichment
     const fetchRequests = useCallback(async (offset = 0, statusOverride?: string) => {
         setLoading(true);
         try {
             const activeStatus = statusOverride ?? statusFilter;
+            const sb = getSupabaseClient();
 
             // Build count query that respects current status filter
-            let countQuery = getSupabaseClient()
+            let countQuery = sb
                 .from('packing_requests')
                 .select('id', { count: 'exact', head: true })
                 .neq('status', 'REJECTED');
@@ -122,7 +123,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
             setTotalDbCount(countResult.count ?? 0);
 
             // Fetch data with server-side status filter
-            let dataQuery = getSupabaseClient()
+            let dataQuery = sb
                 .from('packing_requests')
                 .select('*')
                 .neq('status', 'REJECTED');
@@ -133,7 +134,44 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
                 .order('created_at', { ascending: false })
                 .range(offset, offset + PAGE_SIZE - 1);
             if (fetchErr) throw fetchErr;
-            setRequests(data || []);
+
+            const rows = data || [];
+            if (rows.length === 0) { setRequests([]); return; }
+
+            // ── ENRICHMENT: Fetch MSL from items + box counts from packing_boxes ──
+            const itemCodes = [...new Set(rows.map((r: any) => r.item_code).filter(Boolean))];
+            const requestIds = rows.map((r: any) => r.id);
+
+            const [itemsResult, boxesResult] = await Promise.all([
+                itemCodes.length
+                    ? sb.from('items').select('item_code, item_name, master_serial_no').in('item_code', itemCodes)
+                    : Promise.resolve({ data: [] as any[] }),
+                requestIds.length
+                    ? sb.from('packing_boxes').select('packing_request_id, box_qty').in('packing_request_id', requestIds)
+                    : Promise.resolve({ data: [] as any[] }),
+            ]);
+
+            // Build item lookup: item_code → { item_name, master_serial_no }
+            const itemMap: Record<string, { item_name: string; master_serial_no: string | null }> = {};
+            (itemsResult.data || []).forEach((i: any) => {
+                itemMap[i.item_code] = { item_name: i.item_name, master_serial_no: i.master_serial_no };
+            });
+
+            // Build box aggregate: packing_request_id → { count }
+            const boxAgg: Record<string, number> = {};
+            (boxesResult.data || []).forEach((b: any) => {
+                boxAgg[b.packing_request_id] = (boxAgg[b.packing_request_id] || 0) + 1;
+            });
+
+            // Enrich rows with joined/computed fields
+            const enriched = rows.map((r: any) => ({
+                ...r,
+                item_name: itemMap[r.item_code]?.item_name || r.item_code,
+                master_serial_no: itemMap[r.item_code]?.master_serial_no || null,
+                boxes_count: boxAgg[r.id] ?? null,
+            }));
+
+            setRequests(enriched);
         } catch (err) {
             console.error('Error fetching packing requests:', err);
         } finally {

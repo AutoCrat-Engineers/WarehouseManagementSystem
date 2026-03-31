@@ -1,6 +1,6 @@
 # Module Overview
 
-> **Version:** 0.4.1 | **Last Updated:** 2026-03-06
+> **Version:** 0.5.0 | **Last Updated:** 2026-03-31
 
 ## Module Dependency Map
 
@@ -42,7 +42,7 @@ flowchart TD
 | Dashboard | `DashboardNew.tsx` | 16KB | `useDashboard` hook |
 | Item Master | `ItemMasterSupabase.tsx` | 77KB | Supabase client, GRBAC |
 | Inventory Grid | `InventoryGrid.tsx` | 42KB | `inventoryService` |
-| Stock Movement | `StockMovement.tsx` | 156KB | `packingService`, `packingEngineService` |
+| Stock Movement | `StockMovement.tsx` | 178KB | `packingService`, `packingEngineService` |
 
 ### Packing Module (v5)
 
@@ -68,6 +68,7 @@ flowchart TD
 | Traceability | `TraceabilityViewer.tsx` | Full backward trace |
 | Engine Service | `packingEngineService.ts` | Container/pallet/PL logic |
 | MPL Service | `mplService.ts` | MPL CRUD + dispatch |
+| Packing List Manager | `PackingListManager.tsx` | Packing list CRUD + workflow |
 
 ### Support Modules
 
@@ -91,6 +92,9 @@ flowchart TD
 | Supabase Auth | `utils/supabase/auth.ts` | Authentication functions |
 | Inventory Service | `services/inventoryService.ts` | Inventory data access |
 | Permission Service | `auth/services/permissionService.ts` | GRBAC resolution |
+| PDF Service Client | `services/pdfServiceClient.ts` | PDF microservice client with fallback |
+| Session Service | `services/sessionService.ts` | Session persistence management |
+| Paginated Data Hook | `hooks/usePaginatedData.ts` | Server-side pagination hook |
 
 ## Data Flow
 

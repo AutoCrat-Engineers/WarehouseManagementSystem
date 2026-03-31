@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0] — 2026-03-31
+
+### Release Type: Codebase Cleanup & Documentation
+
+### Removed
+
+- **Unused Dependencies** — Removed 6 packages not imported anywhere in `src/`: `hono`, `canvas`, `html2canvas`, `jspdf`, `jsbarcode`, `puppeteer`. Reduces `node_modules` footprint and eliminates native compilation requirements.
+- **Debug Artifacts** — Deleted `git_log_output.txt`, `git_status_output.txt`, `tsc_output.txt`, `log.txt`, `log2.txt` from tracked files.
+- **Dead Code** — Cleaned 63 lines of commented-out mock data from `SampleDataInfo.tsx` (retained no-op shim for backward compatibility).
+
+### Changed
+
+- **Package Metadata** — Fixed project name from "Build Inventory Forecasting System" to "warehouse-management-system". Version bumped to `0.5.0`.
+- **`.gitignore` Optimization** — Added 8 new patterns: `tsc_output.txt`, `git_*_output.txt`, `log.txt`, `log2.txt`, `*.tmp`, `*.temp`, `*.bak`, and reorganized sections for clarity.
+- **DB Schema Consolidation** — Moved root-level `db_schema.sql` (60KB duplicate) into `.db_reference/` directory where it belongs.
+
+### Documentation
+
+- Added `RELEASE_NOTES.md` — Professional release notes generated from 81 commits and 40+ PRs.
+- Updated `README.md` — Added "Recent Changes" section documenting v0.5.0 cleanup.
+- Updated `CHANGELOG.md` — This entry.
+- Updated architecture documentation index to reflect current module count and PDF microservice extraction.
+
+---
+
 ## [0.4.2] — 2026-03-30
 
 ### Release Type: Critical Bugfix
