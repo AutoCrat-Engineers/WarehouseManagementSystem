@@ -1,0 +1,615 @@
+/* ============================================================================
+   SIDEBAR ICON ANIMATIONS — Creative Part-Level SVG Animations
+   
+   Each module icon animates its INDIVIDUAL SVG PARTS on hover:
+   - Dashboard: panels rearrange positions
+   - Packing: box flaps open and close
+   - Inventory: top box drops in from above
+   - Stock Movements: arrows slide in opposite directions
+   - Dispatch: ship sails with waves
+   - Proforma: stamp handle presses down
+   - Forecasting: trend line draws itself
+   - Blanket Orders: text lines typewrite in
+   - Calendar: page flips
+   - Grid: cells scan sequentially
+   ============================================================================ */
+
+
+/* ── GLOBAL BASE ── */
+.app-sidebar nav button svg {
+  transition: color 0.3s ease !important;
+  overflow: visible;
+}
+
+.app-sidebar nav button svg * {
+  transition: all 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.app-sidebar nav button:hover svg {
+  color: var(--enterprise-primary) !important;
+}
+
+
+/* ============================================================================
+   1. DASHBOARD (LayoutDashboard) — PANELS REARRANGE
+   
+   4 rects: top-left(1), top-right(2), bottom-right(3), bottom-left(4)
+   On hover, panels swap positions diagonally then settle back.
+   ============================================================================ */
+
+/* Top-left panel → slides right & down */
+.app-sidebar nav button[data-view="dashboard"]:hover svg rect:nth-child(1) {
+  animation: dash-panel-1 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
+/* Top-right panel → slides left & down */
+.app-sidebar nav button[data-view="dashboard"]:hover svg rect:nth-child(2) {
+  animation: dash-panel-2 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
+/* Bottom-right panel → slides left & up */
+.app-sidebar nav button[data-view="dashboard"]:hover svg rect:nth-child(3) {
+  animation: dash-panel-3 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
+/* Bottom-left panel → slides right & up */
+.app-sidebar nav button[data-view="dashboard"]:hover svg rect:nth-child(4) {
+  animation: dash-panel-4 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
+
+@keyframes dash-panel-1 {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(4px, 2px); }
+  50% { transform: translate(2px, 4px); opacity: 0.6; }
+  75% { transform: translate(-1px, 1px); }
+}
+@keyframes dash-panel-2 {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(-3px, 3px); }
+  50% { transform: translate(-4px, 1px); opacity: 0.6; }
+  75% { transform: translate(1px, -1px); }
+}
+@keyframes dash-panel-3 {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(-2px, -4px); }
+  50% { transform: translate(-3px, -2px); opacity: 0.6; }
+  75% { transform: translate(1px, -1px); }
+}
+@keyframes dash-panel-4 {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(3px, -3px); }
+  50% { transform: translate(4px, -1px); opacity: 0.6; }
+  75% { transform: translate(-1px, 1px); }
+}
+
+
+/* ============================================================================
+   2. ITEM MASTER (Package) — ROTATE
+   
+   The user requested to just make it rotate smoothly since parts can't be animated.
+   Additionally, hiding the tape line on top of the box.
+   ============================================================================ */
+
+/* Hide the tape line across the top of the box */
+.app-sidebar nav button[data-view="items"] svg path:nth-child(4) {
+  display: none;
+}
+
+.app-sidebar nav button[data-view="items"]:hover svg {
+  animation: box-rotate 4s linear infinite;
+  transform-origin: center center;
+  backface-visibility: hidden;
+  -webkit-font-smoothing: subpixel-antialiased;
+  transform: translateZ(0);
+}
+
+@keyframes box-rotate {
+  from { transform: rotate(0deg) translateZ(0); }
+  to { transform: rotate(-360deg) translateZ(0); }
+}
+
+
+/* ============================================================================
+   3. INVENTORY (Boxes) — TOP BOX DROPS IN FROM ABOVE
+   
+   12 paths: bottom-left box(1-4), bottom-right box(5-8), top box(9-12)
+   The top box (paths 9-12) drops down from above and lands in position
+   ============================================================================ */
+
+/* Top box paths (9-12) — drop in from above */
+.app-sidebar nav button[data-view="inventory"]:hover svg path:nth-child(n+9) {
+  animation: box-drop-in 1s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+/* Bottom-left box — slight shift to make room */
+.app-sidebar nav button[data-view="inventory"]:hover svg path:nth-child(-n+4) {
+  animation: box-shift-left 0.8s ease 0.1s forwards;
+}
+/* Bottom-right box — slight shift to make room */
+.app-sidebar nav button[data-view="inventory"]:hover svg path:nth-child(n+5):nth-child(-n+8) {
+  animation: box-shift-right 0.8s ease 0.1s forwards;
+}
+
+@keyframes box-drop-in {
+  0% { transform: translateY(-8px); opacity: 0; }
+  30% { transform: translateY(-4px); opacity: 0.5; }
+  60% { transform: translateY(1px); opacity: 1; }
+  80% { transform: translateY(-1px); }
+  100% { transform: translateY(0); opacity: 1; }
+}
+@keyframes box-shift-left {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(-0.5px, 0.5px); }
+}
+@keyframes box-shift-right {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(0.5px, 0.5px); }
+}
+
+
+/* ============================================================================
+   4. STOCK MOVEMENTS (ArrowRightLeft) — ARROWS EXCHANGE
+   
+   4 paths: right-arrow-tip(1), right-line(2), left-arrow-tip(3), left-line(4)
+   Top arrow slides right, bottom arrow slides left, exchanging positions
+   ============================================================================ */
+
+/* Right arrow tip → slides right */
+.app-sidebar nav button[data-view="stock-movements"]:hover svg path:nth-child(1) {
+  animation: arrow-right 1.2s ease-in-out infinite;
+}
+/* Right arrow line → slides right */
+.app-sidebar nav button[data-view="stock-movements"]:hover svg path:nth-child(2) {
+  animation: arrow-right 1.2s ease-in-out infinite;
+}
+/* Left arrow tip → slides left */
+.app-sidebar nav button[data-view="stock-movements"]:hover svg path:nth-child(3) {
+  animation: arrow-left 1.2s ease-in-out infinite;
+}
+/* Left arrow line → slides left */
+.app-sidebar nav button[data-view="stock-movements"]:hover svg path:nth-child(4) {
+  animation: arrow-left 1.2s ease-in-out infinite;
+}
+
+@keyframes arrow-right {
+  0%, 100% { transform: translateX(0); }
+  30% { transform: translateX(4px); }
+  50% { transform: translateX(4px); opacity: 0.3; }
+  51% { transform: translateX(-6px); opacity: 0; }
+  70% { transform: translateX(-2px); opacity: 0.7; }
+}
+@keyframes arrow-left {
+  0%, 100% { transform: translateX(0); }
+  30% { transform: translateX(-4px); }
+  50% { transform: translateX(-4px); opacity: 0.3; }
+  51% { transform: translateX(6px); opacity: 0; }
+  70% { transform: translateX(2px); opacity: 0.7; }
+}
+
+
+/* ============================================================================
+   5. PACKING (PackageOpen) — SMOOTH CLOSING / OPENING
+   
+   Orthographic 3D rotation (rotateX) to simulate the flaps folding down
+   without detaching the paths or distorting the vector strokes.
+   ============================================================================ */
+
+/* Right flap */
+.app-sidebar nav button[data-view="packing"]:hover > svg:first-child path:nth-child(2) {
+  transform-origin: center bottom;
+  animation: flap-smooth-close 2s cubic-bezier(0.45, 0, 0.15, 1) infinite;
+}
+/* Left flap */
+.app-sidebar nav button[data-view="packing"]:hover > svg:first-child path:nth-child(4) {
+  transform-origin: center bottom;
+  animation: flap-smooth-close 2s cubic-bezier(0.45, 0, 0.15, 1) 0.1s infinite;
+}
+/* Center divider subtly fades when flaps are closed */
+.app-sidebar nav button[data-view="packing"]:hover > svg:first-child path:nth-child(1) {
+  animation: line-fade-safe 2s ease-in-out infinite;
+}
+
+@keyframes flap-smooth-close {
+  0%, 100% { transform: rotateX(0deg); }
+  45%, 55% { transform: rotateX(60deg); }
+}
+@keyframes line-fade-safe {
+  0%, 100% { stroke-opacity: 1; }
+  45%, 55% { stroke-opacity: 0.3; }
+}
+
+
+/* ============================================================================
+   6. DISPATCH (CargoShip) — CLEAN FLOAT WITH WAVES
+   
+   Removed the semi-transparent opacity from waves to 
+   eliminate blurriness. Applying a clean, hardware-accelerated float.
+   ============================================================================ */
+
+/* Show waves on hover cleanly without transparency (fixes 'shady' look) */
+.cargo-ship-icon .ship-wave {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.app-sidebar nav button[data-view="dispatch"]:hover .ship-wave {
+  opacity: 1; /* Fully opaque for a crisp line */
+}
+.app-sidebar nav button[data-view="dispatch"]:hover .ship-wave-1 {
+  animation: wave-flow 1.5s linear infinite;
+}
+.app-sidebar nav button[data-view="dispatch"]:hover .ship-wave-2 {
+  display: none; /* Only use 1 wave to prevent overlapping sub-pixel blur */
+}
+
+/* Ship hull rocks/floats gently as one unit */
+.app-sidebar nav button[data-view="dispatch"]:hover svg {
+  animation: ship-float 2s ease-in-out infinite;
+  transform-origin: center center;
+  backface-visibility: hidden;
+  -webkit-font-smoothing: subpixel-antialiased;
+  transform: translateZ(0);
+}
+
+@keyframes ship-float {
+  0%, 100% { transform: translateY(0) translateZ(0); }
+  50% { transform: translateY(-2px) translateZ(0); }
+}
+@keyframes wave-flow {
+  0% { transform: translateX(-6px); }
+  100% { transform: translateX(6px); }
+}
+
+
+/* ============================================================================
+   7. BLANKET ORDERS (FileText) — TEXT LINES TYPEWRITE IN
+   
+   5 paths: paper(1), folded-corner(2), text-line-short(3), text-line(4), text-line(5)
+   The text lines appear one by one with a typewriter slide-in effect
+   ============================================================================ */
+
+/* Paper outline stays static */
+/* Folded corner peels down on hover */
+.app-sidebar nav button[data-view="orders"]:hover svg path:nth-child(2) {
+  animation: corner-peel 0.5s ease forwards;
+}
+/* Text line 1 — slides in from left */
+.app-sidebar nav button[data-view="orders"]:hover svg path:nth-child(3) {
+  animation: text-typewrite 0.4s ease 0.15s both;
+}
+/* Text line 2 — slides in from left (delayed) */
+.app-sidebar nav button[data-view="orders"]:hover svg path:nth-child(4) {
+  animation: text-typewrite 0.4s ease 0.35s both;
+}
+/* Text line 3 — slides in from left (more delayed) */
+.app-sidebar nav button[data-view="orders"]:hover svg path:nth-child(5) {
+  animation: text-typewrite 0.4s ease 0.55s both;
+}
+
+@keyframes corner-peel {
+  0% { transform: translate(0, 0) rotate(0); }
+  50% { transform: translate(-1px, 1px) rotate(-5deg); }
+  100% { transform: translate(0, 0) rotate(0); }
+}
+@keyframes text-typewrite {
+  0% { transform: translateX(-4px); opacity: 0; }
+  60% { transform: translateX(1px); opacity: 1; }
+  100% { transform: translateX(0); opacity: 1; }
+}
+
+
+/* ============================================================================
+   8. RACK VIEW (Grid3x3) — SEQUENTIAL CELL SCAN
+   
+   5 elements: outer-border-rect(1), h-line-top(2), h-line-bottom(3), 
+               v-line-left(4), v-line-right(5)
+   Grid lines light up sequentially like a warehouse scanning system
+   ============================================================================ */
+
+/* Outer border pulses */
+.app-sidebar nav button[data-view="rack-view"]:hover svg rect:first-child {
+  animation: grid-border-pulse 2s ease-in-out infinite;
+}
+/* Horizontal line 1 — scans left to right */
+.app-sidebar nav button[data-view="rack-view"]:hover svg path:nth-child(2) {
+  animation: grid-scan-h 1.5s ease 0s infinite;
+}
+/* Horizontal line 2 — scans left to right (delayed) */
+.app-sidebar nav button[data-view="rack-view"]:hover svg path:nth-child(3) {
+  animation: grid-scan-h 1.5s ease 0.25s infinite;
+}
+/* Vertical line 1 — scans top to bottom */
+.app-sidebar nav button[data-view="rack-view"]:hover svg path:nth-child(4) {
+  animation: grid-scan-v 1.5s ease 0.5s infinite;
+}
+/* Vertical line 2 — scans top to bottom (delayed) */
+.app-sidebar nav button[data-view="rack-view"]:hover svg path:nth-child(5) {
+  animation: grid-scan-v 1.5s ease 0.75s infinite;
+}
+
+@keyframes grid-border-pulse {
+  0%, 100% { stroke-opacity: 1; }
+  50% { stroke-opacity: 0.5; }
+}
+@keyframes grid-scan-h {
+  0% { stroke-dasharray: 0 20; stroke-dashoffset: 0; }
+  50% { stroke-dasharray: 20 0; stroke-dashoffset: 0; }
+  100% { stroke-dasharray: 0 20; stroke-dashoffset: -20; }
+}
+@keyframes grid-scan-v {
+  0% { stroke-dasharray: 0 20; stroke-dashoffset: 0; }
+  50% { stroke-dasharray: 20 0; stroke-dashoffset: 0; }
+  100% { stroke-dasharray: 0 20; stroke-dashoffset: -20; }
+}
+
+
+/* ============================================================================
+   9. BLANKET RELEASES (Calendar) — PAGE TURN
+   
+   4 elements: left-pin(1), right-pin(2), calendar-body-rect(3), divider-line(4)
+   The calendar body flips on its X axis like turning to the next month
+   ============================================================================ */
+
+/* Calendar body flips */
+.app-sidebar nav button[data-view="releases"]:hover svg rect {
+  animation: cal-flip 1s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  transform-origin: top center;
+}
+/* Pins bounce up momentarily */
+.app-sidebar nav button[data-view="releases"]:hover svg path:nth-child(1),
+.app-sidebar nav button[data-view="releases"]:hover svg path:nth-child(2) {
+  animation: cal-pin-bounce 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+/* Divider line redraws */
+.app-sidebar nav button[data-view="releases"]:hover svg path:nth-child(4) {
+  animation: cal-divider 0.8s ease 0.3s both;
+}
+
+@keyframes cal-flip {
+  0% { transform: perspective(100px) rotateX(0deg); }
+  40% { transform: perspective(100px) rotateX(-30deg); opacity: 0.7; }
+  70% { transform: perspective(100px) rotateX(8deg); opacity: 0.9; }
+  100% { transform: perspective(100px) rotateX(0deg); opacity: 1; }
+}
+@keyframes cal-pin-bounce {
+  0%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-3px); }
+}
+@keyframes cal-divider {
+  0% { stroke-dasharray: 0 20; }
+  100% { stroke-dasharray: 20 0; }
+}
+
+
+/* ============================================================================
+   10. FORECASTING (TrendingUp) — TREND LINE DRAWS ITSELF
+   
+   2 polylines: trend-line(1), arrow-tip(2)
+   The trend line draws from left to right, then the arrow tip pops in
+   ============================================================================ */
+
+/* Trend line draws in */
+.app-sidebar nav button[data-view="forecast"]:hover svg polyline:first-child {
+  stroke-dasharray: 40;
+  animation: trend-draw 1.2s ease forwards;
+}
+/* Arrow tip appears at end */
+.app-sidebar nav button[data-view="forecast"]:hover svg polyline:nth-child(2) {
+  animation: arrow-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) 0.8s both;
+}
+
+@keyframes trend-draw {
+  0% { stroke-dashoffset: 40; }
+  100% { stroke-dashoffset: 0; }
+}
+@keyframes arrow-pop {
+  0% { transform: scale(0) translate(-2px, 2px); opacity: 0; }
+  100% { transform: scale(1) translate(0, 0); opacity: 1; }
+}
+
+
+/* ============================================================================
+   SUB-ITEM ANIMATIONS
+   ============================================================================ */
+
+
+/* ── Sticker Generation (Printer) — PAPER EJECTS ──
+   3 elements: printer-body(1), paper-input-tray(2), paper-output-rect(3)
+   The output paper rect slides downward out of the printer
+*/
+.app-sidebar nav button[data-view="packing-sticker"]:hover svg rect {
+  animation: paper-eject 1s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
+.app-sidebar nav button[data-view="packing-sticker"]:hover svg path:nth-child(2) {
+  animation: paper-feed 1s ease infinite;
+}
+
+@keyframes paper-eject {
+  0%, 100% { transform: translateY(0); }
+  30% { transform: translateY(3px); }
+  50% { transform: translateY(2px); }
+}
+@keyframes paper-feed {
+  0%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-2px); opacity: 0.5; }
+  50% { transform: translateY(0); opacity: 1; }
+}
+
+
+/* ── Packing Details (ClipboardList) — ITEMS CHECK OFF ──
+   Lines appear one by one with a tick motion
+*/
+.app-sidebar nav button[data-view="packing-details"]:hover svg path:nth-child(n+3) {
+  animation: check-item 0.5s ease both;
+}
+.app-sidebar nav button[data-view="packing-details"]:hover svg path:nth-child(3) { animation-delay: 0.1s; }
+.app-sidebar nav button[data-view="packing-details"]:hover svg path:nth-child(4) { animation-delay: 0.25s; }
+.app-sidebar nav button[data-view="packing-details"]:hover svg path:nth-child(5) { animation-delay: 0.4s; }
+.app-sidebar nav button[data-view="packing-details"]:hover svg path:nth-child(6) { animation-delay: 0.55s; }
+
+@keyframes check-item {
+  0% { transform: translateX(-3px); opacity: 0; }
+  70% { transform: translateX(1px); opacity: 1; }
+  100% { transform: translateX(0); opacity: 1; }
+}
+
+
+/* ── Pallet Dashboard (Layers) — LAYERS FAN APART ──
+   3 paths: top-layer(1), middle-layer(2), bottom-layer(3)
+   Layers spread apart vertically then come back together
+*/
+.app-sidebar nav button[data-view="pe-pallet-dashboard"]:hover svg path:nth-child(1) {
+  animation: layer-fan-top 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
+.app-sidebar nav button[data-view="pe-pallet-dashboard"]:hover svg path:nth-child(2) {
+  animation: layer-fan-mid 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
+.app-sidebar nav button[data-view="pe-pallet-dashboard"]:hover svg path:nth-child(3) {
+  animation: layer-fan-bot 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
+
+@keyframes layer-fan-top {
+  0%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-4px); }
+}
+@keyframes layer-fan-mid {
+  0%, 100% { transform: translateY(0); }
+  40% { transform: translateY(0); }
+}
+@keyframes layer-fan-bot {
+  0%, 100% { transform: translateY(0); }
+  40% { transform: translateY(4px); }
+}
+
+
+/* ── Dispatch Selection (Forklift) — WHEELS SPIN + WHOLE ICON DRIVES ──
+   Only animate wheels spinning. The whole SVG translates right
+   for a "driving" feel. No independent body part movement.
+*/
+
+/* Wheels spin in-place (fill-box set globally) */
+.app-sidebar nav button[data-view="pe-dispatch"]:hover svg circle:nth-child(2) {
+  animation: wheel-spin 0.6s linear infinite;
+}
+.app-sidebar nav button[data-view="pe-dispatch"]:hover svg circle:nth-child(3) {
+  animation: wheel-spin 0.6s linear infinite;
+  animation-delay: -0.15s;
+}
+
+/* Whole SVG drives forward and back as one unit */
+.app-sidebar nav button[data-view="pe-dispatch"]:hover svg {
+  animation: forklift-drive 2s ease-in-out infinite !important;
+}
+
+@keyframes wheel-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes forklift-drive {
+  0%, 100% { transform: translateX(0); }
+  40% { transform: translateX(3px); }
+  60% { transform: translateX(2px); }
+  80% { transform: translateX(-1px); }
+}
+
+
+/* ── Packing List (ClipboardList sub) — FAST CHECK ── */
+.app-sidebar nav button[data-view="pe-mpl-home"]:hover svg path:nth-child(n+3) {
+  animation: check-item 0.4s ease both;
+}
+.app-sidebar nav button[data-view="pe-mpl-home"]:hover svg path:nth-child(3) { animation-delay: 0.05s; }
+.app-sidebar nav button[data-view="pe-mpl-home"]:hover svg path:nth-child(4) { animation-delay: 0.15s; }
+.app-sidebar nav button[data-view="pe-mpl-home"]:hover svg path:nth-child(5) { animation-delay: 0.25s; }
+.app-sidebar nav button[data-view="pe-mpl-home"]:hover svg path:nth-child(6) { animation-delay: 0.35s; }
+
+
+/* ── Proforma Invoice (Stamp) — STAMP PRESSES DOWN & MARKS ──
+   3 paths: base-surface(1), stamp-pad(2), stamp-handle(3)
+   The handle+pad lift up then PRESS DOWN onto the surface.
+   The surface briefly glows on impact.
+*/
+/* Handle lifts then slams down */
+.app-sidebar nav button[data-view="pe-performa-invoice"]:hover svg path:nth-child(3) {
+  animation: stamp-press 1.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite;
+  transform-origin: center bottom;
+}
+/* Stamp pad follows the handle */
+.app-sidebar nav button[data-view="pe-performa-invoice"]:hover svg path:nth-child(2) {
+  animation: stamp-pad-press 1.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite;
+  transform-origin: center bottom;
+}
+/* Base surface glows on impact */
+.app-sidebar nav button[data-view="pe-performa-invoice"]:hover svg path:nth-child(1) {
+  animation: stamp-impact 1.4s ease infinite;
+}
+
+@keyframes stamp-press {
+  0%, 100% { transform: translateY(0); }
+  20% { transform: translateY(-6px); }
+  25% { transform: translateY(-6px); }
+  45% { transform: translateY(1px); }
+  50% { transform: translateY(1px); }
+  65% { transform: translateY(0); }
+}
+@keyframes stamp-pad-press {
+  0%, 100% { transform: translateY(0); }
+  20% { transform: translateY(-5px); }
+  25% { transform: translateY(-5px); }
+  45% { transform: translateY(1px); }
+  50% { transform: translateY(1px); }
+  65% { transform: translateY(0); }
+}
+@keyframes stamp-impact {
+  0%, 43% { stroke-width: inherit; }
+  46% { stroke: #22c55e; }
+  70% { stroke: #22c55e; }
+  85%, 100% { stroke: currentColor; }
+}
+
+
+/* ============================================================================
+   USER MANAGEMENT — People wave (kept as whole-icon for Users)
+   ============================================================================ */
+.app-sidebar nav button[data-view="users"]:hover svg {
+  animation: icon-users 0.9s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+@keyframes icon-users {
+  0%   { transform: rotate(0deg); }
+  20%  { transform: rotate(-6deg) translateX(-1px); }
+  40%  { transform: rotate(4deg) translateX(1px); }
+  60%  { transform: rotate(-2deg); }
+  80%  { transform: rotate(1deg); }
+  100% { transform: rotate(0deg); }
+}
+
+
+/* ============================================================================
+   HOVER ENHANCEMENTS
+   ============================================================================ */
+
+/* Subtle gradient background on hover */
+.app-sidebar nav button[data-view]:hover {
+  background: linear-gradient(90deg, rgba(30, 58, 138, 0.07) 0%, rgba(30, 58, 138, 0.02) 100%) !important;
+}
+
+/* Text slides right on hover */
+.app-sidebar nav button[data-view] > div {
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) !important;
+}
+.app-sidebar nav button[data-view]:hover > div {
+  transform: translateX(3px);
+}
+.app-sidebar nav button[data-view]:hover > div > div:first-child {
+  color: var(--enterprise-primary);
+  transition: color 0.3s ease !important;
+}
+
+
+/* ============================================================================
+   ACCESSIBILITY: Respect reduced-motion preferences
+   ============================================================================ */
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar nav button svg *,
+  .app-sidebar nav button[data-view] > div {
+    animation: none !important;
+    transition-duration: 0.01ms !important;
+  }
+}

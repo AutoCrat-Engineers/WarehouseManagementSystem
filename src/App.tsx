@@ -46,27 +46,31 @@ import {
   Forklift,
   Stamp,
 } from 'lucide-react';
+import './styles/sidebar-animations.css';
 
 // Custom side-view cargo ship icon matching reference design
 const CargoShip = ({ size = 20, strokeWidth = 2, style = {} }: { size?: number; strokeWidth?: number; style?: React.CSSProperties }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" style={style}>
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" style={style} className="cargo-ship-icon">
     {/* Hull - wide tapered shape */}
-    <path d="M1 18 L3 21 L21 21 L23 18 L20 18 L4 18 Z" />
+    <path className="ship-hull" d="M1 18 L3 21 L21 21 L23 18 L20 18 L4 18 Z" />
     {/* Deck line */}
-    <line x1="4" y1="18" x2="20" y2="18" />
+    <line className="ship-deck" x1="4" y1="18" x2="20" y2="18" />
     {/* Bridge / Cabin */}
-    <rect x="5" y="13" width="4" height="5" rx="0.5" />
+    <rect className="ship-cabin" x="5" y="13" width="4" height="5" rx="0.5" />
     {/* Bridge window */}
-    <rect x="6" y="14" width="2" height="1.5" rx="0.3" />
+    <rect className="ship-window" x="6" y="14" width="2" height="1.5" rx="0.3" />
     {/* Antenna mast */}
-    <line x1="7" y1="13" x2="7" y2="9" />
-    <circle cx="7" cy="9" r="0.5" />
+    <line className="ship-mast" x1="7" y1="13" x2="7" y2="9" />
+    <circle className="ship-light" cx="7" cy="9" r="0.5" />
     {/* Containers - bottom row */}
-    <rect x="11" y="14.5" width="2.8" height="3.5" rx="0.3" />
-    <rect x="14.2" y="14.5" width="2.8" height="3.5" rx="0.3" />
+    <rect className="ship-container ship-container-bl" x="11" y="14.5" width="2.8" height="3.5" rx="0.3" />
+    <rect className="ship-container ship-container-br" x="14.2" y="14.5" width="2.8" height="3.5" rx="0.3" />
     {/* Containers - top row */}
-    <rect x="11.7" y="11" width="2.8" height="3.5" rx="0.3" />
-    <rect x="14.9" y="11" width="2.8" height="3.5" rx="0.3" />
+    <rect className="ship-container ship-container-tl" x="11.7" y="11" width="2.8" height="3.5" rx="0.3" />
+    <rect className="ship-container ship-container-tr" x="14.9" y="11" width="2.8" height="3.5" rx="0.3" />
+    {/* Water waves (decorative, hidden by default, shown on hover) */}
+    <path className="ship-wave ship-wave-1" d="M0 23 Q3 21.5, 6 23 T12 23 T18 23 T24 23" strokeWidth="1" />
+    <path className="ship-wave ship-wave-2" d="M-2 24 Q1 22.5, 4 24 T10 24 T16 24 T22 24" strokeWidth="0.8" />
   </svg>
 );
 
@@ -714,6 +718,7 @@ export default function App() {
                   <div key={item.id}>
                     {/* Parent: Packing */}
                     <button
+                      data-view="packing"
                       onClick={() => {
                         setPackingMenuOpen(!packingMenuOpen);
                         if (!packingMenuOpen) setPackingListOpen(false);
@@ -764,6 +769,7 @@ export default function App() {
                       {/* 1. Generate Sticker */}
                       {canAccessViewLocal('packing-sticker') && (
                         <button
+                          data-view="packing-sticker"
                           onClick={() => handleNavigation('packing-sticker')}
                           style={{
                             width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
@@ -785,6 +791,7 @@ export default function App() {
                       {/* 2. Packing Details */}
                       {canAccessViewLocal('packing-details') && (
                         <button
+                          data-view="packing-details"
                           onClick={() => handleNavigation('packing-details')}
                           style={{
                             width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
@@ -808,6 +815,7 @@ export default function App() {
                       {/* Pallet Dashboard */}
                       {canAccessViewLocal('pe-pallet-dashboard') && (
                         <button
+                          data-view="pe-pallet-dashboard"
                           onClick={() => handleNavigation('pe-pallet-dashboard')}
                           style={{
                             width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
@@ -840,6 +848,7 @@ export default function App() {
                   <div key={item.id}>
                     {/* Parent: Dispatch */}
                     <button
+                      data-view="dispatch"
                       onClick={() => {
                         setDispatchMenuOpen(!dispatchMenuOpen);
                       }}
@@ -889,6 +898,7 @@ export default function App() {
                       {/* Dispatch Selection */}
                       {canAccessViewLocal('pe-dispatch') && (
                         <button
+                          data-view="pe-dispatch"
                           onClick={() => handleNavigation('pe-dispatch')}
                           style={{
                             width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
@@ -910,6 +920,7 @@ export default function App() {
                       {/* Packing List */}
                       {canAccessViewLocal('pe-mpl-home') && (
                         <button
+                          data-view="pe-mpl-home"
                           onClick={() => handleNavigation('pe-mpl-home')}
                           style={{
                             width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
@@ -931,6 +942,7 @@ export default function App() {
                       {/* Performa Invoice */}
                       {canAccessViewLocal('pe-performa-invoice') && (
                         <button
+                          data-view="pe-performa-invoice"
                           onClick={() => handleNavigation('pe-performa-invoice')}
                           style={{
                             width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
@@ -957,6 +969,7 @@ export default function App() {
               return (
                 <button
                   key={item.id}
+                  data-view={item.id}
                   onClick={() => handleNavigation(item.id)}
                   title={!sidebarExpanded ? item.label : undefined}
                   style={{

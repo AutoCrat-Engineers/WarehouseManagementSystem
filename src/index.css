@@ -1973,48 +1973,15 @@
   }
 }
 
-/* Modern Sidebar Menu Hover Effect */
-/* Base transitions for smooth animations */
+/* ═══════════════════════════════════════════════════════════════════
+   Sidebar Icon Animations
+   Per-module contextual hover animations are defined in:
+   → styles/sidebar-animations.css
+   Each module icon has a unique animation (box open/close, ship sail,
+   stamp press, arrows slide, etc.) triggered via data-view attributes.
+   ═══════════════════════════════════════════════════════════════════ */
+/* Base button transition — shared foundation for all sidebar buttons */
 .app-sidebar nav button {
   transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) !important;
 }
 
-/* Icon base transition */
-.app-sidebar nav button svg {
-  transition: all 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) !important; /* Slower Spring-like transition for slower spin */
-}
-
-/* Text transition container */
-.app-sidebar nav button > div {
-  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) !important;
-}
-
-/* Label text transition */
-.app-sidebar nav button > div > div:first-child {
-  transition: color 0.3s ease !important;
-}
-
-/* Hover Background & Soft Shadow */
-.app-sidebar nav button:hover {
-  background: linear-gradient(90deg, rgba(30, 58, 138, 0.06) 0%, rgba(30, 58, 138, 0.01) 100%) !important;
-  box-shadow: 0 4px 15px -5px rgba(30, 58, 138, 0.15) inset, 2px 0 0 rgba(30, 58, 138, 0.2) inset !important;
-  z-index: 10;
-  position: relative;
-}
-
-/* Icon pop & illuminate on hover */
-.app-sidebar nav button:hover svg {
-  transform: perspective(400px) scale(1.15) translateY(-2px) rotateY(360deg);
-  color: var(--enterprise-primary) !important;
-  filter: drop-shadow(0 4px 6px rgba(30, 58, 138, 0.45));
-}
-
-/* Text slide right on hover */
-.app-sidebar nav button:hover > div {
-  transform: translateX(4px);
-}
-
-/* Label text color shift on hover */
-.app-sidebar nav button:hover > div > div:first-child {
-  color: var(--enterprise-primary);
-}
