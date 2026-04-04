@@ -23,7 +23,7 @@ import {
     SummaryCard, SummaryCardsGrid,
     FilterBar, ActionBar,
     SearchBox, StatusFilter, DateRangeFilter,
-    ExportCSVButton, RefreshButton, Pagination
+    ExportCSVButton, RefreshButton, Pagination, ClearFiltersButton
 } from '../ui/SharedComponents';
 import { Printer, CheckCircle2, Clock, PackageOpen, X, XCircle, AlertTriangle, Info } from 'lucide-react';
 import { PackingDetail } from './PackingDetail';
@@ -368,6 +368,9 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
                 />
 
                 <ActionBar>
+                    {(statusFilter !== 'ALL' || dateFrom || dateTo) && (
+                        <ClearFiltersButton onClick={() => { setStatusFilter('ALL'); setDateFrom(''); setDateTo(''); setPage(0); }} />
+                    )}
                     <ExportCSVButton onClick={handleExport} />
                     <RefreshButton onClick={() => { fetchRequests(page * PAGE_SIZE).then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); fetchSummaryCounts(); }} loading={loading} />
                 </ActionBar>

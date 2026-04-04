@@ -374,8 +374,8 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
                 />
 
                 <ActionBar>
-                    {(searchTerm || stateFilter !== 'ALL' || dateFrom || dateTo) && (
-                        <ClearFiltersButton onClick={() => { setSearchTerm(''); setStateFilter('ALL'); setDateFrom(''); setDateTo(''); }} />
+                    {(stateFilter !== 'ALL' || dateFrom || dateTo) && (
+                        <ClearFiltersButton onClick={() => { setStateFilter('ALL'); setDateFrom(''); setDateTo(''); }} />
                     )}
                     <ExportCSVButton onClick={handleExport} />
                     <RefreshButton onClick={() => { Promise.all([fetchData(), fetchCounts()]).then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); }} loading={loading} />

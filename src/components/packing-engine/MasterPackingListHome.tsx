@@ -20,7 +20,7 @@ import {
     SummaryCard, SummaryCardsGrid,
     FilterBar as SharedFilterBar, ActionBar,
     SearchBox, RefreshButton, StatusFilter, DateRangeFilter,
-    ExportCSVButton, Pagination,
+    ExportCSVButton, Pagination, ClearFiltersButton,
 } from '../ui/SharedComponents';
 import { useSessionPersistence } from '../../hooks/useSessionPersistence';
 
@@ -1109,6 +1109,9 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
                     onDateToChange={setDateTo}
                 />
                 <ActionBar>
+                    {(statusFilter !== 'ALL' || dateFrom || dateTo) && (
+                        <ClearFiltersButton onClick={() => { setStatusFilter('ALL'); setCardFilter('ALL'); setDateFrom(''); setDateTo(''); setPage(0); }} />
+                    )}
                     <ExportCSVButton onClick={async () => {
                         try {
                             // Fetch ALL records (no pagination) for export
