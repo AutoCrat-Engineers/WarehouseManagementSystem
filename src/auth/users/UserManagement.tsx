@@ -671,7 +671,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                 borderRadius: '12px',
                 boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
                 border: '1px solid #e5e7eb',
-                overflow: 'hidden',
+                overflow: activeDropdown ? 'visible' : 'hidden',
             }}>
                 {loading ? (
                     <div style={{ padding: '80px', textAlign: 'center' }}>
@@ -704,7 +704,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                     </div>
                 ) : (
                     <>
-                        <div className="table-responsive" style={{ overflowX: 'auto' }}>
+                        <div className="table-responsive" style={{ overflowX: activeDropdown ? 'visible' : 'auto', overflowY: activeDropdown ? 'visible' : undefined }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                                 <thead>
                                     <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e5e7eb' }}>
