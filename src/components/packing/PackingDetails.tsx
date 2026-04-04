@@ -530,8 +530,8 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
     const [outerFormWU, setOuterFormWU] = useState<WeightUnit>('kg');
     const [saving, setSaving] = useState(false);
 
-    // Actions dropdown state (matches ItemMaster pattern)
     const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+    const [dropdownDirection, setDropdownDirection] = useState<'up' | 'down'>('down');
     const dropdownRef = useRef<HTMLDivElement | null>(null);
 
     // Delete confirmation state
@@ -916,7 +916,7 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
             </SharedFilterBar>
 
             {/* Data Table */}
-            <Card style={{ padding: 0 }}>
+            <Card style={{ padding: 0, overflow: activeDropdown ? 'visible' : undefined }}>
                 {filtered.length === 0 ? (
                     <EmptyState
                         icon={<ClipboardList size={48} />}
@@ -925,7 +925,7 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
                         action={!hasActiveFilters && !searchTerm && canAdd ? { label: 'Add Specification', onClick: () => setShowAddModal(true) } : undefined}
                     />
                 ) : (
-                    <div className="table-responsive" style={{ overflowX: 'auto', opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto' }}>
+                    <div className="table-responsive" style={{ overflowX: activeDropdown ? 'visible' : 'auto', overflowY: activeDropdown ? 'visible' : undefined, opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto' }}>
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead>
                                 <tr style={{ backgroundColor: 'var(--table-header-bg)', borderBottom: '2px solid var(--table-border)' }}>
@@ -969,7 +969,17 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
                                                 <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px', position: 'relative' }}>
                                                     <div ref={activeDropdown === s.id ? dropdownRef : null} style={{ position: 'relative', display: 'inline-block' }}>
                                                         <button
-                                                            onClick={() => setActiveDropdown(activeDropdown === s.id ? null : s.id)}
+                                                            onClick={(e) => {
+                                                                if (activeDropdown === s.id) {
+                                                                    setActiveDropdown(null);
+                                                                } else {
+                                                                    // Detect if we should open upward based on available space
+                                                                    const rect = e.currentTarget.getBoundingClientRect();
+                                                                    const spaceBelow = window.innerHeight - rect.bottom;
+                                                                    setDropdownDirection(spaceBelow < 160 ? 'up' : 'down');
+                                                                    setActiveDropdown(s.id);
+                                                                }
+                                                            }}
                                                             style={{
                                                                 padding: '8px 12px', border: '1px solid #e5e7eb', borderRadius: '8px',
                                                                 backgroundColor: activeDropdown === s.id ? '#f8fafc' : 'white',
@@ -981,19 +991,19 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
                                                             Actions
                                                             <ChevronDown size={14} style={{ transition: 'transform 0.2s', transform: activeDropdown === s.id ? 'rotate(180deg)' : 'rotate(0deg)' }} />
                                                         </button>
-                                                        {activeDropdown === s.id && (() => {
-                                                            const isLastRows = idx >= displayed.length - 2;
-                                                            return (
+                                                        {activeDropdown === s.id && (
                                                                 <div
                                                                     style={{
                                                                         position: 'absolute',
-                                                                        ...(isLastRows
+                                                                        ...(dropdownDirection === 'up'
                                                                             ? { bottom: '100%', marginBottom: '4px' }
-                                                                            : { top: '100%', marginTop: '4px' }
-                                                                        ),
-                                                                        right: '0', zIndex: 50,
+                                                                            : { top: '100%', marginTop: '4px' }),
+                                                                        right: '0', zIndex: 9999,
                                                                         width: '160px', backgroundColor: 'white', borderRadius: '12px',
-                                                                        boxShadow: '0 10px 40px rgba(0,0,0,0.15)', border: '1px solid #e5e7eb', overflow: 'hidden',
+                                                                        boxShadow: dropdownDirection === 'up'
+                                                                            ? '0 -10px 40px rgba(0,0,0,0.15)'
+                                                                            : '0 10px 40px rgba(0,0,0,0.15)',
+                                                                        border: '1px solid #e5e7eb', overflow: 'hidden',
                                                                     }}
                                                                 >
                                                                     {canEdit && (
@@ -1018,8 +1028,7 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
                                                                         </button>
                                                                     )}
                                                                 </div>
-                                                            );
-                                                        })()}
+                                                        )}
                                                     </div>
                                                 </td>
                                             )}

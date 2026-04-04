@@ -1367,7 +1367,7 @@ ${rowsHtml}
                 </div>
             )}
 
-            {error && <div style={{ padding: '12px 16px', borderRadius: 'var(--border-radius-md)', backgroundColor: 'var(--enterprise-error-bg, #fee2e2)', border: '1px solid var(--enterprise-error, #dc2626)', color: 'var(--enterprise-error, #dc2626)', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><AlertCircle size={16} /> {error}<button onClick={() => setError(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}><XCircle size={16} /></button></div>}
+            {error && <div style={{ padding: '12px 16px', borderRadius: 'var(--border-radius-md)', backgroundColor: 'var(--enterprise-error-bg, #fee2e2)', border: '1px solid var(--enterprise-error, #dc2626)', color: 'var(--enterprise-error, #dc2626)', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><AlertCircle size={16} /> {typeof error === 'object' ? (error as any).message || JSON.stringify(error) : String(error) === '{}' ? 'An unknown error occurred' : String(error)}<button onClick={() => setError(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}><XCircle size={16} /></button></div>}
 
             {/* Back button for non-LIST steps */}
             {step !== 'LIST' && (
@@ -1451,7 +1451,7 @@ ${rowsHtml}
                     </FilterBar>
 
                     {/* ═══ TABLE ═══ */}
-                    <div style={{ backgroundColor: 'var(--card-background, #fff)', borderRadius: 'var(--border-radius-lg, 12px)', border: '1px solid var(--border-color, #e5e7eb)', overflow: 'hidden', boxShadow: 'var(--shadow-sm)' }}>
+                    <div style={{ backgroundColor: 'var(--card-background, #fff)', borderRadius: 'var(--border-radius-lg, 12px)', border: '1px solid var(--border-color, #e5e7eb)', overflow: activeDropdown ? 'visible' : 'hidden', boxShadow: 'var(--shadow-sm)' }}>
                         {displayedPIs.length === 0 ? (
                             <div style={{ padding: '60px 24px', textAlign: 'center' }}>
                                 <FileText size={48} style={{ color: 'var(--enterprise-gray-300)', marginBottom: 12 }} />
@@ -1459,7 +1459,7 @@ ${rowsHtml}
                                 <p style={{ fontSize: 13, color: 'var(--enterprise-gray-500)' }}>{searchTerm || statusFilter !== 'ALL' ? 'Try adjusting your search or filter' : 'Create your first Performa Invoice to get started'}</p>
                             </div>
                         ) : (
-                            <div style={{ overflowX: 'auto' }}>
+                            <div style={{ overflowX: activeDropdown ? 'visible' : 'auto', overflowY: activeDropdown ? 'visible' : undefined }}>
                                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                                     <thead>
                                         <tr style={{ backgroundColor: 'var(--table-header-bg, #f9fafb)', borderBottom: '2px solid var(--table-border, #e5e7eb)' }}>

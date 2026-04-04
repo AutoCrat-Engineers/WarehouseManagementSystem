@@ -1376,7 +1376,7 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
       </SharedFilterBar>
 
       {/* Items Table - PRIMARY IDENTIFIER: Part Number */}
-      <Card style={{ padding: 0 }}>
+      <Card style={{ padding: 0, overflow: activeDropdown ? 'visible' : undefined }}>
         {filteredItems.length === 0 ? (
           <EmptyState
             icon={<Package size={48} />}
@@ -1390,7 +1390,7 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
           />
         ) : (
           <>
-            <div className="table-responsive" style={{ overflowX: 'auto' }}>
+            <div className="table-responsive" style={{ overflowX: activeDropdown ? 'visible' : 'auto', overflowY: activeDropdown ? 'visible' : undefined }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ backgroundColor: 'var(--table-header-bg)', borderBottom: '2px solid var(--table-border)' }}>
@@ -1405,7 +1405,7 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
                     {canEditDelete && <th style={{ ...thStyle, textAlign: 'center', minWidth: '120px' }}>Actions</th>}
                   </tr>
                 </thead>
-                <tbody>
+                <tbody style={{ minHeight: '120px' }}>
                   {displayedItems.map((item, index) => (
                     <tr
                       key={item.id}
