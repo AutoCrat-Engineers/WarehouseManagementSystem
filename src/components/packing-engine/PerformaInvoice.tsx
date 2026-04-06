@@ -19,7 +19,7 @@ import { Card, ModuleLoader } from '../ui/EnterpriseUI';
 import {
     SummaryCardsGrid, SummaryCard, FilterBar, SearchBox, ActionBar, AddButton,
     RefreshButton, DateRangeFilter, ExportCSVButton, StatusFilter,
-    sharedThStyle, sharedTdStyle, Pagination
+    sharedThStyle, sharedTdStyle, Pagination, ClearFiltersButton
 } from '../ui/SharedComponents';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
@@ -1422,6 +1422,9 @@ ${rowsHtml}
                             onDateToChange={setDateTo}
                         />
                         <ActionBar>
+                            {(statusFilter !== 'ALL' || dateFrom || dateTo) && (
+                                <ClearFiltersButton onClick={() => { setStatusFilter('ALL'); setDateFrom(''); setDateTo(''); setPage(0); }} />
+                            )}
                             <ExportCSVButton onClick={() => {
                                 import('xlsx').then(XLSX => {
                                     const headers = ['PI Number', 'Shipment #', 'Customer', 'MPLs', 'Pallets', 'Quantity', 'Gross Weight (kg)', 'Status', 'Stock Moved At', 'Created', 'Created By'];

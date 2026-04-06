@@ -17,7 +17,7 @@ import {
 import { Card, Modal, EmptyState, ModuleLoader } from '../ui/EnterpriseUI';
 import {
     SummaryCard, SummaryCardsGrid, SearchBox, FilterBar, ActionBar,
-    ActionButton, RefreshButton, Pagination
+    ActionButton, RefreshButton, Pagination, ClearFiltersButton
 } from '../ui/SharedComponents';
 import * as svc from './packingEngineService';
 import type { Pallet, DispatchReadiness, PackingList } from './packingEngineService';
@@ -345,6 +345,9 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
             <FilterBar>
                 <SearchBox value={searchTerm} onChange={setSearchTerm} placeholder="Search item code, name, MSN, customer..." />
                 <ActionBar>
+                    {cardFilter !== 'ALL' && (
+                        <ClearFiltersButton onClick={() => setCardFilter('ALL')} />
+                    )}
                     <RefreshButton onClick={handleRefresh} loading={refreshing} />
                 </ActionBar>
             </FilterBar>
