@@ -393,9 +393,7 @@ function exportToExcel(data: ItemStockDashboard[], filename: string = 'inventory
 // ============================================================================
 
 export function InventoryGrid() {
-    const { items, loading, error, refetch, stats } = useAllItemsStockDashboard();
-
-    // Local state
+    // Local state (declared FIRST so hookFilters can reference them)
     const [refreshing, setRefreshing] = useState(false);
     const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; title: string; text: string } | null>(null);
     const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -412,10 +410,26 @@ export function InventoryGrid() {
     const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
     const [selectedItem, setSelectedItem] = useState<ItemStockDashboard | null>(null);
     const [showDetailModal, setShowDetailModal] = useState(false);
-
-    // Pagination state
     const [page, setPage] = useState(0);
+    const [initialLoad, setInitialLoad] = useState(true);
     const ITEMS_PER_PAGE = 20;
+
+    // Build server-side filters from all active filter state
+    const hookFilters = useMemo(() => ({
+        ...(statusFilter !== 'ALL' ? { stockStatus: statusFilter as StockStatus } : {}),
+        ...(activeStatusFilter === 'ACTIVE' ? { isActive: true } : activeStatusFilter === 'INACTIVE' ? { isActive: false } : {}),
+        ...(searchTerm.trim() ? { search: searchTerm.trim() } : {}),
+        limit: ITEMS_PER_PAGE,
+        offset: page * ITEMS_PER_PAGE,
+    }), [statusFilter, activeStatusFilter, searchTerm, page]);
+
+    const { items, loading, error, refetch, stats, totalCount } = useAllItemsStockDashboard(hookFilters);
+
+    useEffect(() => {
+        if (!loading && initialLoad) {
+            setInitialLoad(false);
+        }
+    }, [loading, initialLoad]);
 
     // Handle refresh
     const handleRefresh = async () => {
@@ -438,7 +452,6 @@ export function InventoryGrid() {
     // Handle card click filter
     const handleCardClick = (filter: StockStatus | 'ALL' | 'TOTAL') => {
         if (cardFilter === filter) {
-            // Toggle off if clicking the same card
             setCardFilter('ALL');
             setStatusFilter('ALL');
         } else {
@@ -446,9 +459,10 @@ export function InventoryGrid() {
             if (filter === 'TOTAL') {
                 setStatusFilter('ALL');
             } else if (filter !== 'ALL') {
-                setStatusFilter(filter);
+                setStatusFilter(filter as StockStatus);
             }
         }
+        setPage(0);
     };
 
     // Clear card/dropdown filters only (search has its own X button)
@@ -456,72 +470,33 @@ export function InventoryGrid() {
         setStatusFilter('ALL');
         setActiveStatusFilter('ALL');
         setCardFilter('ALL');
+        setPage(0);
     }, []);
 
-    // Check if any CARD/DROPDOWN filters are active (not search - search has its own X button)
+    // Check if any CARD/DROPDOWN filters are active
     const hasActiveFilters = statusFilter !== 'ALL' || activeStatusFilter !== 'ALL' || cardFilter !== 'ALL';
 
-    // Filter and sort items
-    const filteredItems = useMemo(() => {
-        let result = [...items];
-
-        // Apply search filter (item_code, master_serial_no, part_no)
-        if (searchTerm) {
-            const searchLower = searchTerm.toLowerCase();
-            result = result.filter(item =>
-                item.itemCode.toLowerCase().includes(searchLower) ||
-                item.masterSerialNo?.toLowerCase().includes(searchLower) ||
-                item.partNumber?.toLowerCase().includes(searchLower)
-            );
-        }
-
-        // Apply stock status filter
-        if (statusFilter !== 'ALL') {
-            result = result.filter(item => item.stockStatus === statusFilter);
-        }
-
-        // Apply active status filter
-        if (activeStatusFilter !== 'ALL') {
-            result = result.filter(item => {
-                const isActive = (item as ItemStockDashboardExtended).isActive;
-                if (activeStatusFilter === 'ACTIVE') return isActive !== false;
-                if (activeStatusFilter === 'INACTIVE') return isActive === false;
-                return true;
-            });
-        }
-
-        // Apply sorting
+    // Client-side sort only (sorting pushes to server would need order param — keep client for simplicity)
+    const sortedItems = useMemo(() => {
+        const result = [...items];
         result.sort((a, b) => {
             let aVal: any = a[sortField];
             let bVal: any = b[sortField];
-
-            if (typeof aVal === 'string') {
-                aVal = aVal?.toLowerCase() || '';
-                bVal = bVal?.toLowerCase() || '';
-            }
-
+            if (typeof aVal === 'string') { aVal = aVal?.toLowerCase() || ''; bVal = bVal?.toLowerCase() || ''; }
             if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1;
             if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1;
             return 0;
         });
-
         return result;
-    }, [items, searchTerm, statusFilter, activeStatusFilter, sortField, sortDirection]);
+    }, [items, sortField, sortDirection]);
 
-    // Paginated items
-    const displayedItems = useMemo(() => {
-        return filteredItems.slice(page * ITEMS_PER_PAGE, (page + 1) * ITEMS_PER_PAGE);
-    }, [filteredItems, page]);
-
-    // Reset display page when filters change
-    useEffect(() => {
-        setPage(0);
-    }, [searchTerm, statusFilter, activeStatusFilter, cardFilter]);
+    // Reset page when filters change
+    useEffect(() => { setPage(0); }, [searchTerm, statusFilter, activeStatusFilter, cardFilter]);
 
     // Handle export
     const handleExport = useCallback(() => {
-        exportToExcel(filteredItems, 'inventory_export');
-    }, [filteredItems]);
+        exportToExcel(items, 'inventory_export');
+    }, [items]);
 
     // Handle view details
     const handleViewDetails = (item: ItemStockDashboard) => {
@@ -538,7 +513,7 @@ export function InventoryGrid() {
     };
 
     // Loading state
-    if (loading && items.length === 0) {
+    if (initialLoad) {
         return <ModuleLoader moduleName="Inventory Grid" icon={<Package size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
     }
 
@@ -654,7 +629,7 @@ export function InventoryGrid() {
                     {hasActiveFilters && (
                         <ClearFiltersButton onClick={handleClearFilters} />
                     )}
-                    <RefreshButton onClick={handleRefresh} loading={refreshing} />
+                    <RefreshButton onClick={handleRefresh} loading={loading} />
                     <ActionButton
                         label="Export Excel"
                         icon={<Download size={14} />}
@@ -666,7 +641,7 @@ export function InventoryGrid() {
 
             {/* Inventory Table */}
             <Card style={{ padding: 0, overflow: 'hidden' }}>
-                {filteredItems.length === 0 ? (
+                {items.length === 0 && !loading ? (
                     <EmptyState
                         icon={<Package size={48} />}
                         title={hasActiveFilters ? "No Matching Items" : "No Inventory Data"}
@@ -737,7 +712,7 @@ export function InventoryGrid() {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {displayedItems.map((item, index) => (
+                                    {sortedItems.map((item, index) => (
                                         <tr
                                             key={item.itemCode}
                                             style={{
@@ -803,7 +778,7 @@ export function InventoryGrid() {
                         <Pagination
                             page={page}
                             pageSize={ITEMS_PER_PAGE}
-                            totalCount={filteredItems.length}
+                            totalCount={totalCount}
                             onPageChange={setPage}
                         />
                     </>
@@ -819,13 +794,13 @@ export function InventoryGrid() {
                 color: 'var(--enterprise-gray-600)',
             }}>
                 <span>
-                    Showing {filteredItems.length} of {items.length} items
+                    Showing {items.length} of {totalCount} items
                     {hasActiveFilters && ' (filtered)'}
                 </span>
                 <span>
                     Total Net Available: {' '}
                     <strong style={{ color: 'var(--enterprise-primary)' }}>
-                        {filteredItems.reduce((sum, item) => sum + (item.netAvailableForCustomer || 0), 0).toLocaleString()}
+                        {items.reduce((sum, item) => sum + (item.netAvailableForCustomer || 0), 0).toLocaleString()}
                     </strong>
                 </span>
             </div>

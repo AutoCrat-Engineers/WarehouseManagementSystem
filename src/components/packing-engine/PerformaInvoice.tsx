@@ -46,6 +46,7 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
     const [pis, setPis] = useState<PIRecord[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const hasInitiallyLoaded = useRef(false);
     const [error, setError] = useState<string | null>(null);
     const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
@@ -212,7 +213,7 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
 
     // Load PIs with server-side filtering and pagination
     const loadPIs = useCallback(async (isRefresh = false) => {
-        if (isRefresh) setRefreshing(true); else setLoading(true);
+        if (hasInitiallyLoaded.current) setRefreshing(true); else setLoading(true);
         try {
             // Build query with server-side filters
             let query = supabase
@@ -266,7 +267,7 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
             }
 
             setPis(piList);
-        } catch (err: any) { setError(err.message); } finally { setLoading(false); setRefreshing(false); }
+        } catch (err: any) { setError(err.message); } finally { setLoading(false); setRefreshing(false); hasInitiallyLoaded.current = true; }
     }, [supabase, statusFilter, dateFrom, dateTo, page]);
 
     useEffect(() => { loadPIs(); }, [loadPIs]);
@@ -735,7 +736,7 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
             const originCountry = (plData?.country_of_origin || 'INDIA').toUpperCase();
             const loadingPort = (plData?.port_of_loading || 'BANGALORE, INDIA').replace(/BANGALORE, ICD/i, 'BANGALORE, INDIA').toUpperCase();
             const dischargePort = (plData?.port_of_discharge || 'CHARLESTON, USA').toUpperCase();
-            const numToWords = (n: number): string => { const ones=['','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten','Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen','Seventeen','Eighteen','Nineteen']; const tens=['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety']; if(n===0)return'Zero'; const convert=(num:number):string=>{if(num<20)return ones[num];if(num<100)return tens[Math.floor(num/10)]+(num%10?' '+ones[num%10]:'');if(num<1000)return ones[Math.floor(num/100)]+' Hundred'+(num%100?' '+convert(num%100):'');if(num<100000)return convert(Math.floor(num/1000))+' Thousand'+(num%1000?' '+convert(num%1000):'');if(num<10000000)return convert(Math.floor(num/100000))+' Lakh'+(num%100000?' '+convert(num%100000):'');return convert(Math.floor(num/10000000))+' Crore'+(num%10000000?' '+convert(num%10000000):'');}; const intPart=Math.floor(n); const decPart=Math.round((n-intPart)*100); let w='USD : '+convert(intPart); if(decPart>0)w+=' and '+convert(decPart)+' Cents'; return w+' Only'; };
+            const numToWords = (n: number): string => { const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen']; const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety']; if (n === 0) return 'Zero'; const convert = (num: number): string => { if (num < 20) return ones[num]; if (num < 100) return tens[Math.floor(num / 10)] + (num % 10 ? ' ' + ones[num % 10] : ''); if (num < 1000) return ones[Math.floor(num / 100)] + ' Hundred' + (num % 100 ? ' ' + convert(num % 100) : ''); if (num < 100000) return convert(Math.floor(num / 1000)) + ' Thousand' + (num % 1000 ? ' ' + convert(num % 1000) : ''); if (num < 10000000) return convert(Math.floor(num / 100000)) + ' Lakh' + (num % 100000 ? ' ' + convert(num % 100000) : ''); return convert(Math.floor(num / 10000000)) + ' Crore' + (num % 10000000 ? ' ' + convert(num % 10000000) : ''); }; const intPart = Math.floor(n); const decPart = Math.round((n - intPart) * 100); let w = 'USD : ' + convert(intPart); if (decPart > 0) w += ' and ' + convert(decPart) + ' Cents'; return w + ' Only'; };
             const formatDescText = (text: string, extMsn: string) => { let out = text; const match = out.match(/\s*(\([^)]+\))\s*$/); if (match) { const safeStr = match[1].replace(/-/g, '&#8209;'); out = out.replace(/\s*(\([^)]+\))\s*$/, ` <span class="mono" style="white-space:nowrap;display:inline-block">${safeStr}</span>`); } if (extMsn) { const safeExt = extMsn.replace(/-/g, '&#8209;'); out += ` <span class="mono" style="white-space:nowrap;display:inline-block">(${safeExt})</span>`; } return out; };
             const rowsHtml = itemRows.map((r, i) => `<tr><td class="br c4 ctr" style="padding:2px 4px">${i + 1}</td><td class="br c4" style="padding:2px 4px">${r.po}</td><td class="br c4" style="font-size:14px;font-weight:800;padding:2px 4px">${r.partNo}</td><td class="br c4" style="padding:2px 4px"><div style="font-size:12px">${formatDescText(r.desc, r.msn)}</div></td><td class="br c4 rgt mono" style="padding:2px 4px">${r.qty.toLocaleString()}</td><td class="br c4 rgt mono" style="padding:2px 4px"><div style="display:flex;justify-content:space-between"><span>$</span><span>${r.rate.toFixed(2)}</span></div></td><td class="c4 rgt mono" style="padding:2px 4px"><div style="display:flex;justify-content:space-between"><span>$</span><span><b>${r.amount.toFixed(2)}</b></span></div></td></tr>`).join('');
             const nowStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ', ' + new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -1448,7 +1449,7 @@ ${rowsHtml}
                                     XLSX.writeFile(wb, `proforma_invoices_${new Date().toISOString().split('T')[0]}.xlsx`);
                                 });
                             }} />
-                            <RefreshButton onClick={handleRefresh} loading={refreshing} />
+                            <RefreshButton onClick={handleRefresh} loading={loading || refreshing} />
                             {step === 'LIST' && canCreate && <AddButton label="Create Proforma Invoice" onClick={handleStartCreate} />}
                         </ActionBar>
                     </FilterBar>
@@ -1541,7 +1542,7 @@ ${rowsHtml}
                                 </table>
                             </div>
                         )}
-                        
+
                         {displayedPIs.length > 0 && (
                             <Pagination
                                 page={page}

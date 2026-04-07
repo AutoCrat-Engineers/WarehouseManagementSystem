@@ -1,0 +1,25 @@
+Warehouse Management System - UI Standardization & Filter Update
+=============================================================
+
+Overview:
+We have standardized the Search and Filter bar user interface across the Warehouse Management System and significantly improved the UX regarding how filters are cleared.
+
+Key Changes:
+
+1. Decoupled Search Clearing from Data Filtering
+   - Previously, clicking "Clear Filters" would aggressively delete any active search string, leading to frustrating loss of user data.
+   - Now, clicking "Clear" exclusively resets top-level data/metric filters (e.g., status dropdowns, date ranges, summary card active states).
+   - The `SearchBox` now fully manages its own state, retaining typed text until explicitly cleared utilizing the inline 'x' button inside the search field.
+
+2. Global Component Rollout
+   - Added missing Action Bars and Clear Filter buttons natively utilizing the system standard components into the following modules:
+     - Sticker Generation
+     - Dispatch Selection
+     - Master Packing List Dashboard
+     - Proforma Invoice
+
+3. User Management UI Refactor
+   - The 'User Management' view previously utilized a standalone, non-standard CSS implementation for its search box and action buttons. 
+   - This has been completely refactored to utilize the unified `SharedComponents` ecosystem (`FilterBar`, `SearchBox`, `ActionBar`, `ClearFiltersButton`).
+   - Visually, the User Management dashboard now guarantees a 1:1 match with the layout found in Inventory and Item Master nodes.
+   - Re-instated the standard "Add User" icon implementation using the centralized `ActionButton`.

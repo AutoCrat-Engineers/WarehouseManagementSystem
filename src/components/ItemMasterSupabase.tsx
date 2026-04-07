@@ -11,7 +11,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Plus, Search, X, Package, CheckCircle2, CheckCircle, XCircle, AlertTriangle, Info, Edit2, Trash2, Settings, ChevronDown, ChevronRight, Eye, Calendar, Clock, Box, Download } from 'lucide-react';
 import { Card, Button, Input, Select, Label, Badge, Modal, EmptyState, Textarea, LoadingSpinner, ModuleLoader } from './ui/EnterpriseUI';
-import { SummaryCard, SummaryCardsGrid, FilterBar as SharedFilterBar, ActionBar, SearchBox, ActionButton, ExportCSVButton, ClearFiltersButton, AddButton, sharedThStyle, sharedTdStyle, Pagination } from './ui/SharedComponents';
+import { SummaryCard, SummaryCardsGrid, FilterBar as SharedFilterBar, ActionBar, SearchBox, ActionButton, ExportCSVButton, ClearFiltersButton, AddButton, RefreshButton, sharedThStyle, sharedTdStyle, Pagination } from './ui/SharedComponents';
 import * as itemsApi from '../utils/api/itemsSupabase';
 import { getSupabaseClient } from '../utils/supabase/client';
 
@@ -1036,6 +1036,7 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
   const canEditDelete = canEditItem || canDeleteItem;
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
+  const [initialLoad, setInitialLoad] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
@@ -1085,64 +1086,59 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [activeDropdown]);
 
+  // ── SERVER-SIDE STATS (lightweight head:true counts — zero row data) ──
+  const [stats, setStats] = useState({ totalCount: 0, activeCount: 0, inactiveCount: 0 });
+  const [totalCount, setTotalCount] = useState(0);
+
+  const fetchCounts = useCallback(async () => {
+    try {
+      const supabase = getSupabaseClient();
+      const [totalR, activeR, inactiveR] = await Promise.all([
+        supabase.from('items').select('id', { count: 'exact', head: true }),
+        supabase.from('items').select('id', { count: 'exact', head: true }).eq('is_active', true),
+        supabase.from('items').select('id', { count: 'exact', head: true }).eq('is_active', false),
+      ]);
+      setStats({
+        totalCount: totalR.count ?? 0,
+        activeCount: activeR.count ?? 0,
+        inactiveCount: inactiveR.count ?? 0,
+      });
+    } catch { /* non-critical */ }
+  }, []);
+
+  // ── SERVER-SIDE FETCH (filtered + paginated) ──
   const fetchItems = useCallback(async () => {
     setError(null);
     setLoading(true);
-    const result = await itemsApi.fetchItems();
+    const filters: itemsApi.ItemFilters = {
+      ...(cardFilter === 'ACTIVE' ? { isActive: true } : cardFilter === 'INACTIVE' ? { isActive: false } : {}),
+      ...(searchTerm.trim() ? { search: searchTerm.trim() } : {}),
+      limit: ITEMS_PER_PAGE,
+      offset: page * ITEMS_PER_PAGE,
+    };
+    const result = await itemsApi.fetchItems(filters);
     setLoading(false);
     if (result.error) {
       setError(result.error);
       setItems([]);
+      setTotalCount(0);
       return;
     }
-    setItems(result.data ?? []);
-  }, []);
+    setItems(result.data);
+    setTotalCount(result.count);
+  }, [cardFilter, searchTerm, page]);
+
+  useEffect(() => { fetchItems(); }, [fetchItems]);
+  useEffect(() => { fetchCounts(); }, [fetchCounts]);
 
   useEffect(() => {
-    fetchItems();
-  }, [fetchItems]);
-
-  // Calculate stats from items (always from full data)
-  const stats = useMemo(() => ({
-    totalCount: items.length,
-    activeCount: items.filter(i => i.is_active).length,
-    inactiveCount: items.filter(i => !i.is_active).length,
-  }), [items]);
-
-  // Filter items based on search and card filter (frontend-only, no refetch)
-  const filteredItems = useMemo(() => {
-    let result = items;
-
-    // Apply card filter
-    if (cardFilter === 'ACTIVE') {
-      result = result.filter(item => item.is_active === true);
-    } else if (cardFilter === 'INACTIVE') {
-      result = result.filter(item => item.is_active === false);
+    if (!loading && initialLoad) {
+      setInitialLoad(false);
     }
-
-    // Apply search filter (case-insensitive) - includes part_number and master_serial_no
-    if (searchTerm.trim()) {
-      const search = searchTerm.toLowerCase();
-      result = result.filter(item =>
-        item.item_code.toLowerCase().includes(search) ||
-        (item.item_name || '').toLowerCase().includes(search) ||
-        (item.part_number || '').toLowerCase().includes(search) ||
-        (item.master_serial_no || '').toLowerCase().includes(search)
-      );
-    }
-
-    return result;
-  }, [items, cardFilter, searchTerm]);
-
-  // Paginated items
-  const displayedItems = useMemo(() => {
-    return filteredItems.slice(page * ITEMS_PER_PAGE, (page + 1) * ITEMS_PER_PAGE);
-  }, [filteredItems, page]);
+  }, [loading, initialLoad]);
 
   // Reset page when filters change
-  useEffect(() => {
-    setPage(0);
-  }, [cardFilter, searchTerm]);
+  useEffect(() => { setPage(0); }, [cardFilter, searchTerm]);
 
   // Check if any CARD filters are active (not search - search has its own X button)
   const hasActiveFilters = cardFilter !== 'ALL';
@@ -1157,11 +1153,9 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
     setCardFilter('ALL');
   };
 
-
-
-  // Handle export
+  // Handle export (exports current page)
   const handleExport = () => {
-    exportItemsToExcel(filteredItems, 'item_master');
+    exportItemsToExcel(items, 'item_master');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -1186,6 +1180,7 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
     showToast('success', isEditing ? 'Item Updated' : 'Item Created', `Item "${itemName}" has been ${isEditing ? 'updated' : 'created'} successfully.`);
     handleCloseModal();
     fetchItems();
+    fetchCounts();
   };
 
   const handleEdit = (item: Item) => {
@@ -1228,6 +1223,7 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
     } else {
       showToast('success', 'Item Deleted', `Item "${itemName}" has been permanently deleted.`);
       fetchItems();
+      fetchCounts();
     }
     setShowDeleteModal(false);
     setItemToDelete(null);
@@ -1247,7 +1243,7 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
     setStandardCostStr('');
   };
 
-  if (loading) return <ModuleLoader moduleName="Item Master" icon={<Package size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
+  if (initialLoad) return <ModuleLoader moduleName="Item Master" icon={<Package size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -1368,6 +1364,7 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
           {hasActiveFilters && (
             <ClearFiltersButton onClick={handleClearFilters} />
           )}
+          <RefreshButton onClick={() => { fetchItems(); fetchCounts(); }} loading={loading} />
           <ExportCSVButton onClick={handleExport} />
           {canAddItem && (
             <AddButton label="Add Item" onClick={() => setShowModal(true)} />
@@ -1377,7 +1374,7 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
 
       {/* Items Table - PRIMARY IDENTIFIER: Part Number */}
       <Card style={{ padding: 0, overflow: activeDropdown ? 'visible' : undefined }}>
-        {filteredItems.length === 0 ? (
+        {items.length === 0 && !loading ? (
           <EmptyState
             icon={<Package size={48} />}
             title={hasActiveFilters ? "No Matching Items" : "No Items Found"}
@@ -1406,7 +1403,7 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
                   </tr>
                 </thead>
                 <tbody style={{ minHeight: '120px' }}>
-                  {displayedItems.map((item, index) => (
+                  {items.map((item, index) => (
                     <tr
                       key={item.id}
                       style={{
@@ -1516,7 +1513,7 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
             <Pagination
               page={page}
               pageSize={ITEMS_PER_PAGE}
-              totalCount={filteredItems.length}
+              totalCount={totalCount}
               onPageChange={setPage}
             />
           </>
@@ -1532,7 +1529,7 @@ export function ItemMasterSupabase({ userRole, userPerms = {} }: ItemMasterProps
           color: 'var(--enterprise-gray-600)',
       }}>
           <span>
-              Showing {filteredItems.length} of {items.length} items
+              Showing {totalCount} of {stats.totalCount} items
               {hasActiveFilters && ' (filtered)'}
           </span>
       </div>
