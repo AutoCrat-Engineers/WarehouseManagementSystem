@@ -1,10 +1,10 @@
 
-name: Build, Test, Deploy (deploy/Pre-Prod)
+name: Build, Test, Deploy (deploy/pre-prod)
 
 on:
   push:
     branches:
-      - deploy/Pre-Prod
+      - deploy/pre-prod
 
 jobs:
 
