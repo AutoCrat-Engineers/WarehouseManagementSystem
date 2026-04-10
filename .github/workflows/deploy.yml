@@ -37,17 +37,19 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Login to Docker Hub
-        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
+      - name: Login to Azure Container Registry
+        run: |
+          echo "${{ secrets.ACR_PASSWORD }}" | docker login autocratwms.azurecr.io \
+           -u ${{ secrets.ACR_USERNAME }} \
+           --password-stdin
+      
       - name: Build Docker image
         run: |
           docker pull node:20-alpine || true
-          docker build --pull -t shravanaweb/wms:latest -f Dockerfile .
+          docker build -t autocratwms.azurecr.io/wms-service:latest -f Dockerfile .
       - name: Push Docker image
-        run: docker push shravanaweb/wms:latest
-
+        run: docker push autocratwms.azurecr.io/wms-service:latest
+        
       - name: Deploy on Azure VM (clean replace strategy)
         uses: appleboy/ssh-action@v1.0.3
         with:
