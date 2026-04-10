@@ -1,0 +1,9 @@
+version: '3.8'
+
+services:
+  frontend:
+    image: wms-frontend:latest
+    container_name: wms-frontend
+    ports:
+      - "80:80"
+    restart: always
