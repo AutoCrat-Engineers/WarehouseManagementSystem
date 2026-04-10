@@ -58,6 +58,10 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             set -e
+            echo "===== ACR LOGIN ====="
+            echo "${{ secrets.ACR_PASSWORD }}" | docker login autocratwms.azurecr.io \
+              -u ${{ secrets.ACR_USERNAME }} \
+              --password-stdin
             echo "===== DOCKER CLEANUP ====="
             docker stop wms || true
             docker rm wms || true
@@ -66,13 +70,13 @@ jobs:
             echo "===== REMOVE UNUSED IMAGES ====="
             docker image prune -af || true
             echo "===== PULL LATEST IMAGE ====="
-            docker pull shravanaweb/wms:latest
+            docker pull autocratwms.azurecr.io/wms-service:latest
             echo "===== START VALIDATION CONTAINER ====="
             docker run -d \
               --name wms-new \
               -p 8080:80 \
               --restart unless-stopped \
-              shravanaweb/wms:latest
+              autocratwms.azurecr.io/wms-service:latest
             echo "Waiting for container startup..."
             sleep 15
             echo "===== VALIDATE CONTAINER ====="
@@ -86,6 +90,7 @@ jobs:
               --name wms \
               -p 8080:80 \
               --restart unless-stopped \
-              shravanaweb/wms:latest
+              autocratwms.azurecr.io/wms-service:latest
             echo "===== DEPLOYMENT SUCCESS ====="
             docker ps
+
