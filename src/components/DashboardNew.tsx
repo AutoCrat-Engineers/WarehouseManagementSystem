@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   Package,
   AlertTriangle,
@@ -12,8 +12,6 @@ import {
   BarChart3
 } from 'lucide-react';
 import { useDashboard } from '../hooks/useDashboard';
-import { seedService } from '../utils/api/services';
-import { SampleDataInfo } from './SampleDataInfo';
 import { APIError } from '../utils/api/client';
 
 interface DashboardProps {
@@ -23,37 +21,6 @@ interface DashboardProps {
 
 export function DashboardNew({ accessToken, onNavigate }: DashboardProps) {
   const { data, loading, error, refetch } = useDashboard(accessToken);
-  const [seeding, setSeeding] = useState(false);
-  const [seedError, setSeedError] = useState<string | null>(null);
-
-  const handleSeedDatabase = async () => {
-    if (!confirm('This will load sample manufacturing data into the system. Continue?')) {
-      return;
-    }
-
-    setSeeding(true);
-    setSeedError(null);
-
-    try {
-      const result = await seedService.seedDatabase(accessToken);
-
-      alert(
-        `Success! Loaded:\n` +
-        `• ${result.stats.items} items\n` +
-        `• ${result.stats.inventory} inventory records\n` +
-        `• ${result.stats.blanketOrders} blanket orders\n` +
-        `• ${result.stats.releases} releases`
-      );
-
-      await refetch();
-      window.location.reload();
-    } catch (err) {
-      console.error('Seed database error:', err);
-      setSeedError(err instanceof APIError ? err.message : 'Failed to seed database');
-    } finally {
-      setSeeding(false);
-    }
-  };
 
   if (loading) {
     return (
@@ -458,13 +425,6 @@ export function DashboardNew({ accessToken, onNavigate }: DashboardProps) {
           </div>
         </div>
       )}
-
-      {/* Sample Data Section */}
-      <SampleDataInfo
-        onSeedDatabase={handleSeedDatabase}
-        seeding={seeding}
-        error={seedError}
-      />
     </div>
   );
 }
