@@ -1,6 +1,6 @@
 # Deployment Guide
 
-> **Version:** 0.5.0 | **Last Updated:** 2026-03-31
+> **Version:** 0.5.2 | **Last Updated:** 2026-04-11
 
 ## Architecture
 
@@ -25,7 +25,7 @@ The deployment is automated via `.github/workflows/deploy.yaml`.
 
 ### Trigger
 
-Push to the `deploy/test-1` branch triggers the pipeline.
+Push to the `deploy/pre-prod` branch triggers the pipeline.
 
 ### Pipeline Steps
 
@@ -54,7 +54,7 @@ Push to the `deploy/test-1` branch triggers the pipeline.
 
 ### Docker Configuration
 
-**Dockerfile** (`devops/docker/Dockerfile`):
+**Dockerfile** (root-level, deploy/pre-prod branch only):
 
 ```dockerfile
 # Build stage
@@ -77,6 +77,10 @@ CMD ["nginx", "-g", "daemon off;"]
 
 - SPA routing: all paths → `index.html`
 - Gzip compression for CSS, JS, JSON
+- Reverse proxy for PDF service (`/v1/generate-pdf` → Azure Container App)
+- API key injection via `${PDF_API_KEY}` envsubst (server-side, never exposed to browser)
+- CORS preflight handling for PDF endpoints
+- Health check proxies (`/health`, `/healthz`, `/readyz`)
 
 ## Manual Deployment
 
@@ -134,6 +138,32 @@ Run the performance indexes migration:
 ```
 
 This adds 10 indexes targeting packing boxes, containers, pallets, warehouse stock, and audit logs.
+
+## Branch Strategy
+
+| Branch | Contents |
+| :--- | :--- |
+| `develop-test` | Application source code only — no Docker, Nginx, CI/CD files |
+| `deploy/pre-prod` | Application code + `Dockerfile`, `docker-compose.yml`, `.github/workflows/deploy.yml`, `devops/nginx/`, `.env.example` |
+
+> ⚠️ **Never merge deployment files into `develop-test`.** Merging `develop-test → deploy/pre-prod` is safe and conflict-free.
+
+## Environment Variables
+
+### Application (`.env` in project root)
+
+| Variable | Required | Description |
+| :--- | :--- | :--- |
+| `VITE_SUPABASE_URL` | ✅ | Supabase project URL |
+| `VITE_SUPABASE_ANON_KEY` | ✅ | Supabase public anon key |
+| `VITE_PDF_SERVICE_URL` | ❌ | PDF service URL (empty in production) |
+| `VITE_PDF_SERVICE_API_KEY` | ❌ | PDF API key (empty in production) |
+
+### Docker / Nginx (injected at container startup)
+
+| Variable | Description |
+| :--- | :--- |
+| `PDF_API_KEY` | Injected into nginx.conf via envsubst |
 
 ## Post-Deployment Checklist
 

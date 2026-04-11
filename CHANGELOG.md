@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.2] — 2026-04-11
+
+### Release Type: Codebase Cleanup, Branch Alignment & Security Hardening
+
+### Changed
+
+- **API Client Security** — All `console.log` in `src/utils/api/client.ts` guarded with `isDev` check; removed emoji prefixes and token credential logging that could leak JWTs in production
+- **Supabase Configuration** — `src/utils/supabase/info.tsx` now uses `import.meta.env` with hardcoded fallbacks for backward compatibility
+- **Auth Deduplication** — `packingService.ts` now imports from centralized `src/utils/auth.ts` instead of local duplicate definitions
+- **LoginPage Import** — `App.tsx` imports directly from `./auth/login/LoginPage` instead of through re-export shim
+- **Nginx Security** — Replaced hardcoded PDF API key with `${PDF_API_KEY}` envsubst template (deploy branch only)
+- **Vite Configuration** — Removed 40+ unused versioned package alias entries from `vite.config.ts`
+- **Branch Strategy** — `develop-test` now contains exclusively application source code; deployment artifacts isolated to `deploy/pre-prod`
+
+### Removed
+
+- **Temporary Files** — `changelog-ui-standardization.txt`, `sidebar_icon_changes.txt`
+- **Ad-hoc Test Scripts** — `test-foreign-key.js`, `test.mjs`
+- **Obsolete Docker Config** — `devops/docker/Dockerfile` (replaced by root `Dockerfile` on deploy branch)
+- **Dead Components** — `SampleDataInfo.tsx` (no-op), `LoginPage.tsx` (re-export shim)
+- **Dead Code** — `seedService` import, `handleSeedDatabase`, `SampleDataInfo` JSX from `DashboardNew.tsx`
+- **Deployment Artifacts from Dev** — `.env.example`, `.env.production`, entire `devops/` directory removed from `develop-test` (preserved on `deploy/pre-prod`)
+
+### Improved
+
+- **Merge Safety** — Zero-conflict merges verified between `develop-test` and `deploy/pre-prod`
+- **`.gitignore`** — Added `test*.js`, `test*.mjs`, `*.conf.bak` patterns
+- **Security** — No hardcoded API keys or secrets in any tracked source file
+- **Documentation** — Updated README.md, DEPLOYMENT_GUIDE.md, CHANGELOG.md for v0.5.2
+
+---
+
 ## [0.5.1] — 2026-03-31
 
 ### Release Type: Deep Cleanup & Standardization
