@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Package,
   AlertTriangle,
@@ -21,6 +21,7 @@ interface DashboardProps {
 
 export function DashboardNew({ accessToken, onNavigate }: DashboardProps) {
   const { data, loading, error, refetch } = useDashboard(accessToken);
+
 
   if (loading) {
     return (
