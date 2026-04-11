@@ -22,6 +22,7 @@ import type {
 import { processPackingBoxAsContainer } from '../packing-engine/packingEngineService';
 import { generateBoxBatch, generateMixedBoxBatch } from '../../utils/idGenerator';
 import { logInfo, logWarn, logError, withTiming } from '../../utils/auditLogger';
+import { getCurrentUserId, getUserRole, getAuthContext } from '../../utils/auth';
 
 const supabase = getSupabaseClient();
 
@@ -29,23 +30,6 @@ const supabase = getSupabaseClient();
 // HELPERS
 // ============================================================================
 
-async function getCurrentUserId(): Promise<string> {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.user?.id) throw new Error('Not authenticated');
-    return session.user.id;
-}
-
-async function getUserRole(userId: string): Promise<string> {
-    const { data } = await supabase.from('profiles').select('role').eq('id', userId).single();
-    return data?.role || 'L1';
-}
-
-/** Fetch userId and role in a single parallel call — used by most functions */
-async function getAuthContext(): Promise<{ userId: string; role: string }> {
-    const userId = await getCurrentUserId();
-    const role = await getUserRole(userId);
-    return { userId, role };
-}
 
 async function logAudit(
     requestId: string, action: PackingAuditAction,

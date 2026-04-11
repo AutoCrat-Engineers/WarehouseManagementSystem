@@ -17,6 +17,8 @@ export interface APIResponse<T> {
   error?: string;
 }
 
+const isDev = import.meta.env.DEV;
+
 class APIClient {
   private baseUrl: string;
   private defaultHeaders: HeadersInit;
@@ -38,7 +40,6 @@ class APIClient {
     // Always get fresh token from current session
     let token = accessToken;
     if (!token) {
-      console.log('No token provided, fetching from current session...');
       const { data: { session }, error } = await this.supabase.auth.getSession();
       if (error) {
         console.error('Error getting session:', error);
@@ -49,7 +50,6 @@ class APIClient {
         throw new APIError('No active session. Please login.', 401);
       }
       token = session.access_token;
-      console.log('Retrieved token from session:', token.substring(0, 30) + '...');
     }
 
     const headers: HeadersInit = {
@@ -63,8 +63,9 @@ class APIClient {
 
     const url = `${this.baseUrl}${endpoint}`;
 
-    console.log(`API Request: ${options.method || 'GET'} ${url}`);
-    console.log('Token (first 30 chars):', token?.substring(0, 30) + '...');
+    if (isDev) {
+      console.log(`API Request: ${options.method || 'GET'} ${url}`);
+    }
 
     try {
       const response = await fetch(url, {
@@ -72,16 +73,18 @@ class APIClient {
         headers,
       });
 
-      console.log(`API Response: ${response.status} ${response.statusText}`);
+      if (isDev) {
+        console.log(`API Response: ${response.status} ${response.statusText}`);
+      }
 
       // Handle 401 Unauthorized - try to refresh token once
       if (response.status === 401 && retryCount === 0) {
-        console.log('❌ Received 401 Unauthorized, attempting token refresh...');
+        if (isDev) console.log('Received 401, attempting token refresh...');
         
         const { data: refreshData, error: refreshError } = await this.supabase.auth.refreshSession();
         
         if (refreshError || !refreshData.session) {
-          console.error('❌ Token refresh failed:', refreshError);
+          console.error('Token refresh failed:', refreshError);
           
           // Sign out and force re-login
           await this.supabase.auth.signOut();
@@ -89,7 +92,7 @@ class APIClient {
           throw new APIError('Session expired. Please login again.', 401);
         }
 
-        console.log('✅ Token refreshed successfully, retrying request...');
+        if (isDev) console.log('Token refreshed, retrying request...');
         
         // Retry the request with new token
         return this.request<T>(endpoint, options, refreshData.session.access_token, retryCount + 1);
@@ -113,7 +116,7 @@ class APIClient {
       // Handle error responses
       if (!response.ok) {
         const errorMessage = data.error || data.message || `HTTP ${response.status}: ${response.statusText}`;
-        console.error(`❌ API Error: ${errorMessage}`, data);
+        console.error(`API Error: ${errorMessage}`, data);
         throw new APIError(
           errorMessage,
           response.status,
@@ -121,7 +124,6 @@ class APIClient {
         );
       }
 
-      console.log(`✅ API Success: ${options.method || 'GET'} ${url}`);
       return data as T;
     } catch (error) {
       if (error instanceof APIError) {
@@ -130,11 +132,11 @@ class APIClient {
 
       // Network errors, timeout, etc.
       if (error instanceof TypeError && error.message.includes('fetch')) {
-        console.error('❌ Network error:', error);
+        console.error('Network error:', error);
         throw new APIError('Network error: Please check your connection', 0);
       }
 
-      console.error('❌ Unknown error:', error);
+      console.error('Unknown error:', error);
       throw new APIError(
         error instanceof Error ? error.message : 'Unknown error occurred',
         0

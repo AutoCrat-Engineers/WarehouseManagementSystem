@@ -75,6 +75,7 @@ jobs:
             docker run -d \
               --name wms-new \
               -p 8080:80 \
+              --env PDF_API_KEY=${{ secrets.PDF_API_KEY }} \
               --restart unless-stopped \
               autocratwms.azurecr.io/wms-service:latest
             echo "Waiting for container startup..."
@@ -89,8 +90,11 @@ jobs:
             docker run -d \
               --name wms \
               -p 8080:80 \
+              --env PDF_API_KEY=${{ secrets.PDF_API_KEY }} \
               --restart unless-stopped \
               autocratwms.azurecr.io/wms-service:latest
+            echo "===== CLEANUP STALE NGINX CONFIGS ====="
+            sudo rm -f /etc/nginx/conf.d/default.conf
             echo "===== DEPLOYMENT SUCCESS ====="
             docker ps
 

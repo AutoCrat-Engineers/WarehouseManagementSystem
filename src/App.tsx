@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { getSupabaseClient } from './utils/supabase/client';
 import { signInWithEmail, signOut } from './utils/supabase/auth';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { LoginPage } from './components/LoginPage';
+import { LoginPage } from './auth/login/LoginPage';
 import { DashboardNew } from './components/DashboardNew';
 import { ItemMasterSupabase } from './components/ItemMasterSupabase';
 import { InventoryGrid } from './components/InventoryGrid';
@@ -273,7 +273,7 @@ export default function App() {
       }
 
       if (result.session?.access_token) {
-        console.log('✓ Login successful');
+
         setAccessToken(result.session.access_token);
         setUser(result.session.user);
         setIsAuthenticated(true);
@@ -509,7 +509,7 @@ export default function App() {
 
     // Add User Management for L3 users
     if (userRole === 'L3') {
-      console.log('✅ Adding User Management menu for L3');
+
       items.push({ id: 'users' as View, label: 'User Management', icon: Users, description: 'Manage Users & Roles' });
     }
 
