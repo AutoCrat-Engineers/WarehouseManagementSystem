@@ -74,7 +74,7 @@ jobs:
             echo "===== START VALIDATION CONTAINER ====="
             docker run -d \
               --name wms-new \
-              -p 8080:80 \
+              -p 127.0.0.1:8080:80 \
               --env PDF_API_KEY=${{ secrets.PDF_API_KEY }} \
               --restart unless-stopped \
               autocratwms.azurecr.io/wms-service:latest
@@ -89,7 +89,7 @@ jobs:
             docker rm wms-new
             docker run -d \
               --name wms \
-              -p 8080:80 \
+              -p 127.0.0.1:8080:80 \
               --env PDF_API_KEY=${{ secrets.PDF_API_KEY }} \
               --restart unless-stopped \
               autocratwms.azurecr.io/wms-service:latest
