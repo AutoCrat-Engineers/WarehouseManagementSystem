@@ -1910,8 +1910,8 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
 
         {/* Right actions */}
         <ActionBar>
-          {(searchTerm || filterType !== 'ALL' || filterStatus !== 'ALL' || filterStockType !== 'ALL' || filterDateFrom || filterDateTo) && (
-            <ClearFiltersButton onClick={() => { setSearchTerm(''); setFilterType('ALL'); setFilterStatus('ALL'); setFilterStockType('ALL'); setFilterDateFrom(''); setFilterDateTo(''); }} />
+          {(filterType !== 'ALL' || filterStatus !== 'ALL' || filterStockType !== 'ALL' || filterDateFrom || filterDateTo) && (
+            <ClearFiltersButton onClick={() => { setFilterType('ALL'); setFilterStatus('ALL'); setFilterStockType('ALL'); setFilterDateFrom(''); setFilterDateTo(''); }} />
           )}
           <ExportCSVButton onClick={handleExport} />
           {canCreate && <AddButton label="New Movement" onClick={openModal} />}

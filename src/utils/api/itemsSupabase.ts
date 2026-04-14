@@ -61,29 +61,58 @@ export type ItemResult = { data: Item | null; error: string | null };
 export type DeleteResult = { success: boolean; error: string | null };
 
 /**
- * Fetch all items - returns raw DB data, no transformation
+ * Fetch items with server-side filtering + pagination
  */
-export async function fetchItems(): Promise<ItemsResult> {
+export interface ItemFilters {
+  isActive?: boolean;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export async function fetchItems(filters?: ItemFilters): Promise<{ data: Item[]; count: number; error: string | null }> {
   const supabase = getSupabaseClient();
 
   const { data: session } = await supabase.auth.getSession();
   if (!session?.session) {
-    return { data: null, error: 'Not signed in. Please sign in to view items.' };
+    return { data: [], count: 0, error: 'Not signed in. Please sign in to view items.' };
   }
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('items')
-    .select('*')
+    .select('*', { count: 'exact' })
     .order('created_at', { ascending: false });
+
+  // Server-side card filter
+  if (filters?.isActive !== undefined) {
+    query = query.eq('is_active', filters.isActive);
+  }
+
+  // Server-side search — double-quote values for PostgREST safety (commas/parens)
+  if (filters?.search) {
+    const safe = filters.search.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    query = query.or(
+      `item_code.ilike."%${safe}%",item_name.ilike."%${safe}%",part_number.ilike."%${safe}%",master_serial_no.ilike."%${safe}%"`
+    );
+  }
+
+  // Server-side pagination
+  if (filters?.limit && filters?.offset !== undefined) {
+    query = query.range(filters.offset, filters.offset + filters.limit - 1);
+  } else if (filters?.limit) {
+    query = query.limit(filters.limit);
+  }
+
+  const { data, count, error } = await query;
 
   if (error) {
     const msg = error.code === 'PGRST301' || error.message?.toLowerCase().includes('policy')
       ? 'You do not have permission to view items. Check RLS policies.'
       : error.message;
-    return { data: null, error: msg };
+    return { data: [], count: 0, error: msg };
   }
 
-  return { data: data as Item[], error: null };
+  return { data: (data as Item[]) || [], count: count ?? 0, error: null };
 }
 
 /**

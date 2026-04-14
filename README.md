@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/Version-0.5.1-blue?style=for-the-badge" alt="Version" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Version-0.5.2-blue?style=for-the-badge" alt="Version" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Status-Active_Development-brightgreen?style=for-the-badge" alt="Status" /></a>
   <a href="#"><img src="https://img.shields.io/badge/License-Proprietary-red?style=for-the-badge" alt="License" /></a>
   <a href="#"><img src="https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=white" alt="React" /></a>
@@ -148,7 +148,7 @@ WarehouseManagementSystem/
 ├── 📄 .gitignore                # Git ignore rules
 ├── 📄 README.md                 # This file
 ├── 📄 CHANGELOG.md              # Version history and release notes
-├── 📄 RELEASE_NOTES.md          # Current release notes (v0.5.1)
+├── 📄 RELEASE_NOTES.md          # Current release notes
 ├── 📄 LICENSE                   # Proprietary license
 ├── 📄 package.json              # Dependencies and scripts
 ├── 📄 tsconfig.json             # TypeScript configuration
@@ -270,7 +270,9 @@ WarehouseManagementSystem/
     │   └── useInventory.ts      # Inventory operations
     │
     ├── 📁 services/             # Business logic services
-    │   └── inventoryService.ts  # Inventory CRUD operations
+    │   ├── inventoryService.ts  # Inventory CRUD operations
+    │   ├── pdfServiceClient.ts  # PDF microservice HTTP client (circuit breaker, retry)
+    │   └── sessionService.ts    # Session management
     │
     ├── 📁 types/                # TypeScript type definitions
     │   ├── index.ts             # Core application types
@@ -322,18 +324,25 @@ cd WarehouseManagementSystem
 npm ci
 ```
 
-**3. Configure Supabase connection:**
+**3. Configure environment variables:**
 
-Update `src/utils/supabase/info.tsx` with your Supabase project credentials:
+Create a `.env` file in the project root:
 
-```typescript
-export const projectId = 'your-project-id';
-export const publicAnonKey = 'your-anon-key';
+```bash
+# Supabase Configuration (required)
+VITE_SUPABASE_URL=https://your-project-id.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key
+
+# PDF Service (optional — only for local development with direct Azure access)
+VITE_PDF_SERVICE_URL=https://your-pdf-service.azurecontainerapps.io
+VITE_PDF_SERVICE_API_KEY=your-pdf-api-key
 ```
+
+> 💡 If no `.env` is provided, the app falls back to hardcoded defaults in `src/utils/supabase/info.tsx`.
 
 **4. Run database migrations:**
 
-Execute the migration scripts in order in the Supabase SQL Editor. Apply schemas from `config/` and `.db_reference/` as needed:
+Execute the migration scripts in order in the Supabase SQL Editor. Apply schemas from `.db_reference/` as needed:
 
 ```
 supabase/migrations/packing_engine/001_contract_configs.sql
@@ -368,8 +377,8 @@ This project follows a **Git Feature Branch Workflow** with the following branch
 | Branch | Purpose | Protected |
 | :--- | :--- | :--- |
 | `main` | Production-ready code. Stable releases only. | ✅ Yes |
-| `develop-stable` | Pre-production staging branch. | ✅ Yes |
-| `develop-test` | Integration testing branch. | ✅ Yes |
+| `deploy/pre-prod` | Deployment branch. Application code + Docker, Nginx, CI/CD configs. | ✅ Yes |
+| `develop-test` | Active development. Pure application source code only — no deployment artifacts. | ✅ Yes |
 | `feature/*` | Feature development branches. | ❌ No |
 
 ### Pull Latest Changes (Git Pull)
@@ -443,8 +452,10 @@ chore(deps): upgrade React to v18.3.1
 
 | Variable | Required | Description |
 | :--- | :--- | :--- |
-| `VITE_SUPABASE_URL` | ✅ | Your Supabase project URL |
+| `VITE_SUPABASE_URL` | ✅ | Your Supabase project URL (e.g., `https://xyz.supabase.co`) |
 | `VITE_SUPABASE_ANON_KEY` | ✅ | Your Supabase anonymous/public key |
+| `VITE_PDF_SERVICE_URL` | ❌ | PDF microservice URL (empty in production — nginx proxies same-origin) |
+| `VITE_PDF_SERVICE_API_KEY` | ❌ | PDF service API key (empty in production — nginx injects server-side) |
 
 > ⚠️ **Never commit `.env` files or service role keys to version control.** The `.gitignore` is configured to exclude all environment files. The application uses the public anon key with Row Level Security (RLS) for all operations.
 
@@ -603,13 +614,14 @@ MAJOR.MINOR.PATCH
 | **MINOR** | New features, backwards-compatible |
 | **PATCH** | Bug fixes and minor improvements |
 
-**Current Version:** `v0.5.1`
+**Current Version:** `v0.5.2`
 
 ### Version History
 
 | Version | Date | Type | Highlights |
 | :--- | :--- | :--- | :--- |
-| **0.5.1** | 2026-03-31 | Patch | Deep cleanup, dead code removal, DB consolidation, documentation sync |
+| **0.5.2** | 2026-04-11 | Patch | Branch alignment, security hardening, deploy artifact isolation |
+| 0.5.1 | 2026-03-31 | Patch | Deep cleanup, dead code removal, DB consolidation, documentation sync |
 | 0.5.0 | 2026-03-31 | Minor | Codebase cleanup, dependency audit, documentation overhaul, PDF microservice |
 | 0.4.2 | 2026-03-30 | Patch | Server-side filtering, backend aggregates, pagination fixes |
 | 0.4.1 | 2026-03-06 | Patch | Performance optimization, documentation overhaul, structured logging |
@@ -625,64 +637,31 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
 
 ## 🔄 Recent Changes
 
-### v0.5.0 — Codebase Cleanup & Documentation (2026-03-31)
+### v0.5.2 — Branch Alignment & Security Hardening (2026-04-11)
 
-This release focuses on enterprise-grade code quality improvements with **zero business logic changes**:
+This patch release focuses on **branch cleanup, deployment isolation, and security hardening** with zero business logic changes:
 
-#### Dependency Audit
-- Removed **6 unused npm packages** (`hono`, `canvas`, `html2canvas`, `jspdf`, `jsbarcode`, `puppeteer`) — none were imported in `src/`
-- Fixed package name from "Build Inventory Forecasting System" to "warehouse-management-system"
+#### Branch Alignment
+- `develop-test` now contains **only application source code** — all Docker, Nginx, CI/CD, and `.env.*` files removed
+- `deploy/pre-prod` retains all deployment infrastructure (Dockerfile, docker-compose, deploy.yml, nginx configs)
+- Zero-conflict merge path verified between both branches
 
-#### Dead Code & Artifact Cleanup
-- Deleted 5 debug text files (`git_log_output.txt`, `git_status_output.txt`, `tsc_output.txt`, `log.txt`, `log2.txt`)
-- Cleaned 63 lines of commented-out mock data from `SampleDataInfo.tsx`
-- Consolidated duplicate `db_schema.sql` (60KB) into `.db_reference/`
+#### Security Hardening
+- Removed hardcoded PDF API key from nginx.conf (now uses `${PDF_API_KEY}` envsubst)
+- API client `console.log` guarded with `isDev` — no token/request logging in production
+- Supabase config migrated to `import.meta.env` with safe fallbacks
 
-#### .gitignore Optimization
-- Added 8 new exclusion patterns for debug outputs, temporary files, and diagnostic artifacts
-
-#### Documentation
-- Created `RELEASE_NOTES.md` from analysis of 81 commits and 40+ PRs
-- Updated `CHANGELOG.md` with structured v0.5.0 entry
-- Updated architecture documentation to reflect PDF microservice extraction
-
-### v0.4.2 — Critical Bugfixes (2026-03-30)
-
-- Migrated Stock Movement, Sticker Generation, and Proforma Invoice to server-side filtering
-- Fixed summary card counts using independent backend HEAD queries
-- Standardized pagination + filter ordering across all modules
-- Added page reset on filter change to prevent stale results
-
-See [CHANGELOG.md](CHANGELOG.md) and [RELEASE_NOTES.md](RELEASE_NOTES.md) for complete details.
+#### Code Cleanup
+- Removed 10 unnecessary files (temp notes, test scripts, dead components)
+- Removed 40+ dead Vite alias entries
+- Centralized auth helpers — eliminated duplicate `getCurrentUserId`/`getUserRole` definitions
+- Removed dead seed database code from Dashboard
 
 ### v0.5.1 — Deep Cleanup & Standardization (2026-03-31)
 
-This round performs a comprehensive dead code audit and structural cleanup with **zero business logic changes**:
-
-#### Dead Code & Import Cleanup
-- Removed 253 lines of commented-out duplicate code from `src/utils/supabase/auth.ts`
-- Removed 8 unused Lucide icon imports from `App.tsx` (BarChart3, List, FileCheck, FileMinus, Settings, Truck, Receipt, Eye)
-- Removed 20-line commented-out Traceability menu block from `App.tsx`
-- Removed unused `PackingListManager` import from `App.tsx`
-- Fixed dangling `AuthDebug` import in `DashboardNew.tsx` (file didn't exist)
-
-#### Legacy File Removal
-- Deleted `server/pdf-server.mjs` — PDF service fully decoupled to `micro-services/pdf-service/`
-- Removed `pdf-server` script from `package.json`
-- Moved `@types/qrcode` from dependencies to devDependencies
-
-#### Database File Consolidation
-- Moved 3 SQL files from `config/` into `.db_reference/` (single source of truth)
-- Removed empty `config/` directory entirely
-
-#### .gitignore Enhancement
-- Added `config/` and `server/` to prevent re-creation of legacy directories
-
-#### Documentation Updates
-- Updated `DISPATCH_EMAIL_SYSTEM.md` to reflect microservice architecture (v8)
-- Updated README project structure to match current file layout
-- Updated `RELEASE_NOTES.md` with v0.5.1 entries
-- Updated `CHANGELOG.md` with v0.5.1 structured entry
+- Removed 253 lines of commented-out duplicate code, 8 unused imports, dead components
+- Deleted legacy `server/` directory (PDF fully decoupled to microservice)
+- Consolidated DB schemas into `.db_reference/`
 
 ---
 

@@ -71,33 +71,41 @@ export async function getItemStockDashboard(itemCode: string): Promise<ItemStock
  */
 export async function getAllItemsStockDashboard(
     filters?: StockQueryFilters
-): Promise<ItemStockDashboard[]> {
+): Promise<{ data: ItemStockDashboard[]; count: number }> {
     let query = supabase
         .from('vw_item_stock_dashboard')
-        .select('*');
+        .select('*', { count: 'exact' });
 
     // Apply filters
     if (filters?.stockStatus) {
         query = query.eq('stock_status', filters.stockStatus);
     }
+    if (filters?.isActive !== undefined) {
+        query = query.eq('is_active', filters.isActive);
+    }
     if (filters?.hasAvailableStock) {
         query = query.gt('net_available_for_customer', 0);
+    }
+    if (filters?.search) {
+        // PostgREST .or() uses commas/parens as delimiters — double-quote values to escape
+        const safe = filters.search.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        query = query.or(`item_code.ilike."%${safe}%",master_serial_no.ilike."%${safe}%",part_number.ilike."%${safe}%"`);
     }
     if (filters?.limit) {
         query = query.limit(filters.limit);
     }
-    if (filters?.offset) {
-        query = query.range(filters.offset, filters.offset + (filters.limit || 50) - 1);
+    if (filters?.offset !== undefined && filters?.limit) {
+        query = query.range(filters.offset, filters.offset + filters.limit - 1);
     }
 
-    const { data, error } = await query.order('item_code');
+    const { data, count, error } = await query.order('item_code');
 
     if (error) {
         console.error('Error fetching all items stock dashboard:', error);
         throw error;
     }
 
-    return toCamelCase<ItemStockDashboard[]>(data || []);
+    return { data: toCamelCase<ItemStockDashboard[]>(data || []), count: count ?? 0 };
 }
 
 // ============================================================================

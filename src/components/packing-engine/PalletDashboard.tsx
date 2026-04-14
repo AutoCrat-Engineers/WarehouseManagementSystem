@@ -22,7 +22,6 @@ import {
 import * as svc from './packingEngineService';
 import type { Pallet, PalletState, PackContainer } from './packingEngineService';
 import { getSupabaseClient } from '../../utils/supabase/client';
-import { fetchAggregates } from '../../utils/supabase/queryBuilder';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
@@ -95,6 +94,7 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
     const supabase = getSupabaseClient();
     const [pallets, setPallets] = useState<Pallet[]>([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; title: string; text: string } | null>(null);
     const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const showToast = useCallback((type: 'success' | 'error' | 'warning' | 'info', title: string, text: string, dur = 3000) => {
@@ -109,13 +109,14 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
     const [loadingContainers, setLoadingContainers] = useState(false);
     const [selectedPallet, setSelectedPallet] = useState<Pallet | null>(null);
     const [page, setPage] = useState(0);
+    const [totalCount, setTotalCount] = useState(0);
     const PAGE_SIZE = 20;
 
     // Date range filter
     const [dateFrom, setDateFrom] = useState('');
     const [dateTo, setDateTo] = useState('');
 
-    // Cache all container packing IDs for search
+    // Cache container packing IDs for client-side search on current page
     const [allContainerMap, setAllContainerMap] = useState<Record<string, string[]>>({});
 
     // ────── BACKEND AGGREGATES for summary cards (NEVER depend on paginated data) ──────
@@ -141,15 +142,37 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
         } catch { /* non-critical */ }
     }, [supabase]);
 
-    // ────── Fetch paginated data ──────
+    // ────── Fetch paginated + server-filtered data ──────
     const fetchData = useCallback(async () => {
         setLoading(true);
         try {
-            const data = await svc.fetchPallets();
-            setPallets(data);
+            let query = supabase
+                .from('pack_pallets')
+                .select(`*, items!pack_pallets_item_id_fkey (item_name, master_serial_no, part_number)`, { count: 'exact' })
+                .order('created_at', { ascending: false });
 
-            // Pre-fetch all container packing IDs for search
-            const palletIds = data.map((p: Pallet) => p.id);
+            // Server-side state filter
+            if (stateFilter !== 'ALL') query = query.eq('state', stateFilter);
+
+            // Server-side date range
+            if (dateFrom) query = query.gte('created_at', dateFrom);
+            if (dateTo)   query = query.lte('created_at', dateTo + 'T23:59:59');
+
+            const offset = page * PAGE_SIZE;
+            const { data, count, error } = await query.range(offset, offset + PAGE_SIZE - 1);
+            if (error) throw error;
+
+            const mapped: Pallet[] = (data || []).map((d: any) => ({
+                ...d,
+                item_name: d.items?.item_name,
+                master_serial_no: d.items?.master_serial_no,
+                part_number: d.items?.part_number,
+            }));
+            setPallets(mapped);
+            setTotalCount(count ?? 0);
+
+            // Pre-fetch container packing IDs for the current page (for search)
+            const palletIds = mapped.map((p: Pallet) => p.id);
             if (palletIds.length > 0) {
                 const { data: pcData } = await supabase
                     .from('pack_pallet_containers')
@@ -165,16 +188,24 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
                     if (pkgId) map[pid].push(pkgId.toLowerCase());
                 });
                 setAllContainerMap(map);
+            } else {
+                setAllContainerMap({});
             }
         } catch (err) {
             console.error('Fetch pallets error:', err);
         } finally {
             setLoading(false);
         }
-    }, [supabase]);
+    }, [supabase, stateFilter, dateFrom, dateTo, page]);
 
     useEffect(() => { fetchData(); }, [fetchData]);
     useEffect(() => { fetchCounts(); }, [fetchCounts]);
+
+    useEffect(() => {
+        if (!loading && initialLoad) {
+            setInitialLoad(false);
+        }
+    }, [loading, initialLoad]);
 
     // Real-time — refresh BOTH data and counts
     useEffect(() => {
@@ -206,38 +237,24 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
         }
     };
 
-    // ────── Filter (client-side on loaded pallets — for search across related tables) ──────
+    // Reset page when server-side filters change
+    useEffect(() => { setPage(0); }, [stateFilter, dateFrom, dateTo]);
+
+    // Client-side search filter on the current page (searches container IDs in related tables)
     const filtered = useMemo(() => {
-        return pallets.filter(p => {
-            const term = searchTerm.toLowerCase();
-            const matchSearch = !searchTerm ||
-                p.pallet_number.toLowerCase().includes(term) ||
-                p.item_code.toLowerCase().includes(term) ||
-                (p.item_name || '').toLowerCase().includes(term) ||
-                (p.master_serial_no || '').toLowerCase().includes(term) ||
-                (p.part_number || '').toLowerCase().includes(term) ||
-                // Search through inner box packing IDs / container numbers
-                (allContainerMap[p.id] || []).some(id => id.includes(term));
-            const matchState = stateFilter === 'ALL' || p.state === stateFilter;
+        if (!searchTerm) return pallets;
+        const term = searchTerm.toLowerCase();
+        return pallets.filter(p =>
+            p.pallet_number.toLowerCase().includes(term) ||
+            p.item_code.toLowerCase().includes(term) ||
+            (p.item_name || '').toLowerCase().includes(term) ||
+            (p.master_serial_no || '').toLowerCase().includes(term) ||
+            (p.part_number || '').toLowerCase().includes(term) ||
+            (allContainerMap[p.id] || []).some(id => id.includes(term))
+        );
+    }, [pallets, searchTerm, allContainerMap]);
 
-            // Date range filter on created_at
-            let matchDate = true;
-            if (dateFrom || dateTo) {
-                const palletDate = p.created_at ? p.created_at.split('T')[0] : '';
-                if (dateFrom && palletDate < dateFrom) matchDate = false;
-                if (dateTo && palletDate > dateTo) matchDate = false;
-            }
-
-            return matchSearch && matchState && matchDate;
-        });
-    }, [pallets, searchTerm, stateFilter, allContainerMap, dateFrom, dateTo]);
-
-    // Reset page when search/filter changes
-    useEffect(() => { setPage(0); }, [searchTerm, stateFilter, dateFrom, dateTo]);
-
-    const visiblePallets = useMemo(() => {
-        return filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
-    }, [filtered, page]);
+    const visiblePallets = filtered;
 
     // ────── Table styles ──────
     const th: React.CSSProperties = {
@@ -273,7 +290,7 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
     // ════════════════════════════════════════════════════════════════════
 
     // ── FIRST-LOAD: full-page skeleton ──
-    if (loading && pallets.length === 0) {
+    if (initialLoad) {
         return <ModuleLoader moduleName="Pallet Dashboard" icon={<Layers size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
     }
 
@@ -374,8 +391,8 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
                 />
 
                 <ActionBar>
-                    {(searchTerm || stateFilter !== 'ALL' || dateFrom || dateTo) && (
-                        <ClearFiltersButton onClick={() => { setSearchTerm(''); setStateFilter('ALL'); setDateFrom(''); setDateTo(''); }} />
+                    {(stateFilter !== 'ALL' || dateFrom || dateTo) && (
+                        <ClearFiltersButton onClick={() => { setStateFilter('ALL'); setDateFrom(''); setDateTo(''); }} />
                     )}
                     <ExportCSVButton onClick={handleExport} />
                     <RefreshButton onClick={() => { Promise.all([fetchData(), fetchCounts()]).then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); }} loading={loading} />
@@ -386,7 +403,7 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
             <Card style={{ padding: 0 }}>
                 {loading && pallets.length === 0 ? (
                     <ModuleLoader moduleName="Pallet Dashboard" icon={<Layers size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
-                ) : filtered.length === 0 ? (
+                ) : visiblePallets.length === 0 ? (
                     <EmptyState
                         icon={<Layers size={48} style={{ color: 'var(--enterprise-gray-400)' }} />}
                         title="No Pallets Found"
@@ -564,11 +581,11 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
                             </tbody>
                         </table>
 
-                        {filtered.length > 0 && (
+                        {totalCount > 0 && (
                             <Pagination
                                 page={page}
                                 pageSize={PAGE_SIZE}
-                                totalCount={filtered.length}
+                                totalCount={totalCount}
                                 onPageChange={setPage}
                             />
                         )}
@@ -586,7 +603,7 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
                 marginTop: '16px'
             }}>
                 <span>
-                    Showing {filtered.length} of {pallets.length} items
+                    Showing {visiblePallets.length} of {totalCount} pallets
                     {(searchTerm || stateFilter !== 'ALL' || dateFrom || dateTo) && ' (filtered)'}
                 </span>
             </div>
