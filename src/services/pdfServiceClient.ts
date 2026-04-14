@@ -17,7 +17,7 @@
 
 // ─── Configuration ───────────────────────────────────────────
 
-const PDF_SERVICE_URL = import.meta.env.VITE_PDF_SERVICE_URL || 'http://localhost:3001';
+const PDF_SERVICE_URL = import.meta.env.VITE_PDF_SERVICE_URL || '';
 const PDF_SERVICE_API_KEY = import.meta.env.VITE_PDF_SERVICE_API_KEY || '';
 
 const CONFIG = {

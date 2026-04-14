@@ -392,6 +392,8 @@ export interface StockQueryFilters {
     warehouseCategory?: WarehouseCategory;
     stockStatus?: StockStatus;
     hasAvailableStock?: boolean;
+    isActive?: boolean;
+    search?: string;
     limit?: number;
     offset?: number;
 }

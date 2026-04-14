@@ -23,7 +23,7 @@ import {
     SummaryCard, SummaryCardsGrid,
     FilterBar, ActionBar,
     SearchBox, StatusFilter, DateRangeFilter,
-    ExportCSVButton, RefreshButton, Pagination
+    ExportCSVButton, RefreshButton, Pagination, ClearFiltersButton
 } from '../ui/SharedComponents';
 import { Printer, CheckCircle2, Clock, PackageOpen, X, XCircle, AlertTriangle, Info } from 'lucide-react';
 import { PackingDetail } from './PackingDetail';
@@ -116,8 +116,32 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
                 .from('packing_requests')
                 .select('id', { count: 'exact', head: true })
                 .neq('status', 'REJECTED');
+                
             if (activeStatus !== 'ALL') {
                 countQuery = countQuery.eq('status', activeStatus);
+            }
+            
+            if (searchTerm.trim()) {
+                const safeSearch = searchTerm.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                
+                // 1. Fetch matching item_codes from items table
+                const { data: matchedItems } = await sb
+                    .from('items')
+                    .select('item_code')
+                    .or(`item_code.ilike."%${safeSearch}%",item_name.ilike."%${safeSearch}%",master_serial_no.ilike."%${safeSearch}%",part_number.ilike."%${safeSearch}%"`)
+                    .limit(500);
+                    
+                const matchedCodes = (matchedItems || []).map(i => i.item_code);
+                let orStr = `movement_number.ilike."%${safeSearch}%",item_code.ilike."%${safeSearch}%"`;
+                
+                // Add matched item codes to the OR string using .in. syntax
+                if (matchedCodes.length > 0) {
+                    // Properly quote strings for PostgREST .in. array syntax
+                    const inList = matchedCodes.map(c => `"${c.replace(/"/g, '\\"')}"`).join(',');
+                    orStr += `,item_code.in.(${inList})`;
+                }
+                
+                countQuery = countQuery.or(orStr);
             }
             const countResult = await countQuery;
             setTotalDbCount(countResult.count ?? 0);
@@ -129,6 +153,17 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
                 .neq('status', 'REJECTED');
             if (activeStatus !== 'ALL') {
                 dataQuery = dataQuery.eq('status', activeStatus);
+            }
+            if (searchTerm.trim()) {
+                const safeSearch = searchTerm.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                const { data: matchedItems } = await sb.from('items').select('item_code').or(`item_code.ilike."%${safeSearch}%",item_name.ilike."%${safeSearch}%",master_serial_no.ilike."%${safeSearch}%",part_number.ilike."%${safeSearch}%"`).limit(500);
+                const matchedCodes = (matchedItems || []).map(i => i.item_code);
+                let orStr = `movement_number.ilike."%${safeSearch}%",item_code.ilike."%${safeSearch}%"`;
+                if (matchedCodes.length > 0) {
+                    const inList = matchedCodes.map(c => `"${c.replace(/"/g, '\\"')}"`).join(',');
+                    orStr += `,item_code.in.(${inList})`;
+                }
+                dataQuery = dataQuery.or(orStr);
             }
             const { data, error: fetchErr } = await dataQuery
                 .order('created_at', { ascending: false })
@@ -177,7 +212,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
         } finally {
             setLoading(false);
         }
-    }, [statusFilter]);
+    }, [statusFilter, searchTerm]);
 
     useEffect(() => { fetchRequests(page * PAGE_SIZE); }, [fetchRequests, page]);
     // Reset to page 0 when status filter changes
@@ -368,6 +403,9 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
                 />
 
                 <ActionBar>
+                    {(statusFilter !== 'ALL' || dateFrom || dateTo) && (
+                        <ClearFiltersButton onClick={() => { setStatusFilter('ALL'); setDateFrom(''); setDateTo(''); setPage(0); }} />
+                    )}
                     <ExportCSVButton onClick={handleExport} />
                     <RefreshButton onClick={() => { fetchRequests(page * PAGE_SIZE).then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); fetchSummaryCounts(); }} loading={loading} />
                 </ActionBar>

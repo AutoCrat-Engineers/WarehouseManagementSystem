@@ -17,7 +17,7 @@ import {
 import { Card, Modal, EmptyState, ModuleLoader } from '../ui/EnterpriseUI';
 import {
     SummaryCard, SummaryCardsGrid, SearchBox, FilterBar, ActionBar,
-    ActionButton, RefreshButton, Pagination
+    ActionButton, RefreshButton, Pagination, ClearFiltersButton
 } from '../ui/SharedComponents';
 import * as svc from './packingEngineService';
 import type { Pallet, DispatchReadiness, PackingList } from './packingEngineService';
@@ -51,6 +51,7 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
     const [readiness, setReadiness] = useState<DispatchReadiness[]>([]);
     const [pallets, setPallets] = useState<Pallet[]>([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
     const [expandedItem, setExpandedItem] = useState<string | null>(null);
     const [loadingPallets, setLoadingPallets] = useState(false);
@@ -71,7 +72,7 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
     }, []);
     const [refreshing, setRefreshing] = useState(false);
     const [page, setPage] = useState(0);
-    const PAGE_SIZE = 15;
+    const PAGE_SIZE = 20;
 
     // ── OPTIONAL SESSION PERSISTENCE for form state (graceful — no-ops if migration not run) ──
     const { patchSession } = useSessionPersistence(
@@ -133,21 +134,23 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
     const handleRefresh = useCallback(async () => {
         setRefreshing(true);
         try {
-            const [data] = await Promise.all([
-                svc.fetchDispatchReadiness(),
-                fetchCounts(),
-            ]);
-            setReadiness(data);
+            await Promise.all([fetchData(), fetchCounts()]);
             showToast('info', 'Refreshed', 'Dispatch data refreshed successfully.');
         } catch (err) {
             console.error('Refresh error:', err);
         } finally {
             setRefreshing(false);
         }
-    }, [showToast, fetchCounts]);
+    }, [showToast, fetchCounts, fetchData]);
 
     useEffect(() => { fetchData(); }, [fetchData]);
     useEffect(() => { fetchCounts(); }, [fetchCounts]);
+
+    useEffect(() => {
+        if (!loading && initialLoad) {
+            setInitialLoad(false);
+        }
+    }, [loading, initialLoad]);
 
     const handleExpandItem = async (itemCode: string) => {
         if (expandedItem === itemCode) {
@@ -272,7 +275,7 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
     };
 
     // ── FIRST-LOAD: full-page skeleton ──
-    if (loading && readiness.length === 0) {
+    if (initialLoad) {
         return <ModuleLoader moduleName="Dispatch Selection" icon={<Forklift size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />;
     }
 
@@ -345,7 +348,10 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
             <FilterBar>
                 <SearchBox value={searchTerm} onChange={setSearchTerm} placeholder="Search item code, name, MSN, customer..." />
                 <ActionBar>
-                    <RefreshButton onClick={handleRefresh} loading={refreshing} />
+                    {cardFilter !== 'ALL' && (
+                        <ClearFiltersButton onClick={() => setCardFilter('ALL')} />
+                    )}
+                    <RefreshButton onClick={handleRefresh} loading={loading || refreshing} />
                 </ActionBar>
             </FilterBar>
 

@@ -20,7 +20,7 @@ import {
     SummaryCard, SummaryCardsGrid,
     FilterBar as SharedFilterBar, ActionBar,
     SearchBox, RefreshButton, StatusFilter, DateRangeFilter,
-    ExportCSVButton, Pagination,
+    ExportCSVButton, Pagination, ClearFiltersButton,
 } from '../ui/SharedComponents';
 import { useSessionPersistence } from '../../hooks/useSessionPersistence';
 
@@ -1109,6 +1109,9 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
                     onDateToChange={setDateTo}
                 />
                 <ActionBar>
+                    {(statusFilter !== 'ALL' || dateFrom || dateTo) && (
+                        <ClearFiltersButton onClick={() => { setStatusFilter('ALL'); setCardFilter('ALL'); setDateFrom(''); setDateTo(''); setPage(0); }} />
+                    )}
                     <ExportCSVButton onClick={async () => {
                         try {
                             // Fetch ALL records (no pagination) for export
@@ -1148,12 +1151,12 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
             </SharedFilterBar>
 
             {/* Data Table — Wrapped in Card like Item Master */}
-            <Card style={{ padding: 0 }}>
+            <Card style={{ padding: 0, overflow: activeDropdown ? 'visible' : undefined }}>
                 {mpls.length === 0 ? (
                     <EmptyState icon={<Package size={48} />} title="No Packing Lists" description="Generate packing lists from Dispatch Selection first." />
                 ) : (
                     <>
-                        <div style={{ overflowX: 'auto', opacity: refreshing ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: refreshing ? 'none' : 'auto' }}>
+                        <div style={{ overflowX: activeDropdown ? 'visible' : 'auto', overflowY: activeDropdown ? 'visible' : undefined, opacity: refreshing ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: refreshing ? 'none' : 'auto' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                                 <thead>
                                     <tr style={{ backgroundColor: 'var(--table-header-bg)', borderBottom: '2px solid var(--table-border)' }}>

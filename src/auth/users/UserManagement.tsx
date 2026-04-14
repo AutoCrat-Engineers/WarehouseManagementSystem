@@ -41,6 +41,7 @@ import { RoleBadge } from '../components/RoleBadge';
 import { GrantAccessModal, type PermissionMap } from '../components/GrantAccessModal';
 import { getUserOverrides, saveUserPermissions, getBulkUserOverrides, invalidateUserPermCache, type OverrideMode } from '../services/permissionService';
 import { Modal, Label, Button } from '../../components/ui/EnterpriseUI';
+import { FilterBar, SearchBox, ActionBar, ClearFiltersButton, RefreshButton, ExportCSVButton, ActionButton } from '../../components/ui/SharedComponents';
 
 interface UserManagementProps {
     currentUserId: string;
@@ -506,113 +507,21 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
             </div>
 
             {/* Filter Bar - Search with Action Buttons */}
-            <div className="filter-bar" style={{
-                backgroundColor: 'white',
-                padding: '16px 20px',
-                borderRadius: '12px',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-                border: '1px solid #e5e7eb',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '12px',
-                flexWrap: 'wrap',
-            }}>
-                {/* Search Input with Clear X Button */}
-                <div style={{ position: 'relative', flex: '1 1 350px', minWidth: '280px' }}>
-                    <Search size={18} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: '#9ca3af' }} />
-                    <input
-                        type="text"
-                        placeholder="Search by name, employee ID, or email..."
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        style={{
-                            width: '100%',
-                            padding: '11px 40px 11px 42px',
-                            border: '1px solid #e5e7eb',
-                            borderRadius: '8px',
-                            fontSize: '14px',
-                            boxSizing: 'border-box',
-                            outline: 'none',
-                            transition: 'border-color 0.2s',
-                        }}
-                    />
-                    {/* Clear X Button inside search */}
-                    {searchTerm && (
-                        <button
-                            onClick={() => setSearchTerm('')}
-                            style={{
-                                position: 'absolute',
-                                right: '10px',
-                                top: '50%',
-                                transform: 'translateY(-50%)',
-                                background: 'none',
-                                border: 'none',
-                                cursor: 'pointer',
-                                padding: '4px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                borderRadius: '50%',
-                                color: '#9ca3af',
-                            }}
-                            onMouseEnter={(e) => e.currentTarget.style.color = '#6b7280'}
-                            onMouseLeave={(e) => e.currentTarget.style.color = '#9ca3af'}
-                        >
-                            <X size={16} />
-                        </button>
+            <FilterBar>
+                <SearchBox
+                    value={searchTerm}
+                    onChange={setSearchTerm}
+                    placeholder="Search by name, employee ID, or email..."
+                />
+
+                <ActionBar>
+                    {(roleFilter !== 'all' || statusFilter !== 'all') && (
+                        <ClearFiltersButton onClick={() => { setRoleFilter('all'); setStatusFilter('all'); }} />
                     )}
-                </div>
 
-                {/* Separator */}
-                <div style={{ width: '1px', height: '28px', backgroundColor: '#e5e7eb' }} />
+                    <RefreshButton onClick={fetchUsers} loading={loading} />
 
-                {/* Clear All Filters Button - only shows when card filters are active */}
-                {(roleFilter !== 'all' || statusFilter !== 'all') && (
-                    <button
-                        onClick={() => { setRoleFilter('all'); setStatusFilter('all'); }}
-                        style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            padding: '10px 14px',
-                            border: '1px solid #fca5a5',
-                            borderRadius: '8px',
-                            backgroundColor: '#fef2f2',
-                            color: '#dc2626',
-                            fontSize: '13px',
-                            fontWeight: '500',
-                            cursor: 'pointer',
-                        }}
-                    >
-                        <XCircle size={16} />
-                        Clear Filters
-                    </button>
-                )}
-
-                <button
-                    onClick={fetchUsers}
-                    disabled={loading}
-                    style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        padding: '10px 14px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        backgroundColor: 'white',
-                        color: '#374151',
-                        fontSize: '13px',
-                        fontWeight: '500',
-                        cursor: loading ? 'not-allowed' : 'pointer',
-                        opacity: loading ? 0.6 : 1,
-                    }}
-                >
-                    <RefreshCw size={16} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
-                    Refresh
-                </button>
-
-                <button
-                    onClick={() => {
+                    <ExportCSVButton onClick={() => {
                         import('xlsx').then(XLSX => {
                             const headers = ['Employee ID', 'Name', 'Email', 'Role', 'Department', 'Shift', 'Status'];
                             const rows = filteredUsers.map(u => [
@@ -624,46 +533,11 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                             XLSX.utils.book_append_sheet(wb, ws, 'Users');
                             XLSX.writeFile(wb, `users_export_${new Date().toISOString().split('T')[0]}.xlsx`);
                         });
-                    }}
-                    style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        padding: '10px 14px',
-                        border: '1px solid #e5e7eb',
-                        borderRadius: '8px',
-                        backgroundColor: 'white',
-                        color: '#374151',
-                        fontSize: '13px',
-                        fontWeight: '500',
-                        cursor: 'pointer',
-                    }}
-                >
-                    <Download size={16} />
-                    Export Excel
-                </button>
+                    }} />
 
-                <button
-                    onClick={() => setShowCreateModal(true)}
-                    style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        padding: '10px 16px',
-                        border: 'none',
-                        borderRadius: '8px',
-                        backgroundColor: '#2563eb',
-                        color: 'white',
-                        fontSize: '13px',
-                        fontWeight: '600',
-                        cursor: 'pointer',
-                        boxShadow: '0 2px 4px rgba(37, 99, 235, 0.2)',
-                    }}
-                >
-                    <UserPlus size={16} />
-                    Add User
-                </button>
-            </div>
+                    <ActionButton label="Add User" icon={<UserPlus size={14} />} onClick={() => setShowCreateModal(true)} variant="primary" />
+                </ActionBar>
+            </FilterBar>
 
             {/* Users Table Card */}
             <div style={{
@@ -671,7 +545,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                 borderRadius: '12px',
                 boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
                 border: '1px solid #e5e7eb',
-                overflow: 'hidden',
+                overflow: activeDropdown ? 'visible' : 'hidden',
             }}>
                 {loading ? (
                     <div style={{ padding: '80px', textAlign: 'center' }}>
@@ -704,7 +578,7 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                     </div>
                 ) : (
                     <>
-                        <div className="table-responsive" style={{ overflowX: 'auto' }}>
+                        <div className="table-responsive" style={{ overflowX: activeDropdown ? 'visible' : 'auto', overflowY: activeDropdown ? 'visible' : undefined }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                                 <thead>
                                     <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e5e7eb' }}>

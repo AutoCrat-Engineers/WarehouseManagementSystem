@@ -73,7 +73,8 @@ interface UseAllItemsStockDashboardResult {
     loading: boolean;
     error: string | null;
     refetch: () => Promise<void>;
-    // Computed stats
+    totalCount: number;
+    // Computed stats (always full-dataset counts, independent of current page)
     stats: {
         totalItems: number;
         criticalCount: number;
@@ -89,14 +90,23 @@ export function useAllItemsStockDashboard(
     const [items, setItems] = useState<ItemStockDashboard[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [totalCount, setTotalCount] = useState(0);
+    const [stats, setStats] = useState({
+        totalItems: 0,
+        criticalCount: 0,
+        lowCount: 0,
+        healthyCount: 0,
+        totalNetAvailable: 0,
+    });
 
     const fetchData = useCallback(async () => {
         setLoading(true);
         setError(null);
 
         try {
-            const result = await inventoryService.getAllItemsStockDashboard(filters);
-            setItems(result);
+            const { data, count } = await inventoryService.getAllItemsStockDashboard(filters);
+            setItems(data);
+            setTotalCount(count);
         } catch (err: any) {
             console.error('useAllItemsStockDashboard error:', err);
             setError(err.message || 'Failed to fetch stock dashboard');
@@ -105,21 +115,31 @@ export function useAllItemsStockDashboard(
         }
     }, [JSON.stringify(filters)]);
 
-    useEffect(() => {
-        fetchData();
-    }, [fetchData]);
+    // Separate stats fetch — lightweight server-side counts, ZERO row data transferred
+    const fetchStats = useCallback(async () => {
+        try {
+            const { getSupabaseClient } = await import('../utils/supabase/client');
+            const supabase = getSupabaseClient();
+            const [totalR, critR, lowR, healthyR] = await Promise.all([
+                supabase.from('vw_item_stock_dashboard').select('item_code', { count: 'exact', head: true }),
+                supabase.from('vw_item_stock_dashboard').select('item_code', { count: 'exact', head: true }).eq('stock_status', 'CRITICAL'),
+                supabase.from('vw_item_stock_dashboard').select('item_code', { count: 'exact', head: true }).eq('stock_status', 'LOW'),
+                supabase.from('vw_item_stock_dashboard').select('item_code', { count: 'exact', head: true }).or('stock_status.eq.HEALTHY,stock_status.eq.MEDIUM'),
+            ]);
+            setStats({
+                totalItems: totalR.count ?? 0,
+                criticalCount: critR.count ?? 0,
+                lowCount: lowR.count ?? 0,
+                healthyCount: healthyR.count ?? 0,
+                totalNetAvailable: 0, // Would need a SUM RPC — not worth pulling all rows for one number
+            });
+        } catch { /* non-critical */ }
+    }, []);
 
-    const stats = useMemo(() => {
-        return {
-            totalItems: items.length,
-            criticalCount: items.filter(i => i.stockStatus === 'CRITICAL').length,
-            lowCount: items.filter(i => i.stockStatus === 'LOW').length,
-            healthyCount: items.filter(i => i.stockStatus === 'HEALTHY' || i.stockStatus === 'MEDIUM').length,
-            totalNetAvailable: items.reduce((sum, i) => sum + (i.netAvailableForCustomer || 0), 0),
-        };
-    }, [items]);
+    useEffect(() => { fetchData(); }, [fetchData]);
+    useEffect(() => { fetchStats(); }, [fetchStats]);
 
-    return { items, loading, error, refetch: fetchData, stats };
+    return { items, loading, error, refetch: fetchData, totalCount, stats };
 }
 
 // ============================================================================

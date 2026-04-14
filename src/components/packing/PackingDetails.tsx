@@ -499,7 +499,10 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
     // Data state
     const [specs, setSpecs] = useState<PackingSpec[]>([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [totalCount, setTotalCount] = useState(0);
+    const [statsData, setStatsData] = useState({ total: 0, active: 0, inactive: 0 });
 
     // UI state
     const [searchTerm, setSearchTerm] = useState('');
@@ -530,8 +533,8 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
     const [outerFormWU, setOuterFormWU] = useState<WeightUnit>('kg');
     const [saving, setSaving] = useState(false);
 
-    // Actions dropdown state (matches ItemMaster pattern)
     const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+    const [dropdownDirection, setDropdownDirection] = useState<'up' | 'down'>('down');
     const dropdownRef = useRef<HTMLDivElement | null>(null);
 
     // Delete confirmation state
@@ -547,16 +550,55 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
         toastTimer.current = setTimeout(() => setToast(null), dur);
     }, []);
 
-    // ── FETCH ──
+    // ── FETCH COUNTS (always full-dataset — powers summary cards independently of pagination) ──
+    const fetchCounts = useCallback(async () => {
+        try {
+            const supabase = getSupabaseClient();
+            const [totalR, activeR, inactiveR] = await Promise.all([
+                supabase.from('packing_specifications').select('id', { count: 'exact', head: true }),
+                supabase.from('packing_specifications').select('id', { count: 'exact', head: true }).eq('is_active', true),
+                supabase.from('packing_specifications').select('id', { count: 'exact', head: true }).eq('is_active', false),
+            ]);
+            setStatsData({
+                total: totalR.count ?? 0,
+                active: activeR.count ?? 0,
+                inactive: inactiveR.count ?? 0,
+            });
+        } catch { /* non-critical */ }
+    }, []);
+
+    // ── FETCH (server-side filtered + paginated) ──
     const fetchSpecs = useCallback(async () => {
         setError(null); setLoading(true);
         try {
             const supabase = getSupabaseClient();
-            const { data, error: e } = await supabase
+            let query = supabase
                 .from('packing_specifications')
-                .select('*, items!inner(item_name, master_serial_no, part_number, revision)')
+                .select('*, items!inner(item_name, master_serial_no, part_number, revision)', { count: 'exact' })
                 .order('created_at', { ascending: false });
+
+            // Server-side card filter
+            if (cardFilter === 'ACTIVE')   query = query.eq('is_active', true);
+            if (cardFilter === 'INACTIVE') query = query.eq('is_active', false);
+
+            // Server-side search via the joined `items` table.
+            // PostgREST .or() uses commas/parentheses as delimiters, so values
+            // containing them (e.g. "Connector, W/O (14E)") MUST be double-quoted.
+            // { referencedTable } applies the filter on `items` directly.
+            if (searchTerm.trim()) {
+                const safe = searchTerm.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                query = query.or(
+                    `item_code.ilike."%${safe}%",item_name.ilike."%${safe}%",master_serial_no.ilike."%${safe}%",part_number.ilike."%${safe}%"`,
+                    { referencedTable: 'items' }
+                );
+            }
+
+            // Server-side pagination
+            const offset = page * ITEMS_PER_PAGE;
+            const { data, count, error: e } = await query.range(offset, offset + ITEMS_PER_PAGE - 1);
             if (e) throw e;
+
+            setTotalCount(count ?? 0);
             const mapped: PackingSpec[] = (data || []).map((r: any) => ({
                 ...r,
                 item_name: r.items?.item_name,
@@ -569,9 +611,19 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
             setError(err.message || 'Failed to load packing specifications');
             setSpecs([]);
         } finally { setLoading(false); }
-    }, []);
+    }, [cardFilter, searchTerm, page]);
 
     useEffect(() => { fetchSpecs(); }, [fetchSpecs]);
+    useEffect(() => { fetchCounts(); }, [fetchCounts]);
+
+    useEffect(() => {
+        if (!loading && initialLoad) {
+            setInitialLoad(false);
+        }
+    }, [loading, initialLoad]);
+
+    // Reset to page 0 when filter/search changes
+    useEffect(() => { setPage(0); }, [cardFilter, searchTerm]);
 
     // Close dropdown on click outside
     useEffect(() => {
@@ -584,33 +636,8 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [activeDropdown]);
 
-    // ── STATS ──
-    const stats = useMemo(() => ({
-        total: specs.length,
-        active: specs.filter(s => s.is_active).length,
-        inactive: specs.filter(s => !s.is_active).length,
-    }), [specs]);
-
-    // ── FILTER + SEARCH ──
-    const filtered = useMemo(() => {
-        let r = specs;
-        if (cardFilter === 'ACTIVE') r = r.filter(s => s.is_active);
-        else if (cardFilter === 'INACTIVE') r = r.filter(s => !s.is_active);
-        if (searchTerm.trim()) {
-            const q = searchTerm.toLowerCase();
-            r = r.filter(s =>
-                s.item_code.toLowerCase().includes(q) ||
-                (s.item_name || '').toLowerCase().includes(q) ||
-                (s.master_serial_no || '').toLowerCase().includes(q) ||
-                (s.part_number || '').toLowerCase().includes(q)
-            );
-        }
-        return r;
-    }, [specs, cardFilter, searchTerm]);
-
-    const displayed = useMemo(() => filtered.slice(page * ITEMS_PER_PAGE, (page + 1) * ITEMS_PER_PAGE), [filtered, page]);
-
-    useEffect(() => { setPage(0); }, [cardFilter, searchTerm]);
+    // ── STATS — from separate server-side count query, not from loaded page ──
+    const stats = statsData;
 
     // ── ITEM SEARCH (for Add modal) ──
     const searchItems = useCallback(async (q: string) => {
@@ -618,18 +645,21 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
         setSearchingItems(true);
         try {
             const supabase = getSupabaseClient();
+            // Fetch all existing spec item_ids server-side (don't rely on paginated specs)
+            const { data: existingSpecs } = await supabase
+                .from('packing_specifications')
+                .select('item_id');
+            const existingIds = new Set((existingSpecs || []).map((s: any) => s.item_id));
             const { data } = await supabase
                 .from('items')
                 .select('id, item_code, item_name, master_serial_no, part_number, is_active')
                 .eq('is_active', true)
                 .or(`item_code.ilike.%${q}%,item_name.ilike.%${q}%,master_serial_no.ilike.%${q}%,part_number.ilike.%${q}%`)
                 .limit(10);
-            // Filter out items that already have packing specs
-            const existingIds = new Set(specs.map(s => s.item_id));
             setItemResults((data || []).filter((i: any) => !existingIds.has(i.id)));
         } catch { setItemResults([]); }
         finally { setSearchingItems(false); }
-    }, [specs]);
+    }, []);
 
     useEffect(() => {
         const t = setTimeout(() => searchItems(itemSearch), 300);
@@ -766,7 +796,7 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
     const handleExport = () => {
         import('xlsx').then(XLSX => {
             const header = ['ID', 'Item Code', 'MSN', 'Description', 'Inner Box Size (mm)', 'Inner Box Qty', 'Inner Net Wt (kg)', 'Outer Box Size (mm)', 'Outer Gross Wt (kg)', 'Status'];
-            const rows = filtered.map((s, i) => [
+            const rows = specs.map((s, i) => [
                 i + 1, s.item_code, s.master_serial_no || '', s.item_name || '',
                 `${s.inner_box_length_mm}x${s.inner_box_width_mm}x${s.inner_box_height_mm}`,
                 s.inner_box_quantity, s.inner_box_net_weight_kg,
@@ -777,7 +807,7 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'Packing Details');
             XLSX.writeFile(wb, `packing_details_${new Date().toISOString().slice(0, 10)}.xlsx`);
-            showToast('success', 'Exported', `${filtered.length} records exported to Excel.`);
+            showToast('success', 'Exported', `${totalCount} records exported to Excel.`);
         });
     };
 
@@ -818,7 +848,7 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
     };
 
     // ── LOADING STATE (only on initial load) ──
-    if (loading && specs.length === 0) {
+    if (initialLoad) {
         return (
             <ModuleLoader moduleName="Packing Details" icon={<ClipboardList size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />} />
         );
@@ -910,14 +940,14 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
                         <ClearFiltersButton onClick={() => setCardFilter('ALL')} />
                     )}
                     <ExportCSVButton onClick={handleExport} />
-                    <RefreshButton onClick={() => { fetchSpecs().then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); }} loading={loading} />
+                    <RefreshButton onClick={() => { fetchSpecs(); fetchCounts(); }} loading={loading} />
                     {canAdd && <AddButton label="Add Specification" onClick={() => setShowAddModal(true)} />}
                 </ActionBar>
             </SharedFilterBar>
 
             {/* Data Table */}
-            <Card style={{ padding: 0 }}>
-                {filtered.length === 0 ? (
+            <Card style={{ padding: 0, overflow: activeDropdown ? 'visible' : undefined }}>
+                {specs.length === 0 && !loading ? (
                     <EmptyState
                         icon={<ClipboardList size={48} />}
                         title={hasActiveFilters || searchTerm ? 'No Matching Specifications' : 'No Packing Specifications'}
@@ -925,7 +955,7 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
                         action={!hasActiveFilters && !searchTerm && canAdd ? { label: 'Add Specification', onClick: () => setShowAddModal(true) } : undefined}
                     />
                 ) : (
-                    <div className="table-responsive" style={{ overflowX: 'auto', opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto' }}>
+                    <div className="table-responsive" style={{ overflowX: activeDropdown ? 'visible' : 'auto', overflowY: activeDropdown ? 'visible' : undefined, opacity: loading ? 0.5 : 1, transition: 'opacity 0.2s', pointerEvents: loading ? 'none' : 'auto' }}>
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead>
                                 <tr style={{ backgroundColor: 'var(--table-header-bg)', borderBottom: '2px solid var(--table-border)' }}>
@@ -941,7 +971,7 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
                                 </tr>
                             </thead>
                             <tbody>
-                                {displayed.map((s, idx) => {
+                                {specs.map((s, idx) => {
                                     const fmtSz = (l: number, w: number, h: number) => `${convertLength(l, tableLU)}×${convertLength(w, tableLU)}×${convertLength(h, tableLU)}`;
                                     return (
                                         <tr
@@ -969,7 +999,17 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
                                                 <td style={{ ...tdStyle, textAlign: 'center', padding: '8px 12px', position: 'relative' }}>
                                                     <div ref={activeDropdown === s.id ? dropdownRef : null} style={{ position: 'relative', display: 'inline-block' }}>
                                                         <button
-                                                            onClick={() => setActiveDropdown(activeDropdown === s.id ? null : s.id)}
+                                                            onClick={(e) => {
+                                                                if (activeDropdown === s.id) {
+                                                                    setActiveDropdown(null);
+                                                                } else {
+                                                                    // Detect if we should open upward based on available space
+                                                                    const rect = e.currentTarget.getBoundingClientRect();
+                                                                    const spaceBelow = window.innerHeight - rect.bottom;
+                                                                    setDropdownDirection(spaceBelow < 160 ? 'up' : 'down');
+                                                                    setActiveDropdown(s.id);
+                                                                }
+                                                            }}
                                                             style={{
                                                                 padding: '8px 12px', border: '1px solid #e5e7eb', borderRadius: '8px',
                                                                 backgroundColor: activeDropdown === s.id ? '#f8fafc' : 'white',
@@ -981,19 +1021,19 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
                                                             Actions
                                                             <ChevronDown size={14} style={{ transition: 'transform 0.2s', transform: activeDropdown === s.id ? 'rotate(180deg)' : 'rotate(0deg)' }} />
                                                         </button>
-                                                        {activeDropdown === s.id && (() => {
-                                                            const isLastRows = idx >= displayed.length - 2;
-                                                            return (
+                                                        {activeDropdown === s.id && (
                                                                 <div
                                                                     style={{
                                                                         position: 'absolute',
-                                                                        ...(isLastRows
+                                                                        ...(dropdownDirection === 'up'
                                                                             ? { bottom: '100%', marginBottom: '4px' }
-                                                                            : { top: '100%', marginTop: '4px' }
-                                                                        ),
-                                                                        right: '0', zIndex: 50,
+                                                                            : { top: '100%', marginTop: '4px' }),
+                                                                        right: '0', zIndex: 9999,
                                                                         width: '160px', backgroundColor: 'white', borderRadius: '12px',
-                                                                        boxShadow: '0 10px 40px rgba(0,0,0,0.15)', border: '1px solid #e5e7eb', overflow: 'hidden',
+                                                                        boxShadow: dropdownDirection === 'up'
+                                                                            ? '0 -10px 40px rgba(0,0,0,0.15)'
+                                                                            : '0 10px 40px rgba(0,0,0,0.15)',
+                                                                        border: '1px solid #e5e7eb', overflow: 'hidden',
                                                                     }}
                                                                 >
                                                                     {canEdit && (
@@ -1018,8 +1058,7 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
                                                                         </button>
                                                                     )}
                                                                 </div>
-                                                            );
-                                                        })()}
+                                                        )}
                                                     </div>
                                                 </td>
                                             )}
@@ -1033,7 +1072,7 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
                 <Pagination
                     page={page}
                     pageSize={ITEMS_PER_PAGE}
-                    totalCount={filtered.length}
+                    totalCount={totalCount}
                     onPageChange={setPage}
                 />
             </Card>
@@ -1047,7 +1086,7 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
                 color: 'var(--enterprise-gray-600)',
             }}>
                 <span>
-                    Showing {filtered.length} of {specs.length} specifications
+                    Showing {specs.length} of {totalCount} specifications
                     {hasActiveFilters && ' (filtered)'}
                 </span>
             </div>
