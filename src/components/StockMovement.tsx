@@ -42,7 +42,6 @@ import { createPackingFromMovementApproval, createPackingFromMovementRejection }
 import { notifyOnRequestCreated, notifyOnRequestDecision } from '../utils/notifications/notificationService';
 import { calculatePalletImpact } from './packing-engine/packingEngineService';
 import type { PalletImpact } from './packing-engine/packingEngineService';
-import { useSessionPersistence } from '../hooks/useSessionPersistence';
 
 // ============================================================================
 // TYPES
@@ -335,33 +334,6 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   const [referenceType, setReferenceType] = useState<string>('');
   const [referenceId, setReferenceId] = useState<string>('');
 
-  // ── SESSION PERSISTENCE (stock movement form) ──
-  const {
-    patchSession: patchSmSession,
-    completeSession: completeSmSession,
-    abandonSession: abandonSmSession,
-  } = useSessionPersistence(
-    'stock_movement_form',
-    undefined,
-    undefined,
-    {
-      onRecover: (data, isNew) => {
-        if (!isNew && data && data.showModal) {
-          // Restore modal form state
-          setShowModal(true);
-          if (data.selectedItem) setSelectedItem(data.selectedItem);
-          if (data.stockType) setStockType(data.stockType);
-          if (data.selectedWarehouse) setSelectedWarehouse(data.selectedWarehouse);
-          if (data.quantity) setQuantity(data.quantity);
-          if (data.boxCount) setBoxCount(data.boxCount);
-          if (data.note) setNote(data.note);
-          if (data.referenceType) setReferenceType(data.referenceType);
-          if (data.referenceId) setReferenceId(data.referenceId);
-          if (data.selectedCategory) setSelectedCategory(data.selectedCategory);
-        }
-      },
-    }
-  );
 
   // Supervisor review modal state
   const [showReviewModal, setShowReviewModal] = useState(false);
@@ -778,7 +750,6 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
 
   const handleSelectItem = (item: ItemResult) => {
     setSelectedItem(item);
-    patchSmSession({ selectedItem: item });
     setSearchQuery(item.part_number || item.item_code);
     setShowDropdown(false);
     fetchWarehouseStocks(item.item_code);
@@ -827,8 +798,8 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
     setPalletImpact(null); setAdjustmentAcknowledged(false);
   };
 
-  const openModal = () => { resetForm(); setShowModal(true); patchSmSession({ showModal: true }); };
-  const closeModal = () => { setShowModal(false); resetForm(); abandonSmSession(); };
+  const openModal = () => { resetForm(); setShowModal(true); };
+  const closeModal = () => { setShowModal(false); resetForm(); };
 
   // ============================================================================
   // SUBMIT REQUEST (PENDING — No Stock Movement) or IMMEDIATE for REJECTION_DISPOSAL
@@ -958,7 +929,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
         header.id,
       ).catch(err => console.error('Notification send failed (non-blocking):', err));
 
-      setTimeout(() => { closeModal(); completeSmSession(); }, 1500);
+      setTimeout(() => { closeModal(); }, 1500);
     } catch (err: any) {
       console.error('Submit error:', err);
       setFormMessage({ type: 'error', text: err.message || 'Failed to submit request.' });
