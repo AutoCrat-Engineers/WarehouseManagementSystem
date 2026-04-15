@@ -22,7 +22,6 @@ import {
 import * as svc from './packingEngineService';
 import type { Pallet, DispatchReadiness, PackingList } from './packingEngineService';
 import { getSupabaseClient } from '../../utils/supabase/client';
-import { useSessionPersistence } from '../../hooks/useSessionPersistence';
 import { generateIdempotencyKey, extractRpcError } from '../../utils/idempotency';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
@@ -74,24 +73,6 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
     const [page, setPage] = useState(0);
     const PAGE_SIZE = 20;
 
-    // ── OPTIONAL SESSION PERSISTENCE for form state (graceful — no-ops if migration not run) ──
-    const { patchSession } = useSessionPersistence(
-        'dispatch_selection',
-        undefined,
-        undefined,
-        {
-            onRecover: (data, isNew) => {
-                if (!isNew && data) {
-                    if (data.selectedPalletIds?.length > 0) {
-                        setSelectedPalletIds(new Set(data.selectedPalletIds));
-                    }
-                    if (data.expandedItem) {
-                        setExpandedItem(data.expandedItem);
-                    }
-                }
-            },
-        }
-    );
 
     // ────── BACKEND AGGREGATES for summary cards (NEVER .reduce() on client array) ──────
     const [summaryStats, setSummaryStats] = useState({ totalReady: 0, totalPartial: 0, totalReadyQty: 0 });
@@ -158,7 +139,6 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
             return;
         }
         setExpandedItem(itemCode);
-        patchSession({ expandedItem: itemCode });
         setLoadingPallets(true);
         setSelectedPalletIds(new Set());
         try {
@@ -179,13 +159,11 @@ export function DispatchSelection({ accessToken, userRole, userPerms = {}, onNav
         if (next.has(id)) next.delete(id);
         else next.add(id);
         setSelectedPalletIds(next);
-        patchSession({ selectedPalletIds: Array.from(next) });
     };
 
     const selectAllReady = () => {
         const readyIds = pallets.filter(p => p.state === 'READY').map(p => p.id);
         setSelectedPalletIds(new Set(readyIds));
-        patchSession({ selectedPalletIds: readyIds });
     };
 
     const readyPallets = pallets.filter(p => p.state === 'READY');
