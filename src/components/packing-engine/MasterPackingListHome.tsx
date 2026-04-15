@@ -22,7 +22,6 @@ import {
     SearchBox, RefreshButton, StatusFilter, DateRangeFilter,
     ExportCSVButton, Pagination, ClearFiltersButton,
 } from '../ui/SharedComponents';
-import { useSessionPersistence } from '../../hooks/useSessionPersistence';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 interface Props { accessToken?: string; userRole?: UserRole; userPerms?: Record<string, boolean>; onNavigate?: (view: string, data?: any) => void; }
@@ -96,39 +95,10 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
     // Summary
     const [summary, setSummary] = useState({ total: 0, pending: 0, printed: 0, dispatched: 0 });
 
-    // ── SESSION PERSISTENCE (packing list wizard) ──
-    const {
-        patchSession: patchMplSession,
-        completeSession: completeMplSession,
-        isRecovering: mplSessionRecovering,
-        wasRecovered: mplSessionRecovered,
-    } = useSessionPersistence(
-        'packing_list_wizard',
-        undefined,
-        'mpl',
-        {
-            onRecover: (data, isNew) => {
-                if (!isNew && data) {
-                    // Restore wizard state: we store the MPL id + step + dispatch form + gross weights
-                    if (data.wizardStep) setWizardStep(data.wizardStep);
-                    if (data.dispatchForm) setDispatchForm(data.dispatchForm);
-                    // wizardMpl and enrichedPallets will be restored after mpls load
-                    // Store recovered data in a ref for later hydration
-                    recoveredSessionRef.current = data;
-                }
-            },
-        }
-    );
-    const recoveredSessionRef = useRef<Record<string, any> | null>(null);
 
-    // Helper: update a dispatch form field and persist to session
     const updateDispatchField = useCallback((field: string, value: string) => {
-        setDispatchForm(prev => {
-            const updated = { ...prev, [field]: value };
-            patchMplSession({ dispatchForm: updated });
-            return updated;
-        });
-    }, [patchMplSession]);
+        setDispatchForm(prev => ({ ...prev, [field]: value }));
+    }, []);
 
     // Actions dropdown
     const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
@@ -192,25 +162,12 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
     useEffect(() => { loadMpls(); }, [loadMpls]);
     useEffect(() => { loadSummary(); }, [loadSummary]);
 
-    // ── Restore wizard from recovered session after MPLs load ──
-    useEffect(() => {
-        if (recoveredSessionRef.current && mpls.length > 0) {
-            const data = recoveredSessionRef.current;
-            if (data.wizardMplId) {
-                const mpl = mpls.find(m => m.id === data.wizardMplId);
-                if (mpl && mpl.status === 'DRAFT') {
-                    handleOpenWizard(mpl);
-                }
-            }
-            recoveredSessionRef.current = null;
-        }
-    }, [mpls]);
+
 
     // ─── Open inline wizard for a PENDING MPL ───
     const handleOpenWizard = async (mpl: MasterPackingList) => {
         setActiveDropdown(null);
         setWizardMpl(mpl); setWizardStep('REVIEW'); setWizardLoading(true);
-        patchMplSession({ wizardMplId: mpl.id, wizardStep: 'REVIEW' });
         try {
             const plId = mpl.packing_list_id;
             let data = await svc.fetchPackingListData(plId);
@@ -251,7 +208,6 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
 
     const handleWeightChange = (palletId: string, weight: number) => {
         setEnrichedPallets(prev => prev.map(p => p.id === palletId ? { ...p, gross_weight_kg: weight } : p));
-        patchMplSession({ grossWeights: { [palletId]: weight } });
     };
 
     // Save PO/Invoice + weights → confirm MPL
@@ -287,7 +243,6 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
             if (rpcError) throw new Error(rpcError);
 
             showToast('success', 'Packing List Confirmed', `${wizardMpl.mpl_number} details saved & confirmed — Print is now enabled`);
-            await completeMplSession();
             setWizardMpl(null); loadMpls(true); loadSummary();
         } catch (err: any) { showToast('error', 'Save Failed', err.message); } finally { setSaving(false); }
     };
