@@ -1,0 +1,50 @@
+# Supabase local development config
+# Run: supabase start  (requires Docker)
+# Serve functions: supabase functions serve
+
+[api]
+port = 54321
+schemas = ["public"]
+extra_search_path = ["public", "extensions"]
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[studio]
+port = 54323
+
+[auth]
+site_url = "http://localhost:5173"
+additional_redirect_urls = ["http://localhost:5173"]
+
+[functions.submit-movement-request]
+verify_jwt = false
+
+[functions.approve-movement]
+verify_jwt = false
+
+[functions.get-movements]
+verify_jwt = false
+
+[functions.get-movement-counts]
+verify_jwt = false
+
+[functions.calculate-pallet-impact]
+verify_jwt = false
+
+[functions.get-item-stock]
+verify_jwt = false
+
+[functions.search-items]
+verify_jwt = false
+
+[functions.get-user-profile]
+verify_jwt = false
+
+[functions.get-reason-codes]
+verify_jwt = false
+
+[functions.get-movement-review-data]
+verify_jwt = false
