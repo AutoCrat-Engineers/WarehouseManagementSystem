@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/Version-0.5.2-blue?style=for-the-badge" alt="Version" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Version-0.5.3-blue?style=for-the-badge" alt="Version" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Status-Active_Development-brightgreen?style=for-the-badge" alt="Status" /></a>
   <a href="#"><img src="https://img.shields.io/badge/License-Proprietary-red?style=for-the-badge" alt="License" /></a>
   <a href="#"><img src="https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=white" alt="React" /></a>
@@ -19,29 +19,29 @@
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
-- [About the Project](#-about-the-project)
-- [Key Features](#-key-features)
-- [Architecture](#-architecture)
-- [Tech Stack](#-tech-stack)
-- [Project Structure](#-project-structure)
-- [Getting Started](#-getting-started)
-- [Git Workflow](#-git-workflow)
-- [Environment Variables](#-environment-variables)
-- [Security & RBAC](#-security--rbac)
-- [Database Schema](#-database-schema)
-- [API Reference](#-api-reference)
-- [Documentation](#-documentation)
-- [Contributing](#-contributing)
-- [Versioning](#-versioning)
-- [Recent Changes](#-recent-changes)
-- [Authors & Maintainers](#-authors--maintainers)
-- [License & Copyright](#-license--copyright)
+- [About the Project](#about-the-project)
+- [Key Features](#key-features)
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Getting Started](#getting-started)
+- [Git Workflow](#git-workflow)
+- [Environment Variables](#environment-variables)
+- [Security & RBAC](#security--rbac)
+- [Database Schema](#database-schema)
+- [API Reference](#api-reference)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [Versioning](#versioning)
+- [Recent Changes](#recent-changes)
+- [Authors & Maintainers](#authors--maintainers)
+- [License & Copyright](#license--copyright)
 
 ---
 
-## 🏭 About the Project
+## About the Project
 
 ### Problem Statement
 
@@ -55,34 +55,34 @@ The **Warehouse Management System (WMS)** is a type-safe, real-time application 
 
 ---
 
-## 🚀 Key Features
+## Key Features
 
 | Module | Description |
 | :--- | :--- |
-| **📊 Enterprise Dashboard** | Real-time KPIs, critical stock alerts, stock distribution, and operational summaries for warehouse managers. |
-| **📦 Item Master** | Centralised catalogue of Finished Goods (FG) with part numbers, descriptions, and master serial numbers. |
-| **🏗️ Multi-Warehouse Inventory** | Real-time stock tracking across multiple warehouse types (S&V, Production, In Transit, Distribution) with status monitoring (Healthy, Warning, Critical, Overstock). |
-| **🔄 Stock Movements** | Full ledger-based transaction system with movement types (Inward, Outward, Transfer, Adjustment), approval workflows, and printed slips. |
-| **📦 Packing Module** | End-to-end FG packing workflow — sticker generation with QR-coded barcodes, packing details management, box management. |
-| **⚙️ Packing Engine** | Advanced container management, pallet state machine with automatic fill detection and adjustment box handling, rack view. |
-| **📋 Packing Details** | Packing specifications, dimensions, and weight templates for each FG part. |
-| **🎯 Pallet Dashboard** | Visual pallet state tracking, completion monitoring, and management. |
-| **📝 Contract Configs** | Customer-specific packing rules and configuration management. |
-| **🚚 Dispatch Selection** | Dispatch readiness verification and Master Packing List creation. |
-| **📄 Master Packing List** | MPL generation, print, and export for completed dispatches. |
-| **🧾 Performa Invoice** | Shipment batching and stock dispatch management. |
-| **🔍 Traceability** | Full backward trace for any container — from dispatch back to production receipt. |
-| **📋 Blanket Orders** | Comprehensive handling of long-term customer contracts with order line items. |
-| **📅 Blanket Releases** | Delivery scheduling against blanket orders with automatic inventory deduction upon delivery. |
-| **📈 Demand Forecasting** | Advanced demand prediction using Holt-Winters algorithm with trend and seasonality analysis. |
-| **🔧 MRP Planning** | Automated replenishment recommendations based on lead times, safety stock levels, and forecast data. |
-| **👥 User Management** | Granular Role-Based Access Control (GRBAC) with L1 Operator, L2 Supervisor, L3 Manager tiers. |
-| **🔔 Notifications** | Real-time notification bell with alerts for stock movements, approvals, and system events. |
-| **🗄️ Rack View** | Visual warehouse rack layout for spatial stock organisation. |
+| **Enterprise Dashboard** | Real-time KPIs, critical stock alerts, stock distribution, and operational summaries for warehouse managers. |
+| **Item Master** | Centralised catalogue of Finished Goods (FG) with part numbers, descriptions, and master serial numbers. |
+| **Multi-Warehouse Inventory** | Real-time stock tracking across multiple warehouse types (S&V, Production, In Transit, Distribution) with status monitoring (Healthy, Warning, Critical, Overstock). |
+| **Stock Movements** | Full ledger-based transaction system with movement types (Inward, Outward, Transfer, Adjustment), approval workflows, and printed slips. Backed by dedicated `sm_*` Supabase Edge Functions for server-side validation and audit. |
+| **Packing Module** | End-to-end FG packing workflow — sticker generation with QR-coded barcodes, packing details management, box management. |
+| **Packing Engine** | Advanced container management, pallet state machine with automatic fill detection and adjustment box handling, rack view. |
+| **Packing Details** | Packing specifications, dimensions, and weight templates for each FG part. |
+| **Pallet Dashboard** | Visual pallet state tracking, completion monitoring, and management. |
+| **Contract Configs** | Customer-specific packing rules and configuration management. |
+| **Dispatch Selection** | Dispatch readiness verification and Master Packing List creation. |
+| **Master Packing List** | MPL generation, print, and export for completed dispatches. |
+| **Performa Invoice** | Shipment batching and stock dispatch management. |
+| **Traceability** | Full backward trace for any container — from dispatch back to production receipt. |
+| **Blanket Orders** | Comprehensive handling of long-term customer contracts with order line items. |
+| **Blanket Releases** | Delivery scheduling against blanket orders with automatic inventory deduction upon delivery. |
+| **Demand Forecasting** | Advanced demand prediction using Holt-Winters algorithm with trend and seasonality analysis. |
+| **MRP Planning** | Automated replenishment recommendations based on lead times, safety stock levels, and forecast data. |
+| **User Management** | Granular Role-Based Access Control (GRBAC) with L1 Operator, L2 Supervisor, L3 Manager tiers. |
+| **Notifications** | Real-time notification bell with alerts for stock movements, approvals, and system events. |
+| **Rack View** | Visual warehouse rack layout for spatial stock organisation. |
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 The system follows a **clean, layered architecture** ensuring scalability, testability, and maintainability:
 
@@ -100,6 +100,7 @@ The system follows a **clean, layered architecture** ensuring scalability, testa
 │  │  Custom Hooks (useDashboard, useInventory)            │   │
 │  │  Services (inventoryService, packingService,          │   │
 │  │           packingEngineService, mplService)            │   │
+│  │  Supabase Edge Functions (sm_* for Stock Movement)    │   │
 │  └───────────────────────┬──────────────────────────────┘   │
 ├──────────────────────────┼──────────────────────────────────┤
 │                   API / DATA LAYER                           │
@@ -120,7 +121,7 @@ For detailed architecture documentation, see [`docs/ARCHITECTURE.md`](docs/ARCHI
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 | Category | Technology | Purpose |
 | :--- | :--- | :--- |
@@ -133,6 +134,7 @@ For detailed architecture documentation, see [`docs/ARCHITECTURE.md`](docs/ARCHI
 | **Forms** | React Hook Form | Performant form management |
 | **Toasts** | Sonner | Non-intrusive notifications |
 | **Backend / Database** | Supabase (PostgreSQL) | Managed database with real-time subscriptions |
+| **Edge Functions** | Supabase Edge Functions (Deno) | Server-side business logic for stock movement workflows |
 | **Authentication** | Supabase Auth (JWT) | Secure session management |
 | **State Management** | React Hooks + Context | Lightweight state handling |
 | **Barcode / QR** | QRCode library | Sticker barcode printing for packing |
@@ -140,23 +142,23 @@ For detailed architecture documentation, see [`docs/ARCHITECTURE.md`](docs/ARCHI
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 WarehouseManagementSystem/
 │
-├── 📄 .gitignore                # Git ignore rules
-├── 📄 README.md                 # This file
-├── 📄 CHANGELOG.md              # Version history and release notes
-├── 📄 RELEASE_NOTES.md          # Current release notes
-├── 📄 LICENSE                   # Proprietary license
-├── 📄 package.json              # Dependencies and scripts
-├── 📄 tsconfig.json             # TypeScript configuration
-├── 📄 tsconfig.node.json        # TypeScript config for Node.js
-├── 📄 vite.config.ts            # Vite build configuration
-├── 📄 index.html                # HTML entry point
+├── .gitignore                   # Git ignore rules
+├── README.md                    # This file
+├── CHANGELOG.md                 # Version history and release notes
+├── RELEASE_NOTES.md             # Current release notes
+├── LICENSE                      # Proprietary license
+├── package.json                 # Dependencies and scripts
+├── tsconfig.json                # TypeScript configuration
+├── tsconfig.node.json           # TypeScript config for Node.js
+├── vite.config.ts               # Vite build configuration
+├── index.html                   # HTML entry point
 │
-├── 📁 .db_reference/            # Database reference schemas & migrations (git-ignored)
+├── .db_reference/               # Database reference schemas & migrations (git-ignored)
 │   ├── db_schema.sql            # Full consolidated DB schema
 │   ├── current-database-schema.sql  # Current schema snapshot
 │   ├── rbac.sql                 # RBAC tables, roles, policies
@@ -172,17 +174,26 @@ WarehouseManagementSystem/
 │   ├── fix_remaining_lint_warnings.sql
 │   └── migrations/              # GRBAC migration scripts (001–009)
 │
-├── 📁 docs/                     # Technical documentation
+├── .github/                     # GitHub configuration
+│   └── CODEOWNERS               # Path-to-team review ownership
+│
+├── docs/                        # Technical documentation
 │   ├── ARCHITECTURE.md          # System architecture overview
 │   ├── DATABASE_SCHEMA.md       # Complete schema reference
 │   ├── MODULE_OVERVIEW.md       # Module catalog and dependency map
 │   ├── DEPLOYMENT_GUIDE.md      # Deployment instructions
 │   ├── CONTRIBUTING.md          # Code standards and PR process
-│   ├── architecture/            # ⭐ Architecture series (12 files)
+│   ├── architecture/            # Architecture series (12 files)
 │   │   ├── 00-ARCHITECTURE-INDEX.md
 │   │   ├── 01-SYSTEM-OVERVIEW.md
 │   │   ├── ...
 │   │   └── 12-DIRECTORY-STRUCTURE.md
+│   ├── adr/                     # Architecture Decision Records (MADR)
+│   │   ├── README.md
+│   │   ├── 0000-template.md
+│   │   └── 0001-edge-function-sm-prefix-and-jwt-auth.md
+│   ├── releases/                # Per-version release notes
+│   │   └── CHANGES_0.5.3.md
 │   ├── reference/               # Reference documentation
 │   │   ├── rbac-database.md     # Granular RBAC system details
 │   │   ├── troubleshooting.md   # Common issues and fixes
@@ -190,18 +201,38 @@ WarehouseManagementSystem/
 │   └── workflows/               # Workflow documentation
 │       └── stock-movement.md    # Stock movement workflow
 │
-├── 📁 public/                   # Static assets
+├── public/                      # Static assets
 │   ├── logo.png
 │   ├── a-logo.png
 │   ├── backgroundlogin.png
 │   └── data/quotes.json
 │
-└── 📁 src/                      # Application source code
-    ├── 📄 App.tsx               # Root application component with routing + RBAC
-    ├── 📄 main.tsx              # React entry point
-    ├── 📄 index.css             # Global styles & design tokens
+├── scripts/                     # Developer scripts
+│   └── dev/                     # Local-only dev scripts (git-ignored)
+│       └── README.md
+│
+├── supabase/                    # Supabase project assets
+│   └── functions/               # Edge Functions (Deno)
+│       ├── README.md            # Master function index
+│       ├── .env.example         # Environment template
+│       ├── _shared/             # cors.ts, palletImpact.ts
+│       ├── get-user-profile/    # Shared user profile lookup
+│       ├── sm_approve-movement/
+│       ├── sm_calculate-pallet-impact/
+│       ├── sm_get-item-stock/
+│       ├── sm_get-movement-counts/
+│       ├── sm_get-movement-review-data/
+│       ├── sm_get-movements/
+│       ├── sm_get-reason-codes/
+│       ├── sm_search-items/
+│       └── sm_submit-movement-request/
+│
+└── src/                         # Application source code
+    ├── App.tsx                  # Root application component with routing + RBAC
+    ├── main.tsx                 # React entry point
+    ├── index.css                # Global styles & design tokens
     │
-    ├── 📁 auth/                 # Authentication & RBAC module
+    ├── auth/                    # Authentication & RBAC module
     │   ├── index.ts             # Auth barrel exports
     │   ├── components/          # Auth-specific UI components
     │   │   ├── ProtectedRoute.tsx
@@ -218,11 +249,11 @@ WarehouseManagementSystem/
     │   └── users/               # User management module
     │       └── UserManagement.tsx
     │
-    ├── 📁 components/           # Feature components
+    ├── components/              # Feature components
     │   ├── DashboardNew.tsx     # Enterprise dashboard
     │   ├── ItemMasterSupabase.tsx  # Item catalogue (Supabase)
     │   ├── InventoryGrid.tsx    # Multi-warehouse inventory grid
-    │   ├── StockMovement.tsx    # Stock movement ledger
+    │   ├── StockMovement.tsx    # Stock movement ledger (calls sm_* edge functions)
     │   ├── BlanketOrders.tsx    # Blanket order management
     │   ├── BlanketReleases.tsx  # Blanket release management
     │   ├── ForecastingModule.tsx # Demand forecasting engine
@@ -231,7 +262,7 @@ WarehouseManagementSystem/
     │   ├── ErrorBoundary.tsx    # Error boundary wrapper
     │   ├── LoadingPage.tsx      # Branded loading screen
     │   │
-    │   ├── 📁 packing/         # 📦 FG Packing module
+    │   ├── packing/             # FG Packing module
     │   │   ├── index.ts         # Barrel exports
     │   │   ├── PackingModule.tsx # Main packing workflow
     │   │   ├── PackingDetail.tsx # Single packing detail view
@@ -240,7 +271,7 @@ WarehouseManagementSystem/
     │   │   ├── StickerPrint.tsx  # Sticker/QR barcode generation
     │   │   └── packingService.ts # Packing business logic
     │   │
-    │   ├── 📁 packing-engine/  # ⚙️ Advanced Packing Engine
+    │   ├── packing-engine/      # Advanced Packing Engine
     │   │   ├── index.ts         # Barrel exports
     │   │   ├── PackingEngine.tsx # Container & pallet management
     │   │   ├── PalletDashboard.tsx # Pallet state tracking
@@ -253,10 +284,10 @@ WarehouseManagementSystem/
     │   │   ├── RackView.tsx     # Visual rack layout
     │   │   └── packingEngineService.ts # Engine business logic
     │   │
-    │   ├── 📁 notifications/   # 🔔 Notification system
+    │   ├── notifications/       # Notification system
     │   │   └── NotificationBell.tsx
     │   │
-    │   └── 📁 ui/              # Reusable UI components (51 files)
+    │   └── ui/                  # Reusable UI components (51 files)
     │       ├── EnterpriseUI.tsx # Core enterprise design system
     │       ├── SharedComponents.tsx # Shared reusable components
     │       ├── RotatingQuote.tsx # Login page quotes
@@ -265,21 +296,21 @@ WarehouseManagementSystem/
     │       ├── button.tsx, card.tsx, dialog.tsx, ...
     │       └── (46 more Radix-based primitives)
     │
-    ├── 📁 hooks/                # Custom React hooks
+    ├── hooks/                   # Custom React hooks
     │   ├── useDashboard.ts      # Dashboard data fetching
     │   └── useInventory.ts      # Inventory operations
     │
-    ├── 📁 services/             # Business logic services
+    ├── services/                # Business logic services
     │   ├── inventoryService.ts  # Inventory CRUD operations
     │   ├── pdfServiceClient.ts  # PDF microservice HTTP client (circuit breaker, retry)
     │   └── sessionService.ts    # Session management
     │
-    ├── 📁 types/                # TypeScript type definitions
+    ├── types/                   # TypeScript type definitions
     │   ├── index.ts             # Core application types
     │   ├── inventory.ts         # Inventory-specific types
     │   └── packing.ts           # Packing module types
     │
-    └── 📁 utils/                # Utility functions
+    └── utils/                   # Utility functions
         ├── api/                 # API client & fetch utilities
         │   ├── client.ts        # Supabase client factory
         │   ├── fetchWithAuth.ts # Authenticated fetch wrapper
@@ -298,7 +329,7 @@ WarehouseManagementSystem/
 
 ---
 
-## 🏁 Getting Started
+## Getting Started
 
 ### Prerequisites
 
@@ -338,7 +369,7 @@ VITE_PDF_SERVICE_URL=https://your-pdf-service.azurecontainerapps.io
 VITE_PDF_SERVICE_API_KEY=your-pdf-api-key
 ```
 
-> 💡 If no `.env` is provided, the app falls back to hardcoded defaults in `src/utils/supabase/info.tsx`.
+> If no `.env` is provided, the app falls back to hardcoded defaults in `src/utils/supabase/info.tsx`.
 
 **4. Run database migrations:**
 
@@ -368,7 +399,7 @@ The application will be available at **http://localhost:3000**.
 
 ---
 
-## 🔀 Git Workflow
+## Git Workflow
 
 This project follows a **Git Feature Branch Workflow** with the following branch strategy:
 
@@ -376,10 +407,10 @@ This project follows a **Git Feature Branch Workflow** with the following branch
 
 | Branch | Purpose | Protected |
 | :--- | :--- | :--- |
-| `main` | Production-ready code. Stable releases only. | ✅ Yes |
-| `deploy/pre-prod` | Deployment branch. Application code + Docker, Nginx, CI/CD configs. | ✅ Yes |
-| `develop-test` | Active development. Pure application source code only — no deployment artifacts. | ✅ Yes |
-| `feature/*` | Feature development branches. | ❌ No |
+| `main` | Production-ready code. Stable releases only. | Yes |
+| `deploy/pre-prod` | Deployment branch. Application code + Docker, Nginx, CI/CD configs. | Yes |
+| `develop-test` | Active development. Pure application source code only — no deployment artifacts. | Yes |
+| `feature/*` | Feature development branches. | No |
 
 ### Pull Latest Changes (Git Pull)
 
@@ -448,26 +479,35 @@ chore(deps): upgrade React to v18.3.1
 
 ---
 
-## 🔐 Environment Variables
+## Environment Variables
 
 | Variable | Required | Description |
 | :--- | :--- | :--- |
-| `VITE_SUPABASE_URL` | ✅ | Your Supabase project URL (e.g., `https://xyz.supabase.co`) |
-| `VITE_SUPABASE_ANON_KEY` | ✅ | Your Supabase anonymous/public key |
-| `VITE_PDF_SERVICE_URL` | ❌ | PDF microservice URL (empty in production — nginx proxies same-origin) |
-| `VITE_PDF_SERVICE_API_KEY` | ❌ | PDF service API key (empty in production — nginx injects server-side) |
+| `VITE_SUPABASE_URL` | Yes | Your Supabase project URL (e.g., `https://xyz.supabase.co`) |
+| `VITE_SUPABASE_ANON_KEY` | Yes | Your Supabase anonymous/public key (`sb_publishable_*` format for new projects) |
+| `VITE_PDF_SERVICE_URL` | No | PDF microservice URL (empty in production — nginx proxies same-origin) |
+| `VITE_PDF_SERVICE_API_KEY` | No | PDF service API key (empty in production — nginx injects server-side) |
 
-> ⚠️ **Never commit `.env` files or service role keys to version control.** The `.gitignore` is configured to exclude all environment files. The application uses the public anon key with Row Level Security (RLS) for all operations.
+### Edge Function Secrets (Supabase-side, set via `supabase secrets set`)
+
+| Variable | Required | Description |
+| :--- | :--- | :--- |
+| `PUBLISHABLE_KEY` | Yes | Publishable anon key used inside edge functions for `auth.getUser()` JWT validation. Must match the project's current `sb_publishable_*` key. Supabase reserves the `SUPABASE_*` prefix, so a custom name is required. |
+
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and `SUPABASE_DB_URL` are auto-injected into every edge function at runtime.
+
+> **Never commit `.env` files or service role keys to version control.** The `.gitignore` is configured to exclude all environment files. The application uses the public anon key with Row Level Security (RLS) for all operations.
 
 ---
 
-## 🛡️ Security & RBAC
+## Security & RBAC
 
 ### Authentication
 
 - **JWT-based authentication** via Supabase Auth
 - Secure session management with automatic token refresh
 - Protected routes and API calls
+- Edge functions validate JWTs server-side via `auth.getUser(jwt)` using the custom `PUBLISHABLE_KEY` secret (ES256 asymmetric keys)
 
 ### Granular Role-Based Access Control (GRBAC)
 
@@ -479,20 +519,20 @@ chore(deps): upgrade React to v18.3.1
 
 ### Security Best Practices
 
-- ✅ End-to-end TypeScript for type safety
-- ✅ Database-level constraints and triggers
-- ✅ Row Level Security (RLS) on Supabase tables
-- ✅ JWT validation on all API calls
-- ✅ Granular per-user permission overrides
-- ✅ Input sanitisation and validation
-- ✅ No hardcoded secrets in source code
-- ✅ Mutable search path fixes applied to all database functions
+- End-to-end TypeScript for type safety
+- Database-level constraints and triggers
+- Row Level Security (RLS) on Supabase tables
+- JWT validation on all API calls
+- Granular per-user permission overrides
+- Input sanitisation and validation
+- No hardcoded secrets in source code
+- Mutable search path fixes applied to all database functions
 
 For detailed RBAC documentation, see [`docs/reference/rbac-database.md`](docs/reference/rbac-database.md).
 
 ---
 
-## 🗄️ Database Schema
+## Database Schema
 
 The system uses a relational PostgreSQL schema with the following core tables:
 
@@ -520,40 +560,54 @@ Full schema documentation is available at [`docs/DATABASE_SCHEMA.md`](docs/DATAB
 
 ---
 
-## 📡 API Reference
+## API Reference
 
-The backend API is powered by **Supabase PostgREST** with direct client-side access via the Supabase JS SDK.
+The backend API is powered by **Supabase PostgREST** with direct client-side access via the Supabase JS SDK, plus **Supabase Edge Functions** for business-logic-heavy workflows.
 
 ### Architecture Pattern
 
 ```
-React Component → Service Layer → Supabase Client → PostgreSQL (with RLS)
+React Component → Service Layer → Supabase Client / Edge Function → PostgreSQL (with RLS)
 ```
 
 ### Key Operations
 
-| Operation | Service | Description |
+| Operation | Service / Function | Description |
 | :--- | :--- | :--- |
 | Item CRUD | `itemsSupabase.ts` | Fetch, create, update, delete items |
 | Inventory Queries | `inventoryService.ts` | Multi-warehouse stock data |
-| Stock Movements | `StockMovement.tsx` | Ledger-based transactions |
+| Stock Movements | `sm_*` edge functions | Server-side validated movement workflows |
+| User Profile | `get-user-profile` edge function | Authenticated profile lookup |
 | Packing Workflow | `packingService.ts` | Sticker generation, box management |
 | Container/Pallet Ops | `packingEngineService.ts` | Container creation, pallet state machine |
 | MPL Generation | `PackingListManager.tsx` | Master packing list creation |
 | Auth & Permissions | `authService.ts` | JWT auth, role resolution |
 
+### Stock Movement Edge Functions
+
+All Stock Movement workflows are served by dedicated edge functions under [`supabase/functions/`](supabase/functions/):
+
+- `sm_search-items` · `sm_get-item-stock` · `sm_get-reason-codes`
+- `sm_get-movements` · `sm_get-movement-counts` · `sm_get-movement-review-data`
+- `sm_calculate-pallet-impact` · `sm_submit-movement-request` · `sm_approve-movement`
+
+See the [master function index](supabase/functions/README.md) and per-function READMEs for request/response schemas and deployment commands.
+
 ---
 
-## 📚 Documentation
+## Documentation
 
 | Document | Description |
 | :--- | :--- |
 | [Architecture](docs/ARCHITECTURE.md) | System architecture with diagrams |
 | [Architecture Series](docs/architecture/) | 12-part detailed architecture deep-dive |
+| [Architecture Decision Records](docs/adr/) | MADR-format records of key decisions |
+| [Release Notes](docs/releases/) | Per-version detailed release notes |
 | [Database Schema](docs/DATABASE_SCHEMA.md) | Complete schema reference |
 | [Module Overview](docs/MODULE_OVERVIEW.md) | Module catalog and dependency map |
 | [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) | Deployment instructions |
 | [Contributing](docs/CONTRIBUTING.md) | Code standards and PR process |
+| [Edge Functions](supabase/functions/README.md) | Master index for all Supabase Edge Functions |
 | [RBAC Reference](docs/reference/rbac-database.md) | Granular RBAC system details |
 | [Troubleshooting](docs/reference/troubleshooting.md) | Common issues and fixes |
 | [Design System](docs/reference/design-system.md) | UI design tokens |
@@ -561,7 +615,7 @@ React Component → Service Layer → Supabase Client → PostgreSQL (with RLS)
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 We follow the **GitHub Flow** model. All changes must go through Pull Requests.
 
@@ -587,20 +641,20 @@ We follow the **GitHub Flow** model. All changes must go through Pull Requests.
 
 ### Code Standards
 
-- ✅ TypeScript strict typing for all new code
-- ✅ Component files use PascalCase (e.g., `StockMovement.tsx`)
-- ✅ Hooks prefixed with `use` (e.g., `useDashboard.ts`)
-- ✅ Services use camelCase (e.g., `inventoryService.ts`)
-- ✅ Use the Enterprise Design System components for UI consistency
-- ✅ No `console.log` in production code (use proper error handling)
-- ✅ Meaningful commit messages following Conventional Commits
-- ✅ All new modules must implement GRBAC (see [workflow](/.agents/workflows/add-new-module.md))
+- TypeScript strict typing for all new code
+- Component files use PascalCase (e.g., `StockMovement.tsx`)
+- Hooks prefixed with `use` (e.g., `useDashboard.ts`)
+- Services use camelCase (e.g., `inventoryService.ts`)
+- Use the Enterprise Design System components for UI consistency
+- No `console.log` in production code (use proper error handling)
+- Meaningful commit messages following Conventional Commits
+- All new modules must implement GRBAC (see [workflow](/.agents/workflows/add-new-module.md))
 
 See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) for full contribution guidelines.
 
 ---
 
-## 🏷️ Versioning
+## Versioning
 
 This project uses [Semantic Versioning](https://semver.org/):
 
@@ -614,13 +668,14 @@ MAJOR.MINOR.PATCH
 | **MINOR** | New features, backwards-compatible |
 | **PATCH** | Bug fixes and minor improvements |
 
-**Current Version:** `v0.5.2`
+**Current Version:** `v0.5.3`
 
 ### Version History
 
 | Version | Date | Type | Highlights |
 | :--- | :--- | :--- | :--- |
-| **0.5.2** | 2026-04-11 | Patch | Branch alignment, security hardening, deploy artifact isolation |
+| **0.5.3** | 2026-04-18 | Patch | Edge function reorganization (`sm_*` prefix), JWT auth stabilization, per-function READMEs, ADR process, CODEOWNERS |
+| 0.5.2 | 2026-04-11 | Patch | Branch alignment, security hardening, deploy artifact isolation |
 | 0.5.1 | 2026-03-31 | Patch | Deep cleanup, dead code removal, DB consolidation, documentation sync |
 | 0.5.0 | 2026-03-31 | Minor | Codebase cleanup, dependency audit, documentation overhaul, PDF microservice |
 | 0.4.2 | 2026-03-30 | Patch | Server-side filtering, backend aggregates, pagination fixes |
@@ -635,11 +690,37 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
 
 ---
 
-## 🔄 Recent Changes
+## Recent Changes
+
+### v0.5.3 — Edge Function Reorganization & Documentation Refresh (2026-04-18)
+
+This patch release focuses on **server-side stock movement infrastructure, function naming, and documentation** with zero business logic changes:
+
+#### Edge Functions
+- All Stock Movement functions renamed with `sm_` prefix (e.g., `approve-movement` → `sm_approve-movement`) for visual grouping in the Supabase dashboard
+- Auth validation migrated from the reserved `SUPABASE_ANON_KEY` to a custom `PUBLISHABLE_KEY` secret — required after Supabase rotated the project to the new `sb_publishable_*` / ES256 JWT format
+- All functions redeployed with `--no-verify-jwt` so CORS preflight reaches the in-function handler cleanly
+- `auth.getUser(jwt)` now called with explicit JWT + `persistSession: false` on all clients
+
+#### Client Changes
+- `StockMovement.tsx` — all `FUNCTIONS_BASE` URLs updated to point at the new `sm_*` function paths
+- Item search input now **debounced at 300ms** — typing "opw-57" fires 1 request instead of 6
+- `.env.local` `VITE_FUNCTIONS_URL` override removed so the frontend uses the deployed Supabase URL by default
+
+#### Documentation
+- Master edge function index + per-function READMEs (11 new files under `supabase/functions/`)
+- `.env.example` template for edge function environment variables
+- ADR process bootstrapped under `docs/adr/` with the first record covering this migration
+- `.github/CODEOWNERS` added with placeholder team handles
+- Detailed release notes at `docs/releases/CHANGES_0.5.3.md`
+
+#### Cleanup
+- `.gitignore` refined — un-ignored `supabase/functions/` so edge function source is tracked in git; still ignoring `supabase/.branches/`, `supabase/.temp/`, and the secret-bearing `supabase/functions/.env`
+- New `scripts/dev/` folder for ad-hoc developer scripts (git-ignored except its README)
 
 ### v0.5.2 — Branch Alignment & Security Hardening (2026-04-11)
 
-This patch release focuses on **branch cleanup, deployment isolation, and security hardening** with zero business logic changes:
+This patch release focused on **branch cleanup, deployment isolation, and security hardening** with zero business logic changes:
 
 #### Branch Alignment
 - `develop-test` now contains **only application source code** — all Docker, Nginx, CI/CD, and `.env.*` files removed
@@ -665,7 +746,7 @@ This patch release focuses on **branch cleanup, deployment isolation, and securi
 
 ---
 
-## 👥 Authors & Maintainers
+## Authors & Maintainers
 
 <table>
   <tr>
@@ -681,7 +762,7 @@ This patch release focuses on **branch cleanup, deployment isolation, and securi
 
 ---
 
-## 📄 License & Copyright
+## License & Copyright
 
 ```
 Copyright (c) 2025-2026 AutoCrat Engineers. All Rights Reserved.
@@ -703,5 +784,5 @@ For licensing enquiries, contact the engineering team at AutoCrat Engineers.
 ---
 
 <p align="center">
-  <sub>Built with ❤️ by <strong>AutoCrat Engineers</strong> · © 2025-2026 · All Rights Reserved</sub>
+  <sub>Built by <strong>AutoCrat Engineers</strong> · © 2025-2026 · All Rights Reserved</sub>
 </p>

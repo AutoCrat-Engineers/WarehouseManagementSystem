@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.3] — 2026-04-18
+
+### Release Type: Patch — Edge Function Reorganization & Documentation Refresh
+
+### Added
+
+- **Edge Function READMEs** — per-function documentation for all 10 Supabase functions covering purpose, request/response schemas, error codes, env vars, and local-test commands
+- **Master Edge Function Index** — [`supabase/functions/README.md`](supabase/functions/README.md) documents all functions, naming convention, deployment workflow, and contribution guide
+- **Environment Template** — [`supabase/functions/.env.example`](supabase/functions/.env.example) with placeholders for auto-injected and custom secrets
+- **ADR Process** — [`docs/adr/`](docs/adr/) with index, MADR-format template, and the first ADR documenting the Stock Movement function prefix + JWT auth decision
+- **CODEOWNERS** — [`.github/CODEOWNERS`](.github/CODEOWNERS) with placeholder team handles mapping paths to review ownership
+- **Release Notes** — [`docs/releases/CHANGES_0.5.3.md`](docs/releases/CHANGES_0.5.3.md)
+- **Item search debounce** — 300ms debounce on the New Stock Movement item search input (collapses typing bursts into a single request)
+
+### Changed
+
+- **Edge Function Naming** — all Stock Movement functions renamed with `sm_` prefix (e.g. `approve-movement` → `sm_approve-movement`); visual grouping in Supabase dashboard
+- **Edge Function Auth** — `userClient` now uses a custom `PUBLISHABLE_KEY` secret instead of the reserved `SUPABASE_ANON_KEY`; `auth.getUser(jwt)` called with explicit JWT; `auth: { persistSession: false, autoRefreshToken: false }` set on all edge-function Supabase clients
+- **Deployment Flag** — all functions deployed with `--no-verify-jwt` so CORS preflight reaches the in-function handler
+- **Client URLs** — [`StockMovement.tsx`](src/components/StockMovement.tsx) `FUNCTIONS_BASE` URLs point to new `sm_*` paths
+- **`.env.local`** — `VITE_FUNCTIONS_URL` override removed so frontend uses the deployed Supabase URL
+
+### Fixed
+
+- **401 Unauthorized on edge functions** — root cause was the legacy HS256 anon key being used against new ES256 user JWTs; resolved by migrating to the current `sb_publishable_*` key via the `PUBLISHABLE_KEY` custom secret
+- **CORS preflight failures** — resolved by deploying with `--no-verify-jwt`; OPTIONS requests now receive CORS headers from the in-function handler
+
+### Deprecated
+
+- Old (unprefixed) edge function deployments remain live on Supabase but are **unreferenced by client code**. Should be deleted from the dashboard.
+
+### Security
+
+- Flagged hardcoded legacy JWT fallback in [`src/utils/supabase/info.tsx`](src/utils/supabase/info.tsx). Anon key is expected to be public for SPAs, but the fallback is now stale after publishable-key rotation. Follow-up patch to sync.
+
+### Docs
+
+- 13 new markdown files under `supabase/functions/`, `docs/adr/`, `.github/`, and `docs/releases/`
+
+---
+
 ## [0.5.2] — 2026-04-11
 
 ### Release Type: Codebase Cleanup, Branch Alignment & Security Hardening

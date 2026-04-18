@@ -1,0 +1,41 @@
+# CODEOWNERS — Warehouse Management System
+#
+# This file defines which team reviews which parts of the repo.
+# Last match wins. Team handles below are PLACEHOLDERS — replace with real
+# GitHub team slugs before enabling required reviews in branch protection.
+#
+# Syntax: <path-pattern>    <owner1> <owner2> ...
+
+# ── Default owner (catch-all) ──────────────────────────────────────────────
+*                               @org/backend-team
+
+# ── Edge functions ──────────────────────────────────────────────────────────
+/supabase/functions/            @org/backend-team
+
+# ── Frontend / application code ─────────────────────────────────────────────
+/src/                           @org/backend-team
+/src/components/                @org/backend-team @org/frontend-team
+/src/auth/                      @org/backend-team @org/security-team
+
+# ── Documentation ───────────────────────────────────────────────────────────
+/docs/                          @org/backend-team @org/tech-writers
+/docs/adr/                      @org/backend-team @org/architecture-team
+*.md                            @org/tech-writers
+
+# ── CI/CD & infrastructure ──────────────────────────────────────────────────
+/.github/                       @org/devops-team
+/.github/workflows/             @org/devops-team
+/.github/CODEOWNERS             @org/devops-team @org/backend-team
+
+# ── Configuration & build ───────────────────────────────────────────────────
+/package.json                   @org/backend-team
+/tsconfig*.json                 @org/backend-team
+/vite.config.ts                 @org/backend-team
+/.gitignore                     @org/backend-team @org/devops-team
+
+# ── Security-sensitive paths ────────────────────────────────────────────────
+/src/utils/supabase/            @org/backend-team @org/security-team
+/src/auth/services/             @org/backend-team @org/security-team
+
+# NOTE: All `@org/*` handles above are placeholders. Replace with real team
+# slugs from https://github.com/orgs/<your-org>/teams before committing.
