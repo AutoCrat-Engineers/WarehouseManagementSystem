@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { projectId } from '../utils/supabase/info';
+import { getEdgeFunctionUrl } from '../utils/supabase/info';
 import { TrendingUp, Loader2, BarChart3, Activity, AlertCircle, Zap } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Area, AreaChart } from 'recharts';
 
@@ -53,7 +53,7 @@ export function ForecastingModule({ accessToken }: ForecastingModuleProps) {
   const fetchItems = async () => {
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-9c637d11/items`,
+        getEdgeFunctionUrl('make-server-9c637d11/items'),
         {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         }
@@ -77,7 +77,7 @@ export function ForecastingModule({ accessToken }: ForecastingModuleProps) {
     setGenerating(true);
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-9c637d11/forecast/generate`,
+        getEdgeFunctionUrl('make-server-9c637d11/forecast/generate'),
         {
           method: 'POST',
           headers: {

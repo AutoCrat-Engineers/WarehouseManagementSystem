@@ -12,6 +12,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Search, Truck, CheckCircle2, Package, Plus, Loader2, XCircle, Eye, AlertCircle, AlertTriangle, RefreshCw, ChevronLeft, ChevronRight, Hash, ArrowRight, Mail, Send, FileText, ShieldCheck, Anchor, Printer, ChevronDown, X, Settings, Stamp, Clock, MessageSquare, User, Calendar, Info } from 'lucide-react';
 import { getSupabaseClient } from '../../utils/supabase/client';
+import { getEdgeFunctionUrl } from '../../utils/supabase/info';
 import { fetchMasterPackingLists, createPerformaInvoice, approvePerformaInvoice, cancelPerformaInvoice } from './mplService';
 import type { MasterPackingList } from './mplService';
 import { generatePdf as generatePdfViaService } from '../../services/pdfServiceClient';
@@ -915,7 +916,7 @@ ${rowsHtml}
             try {
                 const { data: { session } } = await supabase.auth.getSession();
                 const res = await fetch(
-                    `https://sugvmurszfcneaeyoagv.supabase.co/functions/v1/send-dispatch-email`,
+                    getEdgeFunctionUrl('send-dispatch-email'),
                     {
                         method: 'POST',
                         headers: {
@@ -1001,7 +1002,7 @@ ${rowsHtml}
         try {
             const { data: { session } } = await supabase.auth.getSession();
             const res = await fetch(
-                `https://sugvmurszfcneaeyoagv.supabase.co/functions/v1/send-dispatch-email`,
+                getEdgeFunctionUrl('send-dispatch-email'),
                 {
                     method: 'POST',
                     headers: {

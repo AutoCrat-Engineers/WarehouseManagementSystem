@@ -37,11 +37,12 @@ out/
 .db_reference/
 
 # ============================================================================
-# Supabase — keep functions & migrations tracked, ignore local state
+# Supabase — keep functions & config tracked, ignore local state & migrations
 # ============================================================================
 supabase/.branches/
 supabase/.temp/
 supabase/functions/.env
+supabase/migrations/
 supabase.exe
 supabase.tar.gz
 

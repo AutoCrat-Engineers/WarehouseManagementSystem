@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { projectId } from '../utils/supabase/info';
+import { getEdgeFunctionUrl } from '../utils/supabase/info';
 import { BarChart3, Loader2, AlertTriangle, CheckCircle, Clock, Zap, RefreshCw } from 'lucide-react';
 
 interface PlanningModuleProps {
@@ -44,7 +44,7 @@ export function PlanningModule({ accessToken }: PlanningModuleProps) {
     setLoading(true);
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-9c637d11/planning/mrp`,
+        getEdgeFunctionUrl('make-server-9c637d11/planning/mrp'),
         {
           method: 'POST',
           headers: {

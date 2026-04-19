@@ -38,12 +38,8 @@ import {
   StatusFilter, AddButton, ExportCSVButton, DateRangeFilter, ClearFiltersButton, Pagination
 } from './ui/SharedComponents';
 import { getSupabaseClient } from '../utils/supabase/client';
+import { FUNCTIONS_BASE } from '../utils/supabase/info';
 import type { PalletImpact } from './packing-engine/packingEngineService';
-
-// Base URL for all Supabase Edge Function calls.
-// For local testing: set VITE_FUNCTIONS_URL=http://127.0.0.1:54321/functions/v1 in .env
-// For production: leave unset — falls back to the hardcoded project URL.
-const FUNCTIONS_BASE = import.meta.env.VITE_FUNCTIONS_URL || 'https://sugvmurszfcneaeyoagv.supabase.co/functions/v1';
 
 // ============================================================================
 // TYPES

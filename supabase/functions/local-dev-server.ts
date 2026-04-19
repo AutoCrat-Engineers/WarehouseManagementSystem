@@ -27,30 +27,30 @@ for (const line of envText.split('\n')) {
 }
 console.log('[local-dev-server] Env loaded from supabase/.env.local');
 
-// ── Import all function handlers ────────────────────────────────────────────
-import { handler as getMovements } from './get-movements/index.ts';
-import { handler as getMovementCounts } from './get-movement-counts/index.ts';
-import { handler as calculatePalletImpact } from './calculate-pallet-impact/index.ts';
-import { handler as getItemStock } from './get-item-stock/index.ts';
-import { handler as searchItems } from './search-items/index.ts';
-import { handler as submitMovementRequest } from './submit-movement-request/index.ts';
-import { handler as approveMovement } from './approve-movement/index.ts';
+// ── Import all function handlers (sm_ prefixed to match deployed folders) ──
+import { handler as getMovements } from './sm_get-movements/index.ts';
+import { handler as getMovementCounts } from './sm_get-movement-counts/index.ts';
+import { handler as calculatePalletImpact } from './sm_calculate-pallet-impact/index.ts';
+import { handler as getItemStock } from './sm_get-item-stock/index.ts';
+import { handler as searchItems } from './sm_search-items/index.ts';
+import { handler as submitMovementRequest } from './sm_submit-movement-request/index.ts';
+import { handler as approveMovement } from './sm_approve-movement/index.ts';
 import { handler as getUserProfile } from './get-user-profile/index.ts';
-import { handler as getReasonCodes } from './get-reason-codes/index.ts';
-import { handler as getMovementReviewData } from './get-movement-review-data/index.ts';
+import { handler as getReasonCodes } from './sm_get-reason-codes/index.ts';
+import { handler as getMovementReviewData } from './sm_get-movement-review-data/index.ts';
 
-// ── Route table ─────────────────────────────────────────────────────────────
+// ── Route table (matches deployed function names with sm_ prefix) ───────────
 const routes: Record<string, (req: Request) => Promise<Response>> = {
-  '/functions/v1/get-movements': getMovements,
-  '/functions/v1/get-movement-counts': getMovementCounts,
-  '/functions/v1/calculate-pallet-impact': calculatePalletImpact,
-  '/functions/v1/get-item-stock': getItemStock,
-  '/functions/v1/search-items': searchItems,
-  '/functions/v1/submit-movement-request': submitMovementRequest,
-  '/functions/v1/approve-movement': approveMovement,
+  '/functions/v1/sm_get-movements': getMovements,
+  '/functions/v1/sm_get-movement-counts': getMovementCounts,
+  '/functions/v1/sm_calculate-pallet-impact': calculatePalletImpact,
+  '/functions/v1/sm_get-item-stock': getItemStock,
+  '/functions/v1/sm_search-items': searchItems,
+  '/functions/v1/sm_submit-movement-request': submitMovementRequest,
+  '/functions/v1/sm_approve-movement': approveMovement,
   '/functions/v1/get-user-profile': getUserProfile,
-  '/functions/v1/get-reason-codes': getReasonCodes,
-  '/functions/v1/get-movement-review-data': getMovementReviewData,
+  '/functions/v1/sm_get-reason-codes': getReasonCodes,
+  '/functions/v1/sm_get-movement-review-data': getMovementReviewData,
 };
 
 // ── Server ───────────────────────────────────────────────────────────────────

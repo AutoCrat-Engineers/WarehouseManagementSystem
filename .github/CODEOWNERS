@@ -1,41 +1,32 @@
 # CODEOWNERS — Warehouse Management System
 #
-# This file defines which team reviews which parts of the repo.
-# Last match wins. Team handles below are PLACEHOLDERS — replace with real
-# GitHub team slugs before enabling required reviews in branch protection.
+# This file defines code review requirements.
+# Last match wins. Update handles as your team grows.
 #
 # Syntax: <path-pattern>    <owner1> <owner2> ...
 
 # ── Default owner (catch-all) ──────────────────────────────────────────────
-*                               @org/backend-team
+*                               @AutoCrat-Engineers/core-team
 
 # ── Edge functions ──────────────────────────────────────────────────────────
-/supabase/functions/            @org/backend-team
+/supabase/functions/            @AutoCrat-Engineers/core-team
 
 # ── Frontend / application code ─────────────────────────────────────────────
-/src/                           @org/backend-team
-/src/components/                @org/backend-team @org/frontend-team
-/src/auth/                      @org/backend-team @org/security-team
-
-# ── Documentation ───────────────────────────────────────────────────────────
-/docs/                          @org/backend-team @org/tech-writers
-/docs/adr/                      @org/backend-team @org/architecture-team
-*.md                            @org/tech-writers
-
-# ── CI/CD & infrastructure ──────────────────────────────────────────────────
-/.github/                       @org/devops-team
-/.github/workflows/             @org/devops-team
-/.github/CODEOWNERS             @org/devops-team @org/backend-team
+/src/                           @AutoCrat-Engineers/core-team
+/src/components/                @AutoCrat-Engineers/core-team
 
 # ── Configuration & build ───────────────────────────────────────────────────
-/package.json                   @org/backend-team
-/tsconfig*.json                 @org/backend-team
-/vite.config.ts                 @org/backend-team
-/.gitignore                     @org/backend-team @org/devops-team
+/package.json                   @AutoCrat-Engineers/core-team
+/tsconfig*.json                 @AutoCrat-Engineers/core-team
+/vite.config.ts                 @AutoCrat-Engineers/core-team
+
+# ── CI/CD & infrastructure ──────────────────────────────────────────────────
+/.github/                       @AutoCrat-Engineers/core-team
+/.github/CODEOWNERS             @AutoCrat-Engineers/core-team
 
 # ── Security-sensitive paths ────────────────────────────────────────────────
-/src/utils/supabase/            @org/backend-team @org/security-team
-/src/auth/services/             @org/backend-team @org/security-team
+/src/utils/supabase/            @AutoCrat-Engineers/core-team
 
-# NOTE: All `@org/*` handles above are placeholders. Replace with real team
-# slugs from https://github.com/orgs/<your-org>/teams before committing.
+# NOTE: If your GitHub org doesn't have a team called "core-team" yet,
+# create it at: https://github.com/orgs/AutoCrat-Engineers/teams
+# or replace with individual GitHub usernames (e.g., @yourusername).
