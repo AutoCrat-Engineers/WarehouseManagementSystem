@@ -90,6 +90,17 @@ export async function handler(req: Request): Promise<Response> {
       if (typeof v === 'string' && v.trim() === '') cleaned[f] = null;
     }
 
+    // Map Postgres constraint names to human-readable toasts.
+    const friendlyError = (msg: string): string => {
+      if (/items_item_code_key/i.test(msg))
+        return 'Item code already exists. Please use a different code.';
+      if (/items_part_number_unique/i.test(msg))
+        return 'Part number already exists. Please use a different part number.';
+      if (/items_master_serial_no/i.test(msg))
+        return 'Master serial number already exists. Please use a different value.';
+      return msg;
+    };
+
     // ── UPDATE MODE ──────────────────────────────────────────────────
     if (itemId) {
       const { data, error } = await db
@@ -98,7 +109,7 @@ export async function handler(req: Request): Promise<Response> {
         .eq('id', itemId)
         .select()
         .single();
-      if (error) return json(corsHeaders, { error: error.message }, 400);
+      if (error) return json(corsHeaders, { error: friendlyError(error.message) }, 400);
       return json(corsHeaders, { success: true, mode: 'update', item: data });
     }
 
@@ -108,7 +119,7 @@ export async function handler(req: Request): Promise<Response> {
       .insert(cleaned)
       .select()
       .single();
-    if (error) return json(corsHeaders, { error: error.message }, 400);
+    if (error) return json(corsHeaders, { error: friendlyError(error.message) }, 400);
 
     return json(corsHeaders, { success: true, mode: 'create', item: data });
   } catch (err: any) {
