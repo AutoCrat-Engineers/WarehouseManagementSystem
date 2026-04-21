@@ -73,11 +73,28 @@ export async function handler(req: Request): Promise<Response> {
       return json(corsHeaders, { error: 'form_data is required' }, 400);
     }
 
+    // Coerce empty strings to NULL for nullable-unique text columns.
+    // Rationale: `items.part_number` is UNIQUE and `master_serial_no`
+    // will be next.  Postgres treats '' as a real value, so a second
+    // item saved with a blank field collides.  NULLs don't collide
+    // under a UNIQUE constraint, so blanks become NULL on the way in.
+    const NULLABLE_TEXT_FIELDS = [
+      'part_number',
+      'master_serial_no',
+      'revision',
+      'lead_time_days',
+    ] as const;
+    const cleaned: Record<string, unknown> = { ...formData };
+    for (const f of NULLABLE_TEXT_FIELDS) {
+      const v = cleaned[f];
+      if (typeof v === 'string' && v.trim() === '') cleaned[f] = null;
+    }
+
     // ── UPDATE MODE ──────────────────────────────────────────────────
     if (itemId) {
       const { data, error } = await db
         .from('items')
-        .update({ ...formData, updated_at: new Date().toISOString() })
+        .update({ ...cleaned, updated_at: new Date().toISOString() })
         .eq('id', itemId)
         .select()
         .single();
@@ -88,7 +105,7 @@ export async function handler(req: Request): Promise<Response> {
     // ── CREATE MODE ──────────────────────────────────────────────────
     const { data, error } = await db
       .from('items')
-      .insert(formData)
+      .insert(cleaned)
       .select()
       .single();
     if (error) return json(corsHeaders, { error: error.message }, 400);
