@@ -90,7 +90,7 @@ export function PlanningModule({ accessToken }: PlanningModuleProps) {
     }
   };
 
-  const filteredRecommendations = mrpResult?.recommendations.filter(rec => 
+  const filteredRecommendations = mrpResult?.recommendations.filter(rec =>
     priorityFilter === 'ALL' || rec.priority === priorityFilter
   ) || [];
 
@@ -151,8 +151,8 @@ export function PlanningModule({ accessToken }: PlanningModuleProps) {
           <div>
             <h3 className="text-sm font-semibold text-purple-900">How MRP Works</h3>
             <p className="text-sm text-purple-700 mt-1">
-              The system analyzes <strong>current stock</strong>, <strong>min/max levels</strong>, <strong>safety stock</strong>, 
-              <strong> forecasted demand</strong>, and <strong>lead times</strong> to generate intelligent replenishment recommendations. 
+              The system analyzes <strong>current stock</strong>, <strong>min/max levels</strong>, <strong>safety stock</strong>,
+              <strong> forecasted demand</strong>, and <strong>lead times</strong> to generate intelligent replenishment recommendations.
               Priorities are automatically assigned based on urgency and risk of stockout.
             </p>
           </div>
@@ -233,11 +233,10 @@ export function PlanningModule({ accessToken }: PlanningModuleProps) {
               <button
                 key={priority}
                 onClick={() => setPriorityFilter(priority)}
-                className={`px-3 py-1 text-sm font-medium rounded-lg transition-colors ${
-                  priorityFilter === priority
+                className={`px-3 py-1 text-sm font-medium rounded-lg transition-colors ${priorityFilter === priority
                     ? 'bg-blue-600 text-white'
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
+                  }`}
               >
                 {priority}
               </button>
@@ -354,7 +353,7 @@ export function PlanningModule({ accessToken }: PlanningModuleProps) {
           <CheckCircle className="mx-auto text-green-500 mb-4" size={64} />
           <h3 className="text-lg font-semibold text-gray-900 mb-2">No Recommendations</h3>
           <p className="text-gray-600">
-            {priorityFilter === 'ALL' 
+            {priorityFilter === 'ALL'
               ? 'All items are within acceptable stock levels!'
               : `No items with ${priorityFilter} priority at this time.`
             }

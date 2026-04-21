@@ -10,7 +10,8 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { getSupabaseClient } from '../../utils/supabase/client';
+import { fetchWithAuth } from '../../utils/supabase/auth';
+import { getEdgeFunctionUrl } from '../../utils/supabase/info';
 import {
     Card, Button, Badge, Input, Label, Select,
     Modal, LoadingSpinner, EmptyState, ModuleLoader,
@@ -550,63 +551,38 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
         toastTimer.current = setTimeout(() => setToast(null), dur);
     }, []);
 
-    // ── FETCH COUNTS (always full-dataset — powers summary cards independently of pagination) ──
-    const fetchCounts = useCallback(async () => {
-        try {
-            const supabase = getSupabaseClient();
-            const [totalR, activeR, inactiveR] = await Promise.all([
-                supabase.from('packing_specifications').select('id', { count: 'exact', head: true }),
-                supabase.from('packing_specifications').select('id', { count: 'exact', head: true }).eq('is_active', true),
-                supabase.from('packing_specifications').select('id', { count: 'exact', head: true }).eq('is_active', false),
-            ]);
-            setStatsData({
-                total: totalR.count ?? 0,
-                active: activeR.count ?? 0,
-                inactive: inactiveR.count ?? 0,
-            });
-        } catch { /* non-critical */ }
-    }, []);
+    // Summary counts are now returned by `pac_details_list-specs` alongside
+    // the paginated list — folded into fetchSpecs below to save round-trips.
 
-    // ── FETCH (server-side filtered + paginated) ──
+    // ── FETCH (via edge function — consolidated list + counts) ──
+    // `pac_details_list-specs` runs server-side:
+    //   * 3 summary counts (total / active / inactive) in parallel with
+    //   * the paginated list + items-inner-join + search/status filter.
+    // Business logic is identical to the prior inline implementation.
     const fetchSpecs = useCallback(async () => {
         setError(null); setLoading(true);
         try {
-            const supabase = getSupabaseClient();
-            let query = supabase
-                .from('packing_specifications')
-                .select('*, items!inner(item_name, master_serial_no, part_number, revision)', { count: 'exact' })
-                .order('created_at', { ascending: false });
-
-            // Server-side card filter
-            if (cardFilter === 'ACTIVE')   query = query.eq('is_active', true);
-            if (cardFilter === 'INACTIVE') query = query.eq('is_active', false);
-
-            // Server-side search via the joined `items` table.
-            // PostgREST .or() uses commas/parentheses as delimiters, so values
-            // containing them (e.g. "Connector, W/O (14E)") MUST be double-quoted.
-            // { referencedTable } applies the filter on `items` directly.
-            if (searchTerm.trim()) {
-                const safe = searchTerm.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-                query = query.or(
-                    `item_code.ilike."%${safe}%",item_name.ilike."%${safe}%",master_serial_no.ilike."%${safe}%",part_number.ilike."%${safe}%"`,
-                    { referencedTable: 'items' }
-                );
+            const res = await fetchWithAuth(getEdgeFunctionUrl('pac_details_list-specs'), {
+                method: 'POST',
+                body: JSON.stringify({
+                    page,
+                    page_size: ITEMS_PER_PAGE,
+                    card_filter: cardFilter,
+                    search_term: searchTerm.trim() || undefined,
+                }),
+            });
+            const json = await res.json();
+            if (!res.ok || !json?.success) {
+                throw new Error(json?.error || 'Failed to load packing specifications');
             }
 
-            // Server-side pagination
-            const offset = page * ITEMS_PER_PAGE;
-            const { data, count, error: e } = await query.range(offset, offset + ITEMS_PER_PAGE - 1);
-            if (e) throw e;
-
-            setTotalCount(count ?? 0);
-            const mapped: PackingSpec[] = (data || []).map((r: any) => ({
-                ...r,
-                item_name: r.items?.item_name,
-                master_serial_no: r.items?.master_serial_no,
-                part_number: r.items?.part_number,
-                revision: r.items?.revision,
-            }));
-            setSpecs(mapped);
+            setTotalCount(json.total_count ?? 0);
+            setSpecs((json.specs || []) as PackingSpec[]);
+            setStatsData({
+                total: json.summary?.total ?? 0,
+                active: json.summary?.active ?? 0,
+                inactive: json.summary?.inactive ?? 0,
+            });
         } catch (err: any) {
             setError(err.message || 'Failed to load packing specifications');
             setSpecs([]);
@@ -614,7 +590,6 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
     }, [cardFilter, searchTerm, page]);
 
     useEffect(() => { fetchSpecs(); }, [fetchSpecs]);
-    useEffect(() => { fetchCounts(); }, [fetchCounts]);
 
     useEffect(() => {
         if (!loading && initialLoad) {
@@ -639,24 +614,23 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
     // ── STATS — from separate server-side count query, not from loaded page ──
     const stats = statsData;
 
-    // ── ITEM SEARCH (for Add modal) ──
+    // ── ITEM SEARCH (for Add modal) — via edge function ──
+    // `pac_details_search-items` does existing-spec exclusion + items search
+    // in one server-side round trip.
     const searchItems = useCallback(async (q: string) => {
         if (q.trim().length < 2) { setItemResults([]); return; }
         setSearchingItems(true);
         try {
-            const supabase = getSupabaseClient();
-            // Fetch all existing spec item_ids server-side (don't rely on paginated specs)
-            const { data: existingSpecs } = await supabase
-                .from('packing_specifications')
-                .select('item_id');
-            const existingIds = new Set((existingSpecs || []).map((s: any) => s.item_id));
-            const { data } = await supabase
-                .from('items')
-                .select('id, item_code, item_name, master_serial_no, part_number, is_active')
-                .eq('is_active', true)
-                .or(`item_code.ilike.%${q}%,item_name.ilike.%${q}%,master_serial_no.ilike.%${q}%,part_number.ilike.%${q}%`)
-                .limit(10);
-            setItemResults((data || []).filter((i: any) => !existingIds.has(i.id)));
+            const res = await fetchWithAuth(getEdgeFunctionUrl('pac_details_search-items'), {
+                method: 'POST',
+                body: JSON.stringify({ query: q }),
+            });
+            const json = await res.json();
+            if (!res.ok || !json?.success) {
+                setItemResults([]);
+                return;
+            }
+            setItemResults(json.items || []);
         } catch { setItemResults([]); }
         finally { setSearchingItems(false); }
     }, []);
@@ -680,33 +654,39 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
 
         setSaving(true);
         try {
-            const supabase = getSupabaseClient();
+            // Validate create-mode requires a selected item before firing the
+            // edge call (avoids a wasted round-trip on validation failure).
+            if (!editSpec && !selectedItem) {
+                showToast('error', 'Error', 'Please select an item first.');
+                setSaving(false);
+                return;
+            }
+
+            const res = await fetchWithAuth(getEdgeFunctionUrl('pac_details_upsert-spec'), {
+                method: 'POST',
+                body: JSON.stringify({
+                    spec_id: editSpec ? editSpec.id : null,
+                    item_id: editSpec ? null : selectedItem!.id,
+                    item_code: editSpec ? null : selectedItem!.item_code,
+                    form_data: formData,
+                }),
+            });
+            const json = await res.json();
+            if (!res.ok || !json?.success) {
+                // Surface the duplicate case with the same friendly toast the
+                // old client-side code emitted.
+                if (json?.code === 'DUPLICATE_SPEC' || res.status === 409) {
+                    showToast('error', 'Duplicate', 'A packing specification already exists for this item.');
+                    setSaving(false);
+                    return;
+                }
+                throw new Error(json?.error || 'Failed to save.');
+            }
+
             if (editSpec) {
-                // UPDATE
-                const { error: e } = await supabase
-                    .from('packing_specifications')
-                    .update({ ...formData, updated_at: new Date().toISOString() })
-                    .eq('id', editSpec.id);
-                if (e) throw e;
                 showToast('success', 'Updated', 'Packing specification updated successfully.');
             } else {
-                // CREATE
-                if (!selectedItem) { showToast('error', 'Error', 'Please select an item first.'); setSaving(false); return; }
-                const { error: e } = await supabase
-                    .from('packing_specifications')
-                    .insert({
-                        item_id: selectedItem.id,
-                        item_code: selectedItem.item_code,
-                        is_active: selectedItem.is_active,
-                        ...formData,
-                    });
-                if (e) {
-                    if (e.message.includes('uq_packing_spec_item') || e.message.includes('duplicate')) {
-                        showToast('error', 'Duplicate', 'A packing specification already exists for this item.');
-                    } else throw e;
-                    setSaving(false); return;
-                }
-                showToast('success', 'Created', `Packing specification created for ${selectedItem.item_code}.`);
+                showToast('success', 'Created', `Packing specification created for ${selectedItem!.item_code}.`);
             }
             handleCloseModal();
             fetchSpecs();
@@ -822,22 +802,17 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
     const handleDeleteConfirm = async (reason: string) => {
         if (!deleteTarget) return;
         try {
-            const supabase = getSupabaseClient();
-            // Log to audit_log
-            const { data: sessionData } = await supabase.auth.getSession();
-            if (sessionData?.session) {
-                const { error: auditErr } = await supabase.from('audit_log').insert({
-                    user_id: sessionData.session.user.id,
-                    action: 'DELETE_PACKING_SPEC',
-                    target_type: 'packing_specification',
-                    target_id: deleteTarget.item_code,
-                    old_value: deleteTarget,
-                    new_value: null,
-                });
-                if (auditErr) console.warn('Audit log warning:', auditErr.message);
+            // Server-side: audit log INSERT + DELETE in one round trip.
+            // Audit failure is swallowed server-side (matches prior console.warn
+            // pattern); delete failure is surfaced to the user here.
+            const res = await fetchWithAuth(getEdgeFunctionUrl('pac_details_delete-spec'), {
+                method: 'POST',
+                body: JSON.stringify({ spec_id: deleteTarget.id }),
+            });
+            const json = await res.json();
+            if (!res.ok || !json?.success) {
+                throw new Error(json?.error || 'Failed to delete specification.');
             }
-            const { error: e } = await supabase.from('packing_specifications').delete().eq('id', deleteTarget.id);
-            if (e) throw e;
             showToast('success', 'Deleted', `Packing specification for "${deleteTarget.item_code}" has been permanently deleted.`);
             fetchSpecs();
         } catch (err: any) {
@@ -940,7 +915,7 @@ export function PackingDetails({ accessToken, userRole, userPerms = {} }: Packin
                         <ClearFiltersButton onClick={() => setCardFilter('ALL')} />
                     )}
                     <ExportCSVButton onClick={handleExport} />
-                    <RefreshButton onClick={() => { fetchSpecs(); fetchCounts(); }} loading={loading} />
+                    <RefreshButton onClick={() => { fetchSpecs(); }} loading={loading} />
                     {canAdd && <AddButton label="Add Specification" onClick={() => setShowAddModal(true)} />}
                 </ActionBar>
             </SharedFilterBar>
