@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/Version-0.5.3-blue?style=for-the-badge" alt="Version" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Version-0.5.4-blue?style=for-the-badge" alt="Version" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Status-Active_Development-brightgreen?style=for-the-badge" alt="Status" /></a>
   <a href="#"><img src="https://img.shields.io/badge/License-Proprietary-red?style=for-the-badge" alt="License" /></a>
   <a href="#"><img src="https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=white" alt="React" /></a>
@@ -193,7 +193,8 @@ WarehouseManagementSystem/
 │   │   ├── 0000-template.md
 │   │   └── 0001-edge-function-sm-prefix-and-jwt-auth.md
 │   ├── releases/                # Per-version release notes
-│   │   └── CHANGES_0.5.3.md
+│   │   ├── CHANGES_0.5.3.md
+│   │   └── CHANGES_0.5.4.md
 │   ├── reference/               # Reference documentation
 │   │   ├── rbac-database.md     # Granular RBAC system details
 │   │   ├── troubleshooting.md   # Common issues and fixes
@@ -668,13 +669,14 @@ MAJOR.MINOR.PATCH
 | **MINOR** | New features, backwards-compatible |
 | **PATCH** | Bug fixes and minor improvements |
 
-**Current Version:** `v0.5.3`
+**Current Version:** `v0.5.4`
 
 ### Version History
 
 | Version | Date | Type | Highlights |
 | :--- | :--- | :--- | :--- |
-| **0.5.3** | 2026-04-18 | Patch | Edge function reorganization (`sm_*` prefix), JWT auth stabilization, per-function READMEs, ADR process, CODEOWNERS |
+| **0.5.4** | 2026-04-21 | Minor | Item Master edge functions (`im_*`), hard-cascade → soft delete, `item_code → part_number` schema migration groundwork (Phases 1–3a) |
+| 0.5.3 | 2026-04-18 | Patch | Edge function reorganization (`sm_*` prefix), JWT auth stabilization, per-function READMEs, ADR process, CODEOWNERS |
 | 0.5.2 | 2026-04-11 | Patch | Branch alignment, security hardening, deploy artifact isolation |
 | 0.5.1 | 2026-03-31 | Patch | Deep cleanup, dead code removal, DB consolidation, documentation sync |
 | 0.5.0 | 2026-03-31 | Minor | Codebase cleanup, dependency audit, documentation overhaul, PDF microservice |
@@ -691,6 +693,34 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
 ---
 
 ## Recent Changes
+
+### v0.5.4 — Item Master Edge Functions, Soft Delete & Schema Migration Groundwork (2026-04-21)
+
+This minor release moves the Item Master module to edge functions, converts item deletion from a 13-table hard cascade to a reversible soft delete, and stages Phases 1–3a of the `item_code → part_number` schema migration:
+
+#### Edge Functions (`im_*` prefix)
+- `im_list-items` — list + summary counts in one round trip (server-side sort, search, filter, pagination)
+- `im_get-blanket-orders` — replaces direct `v_item_details` SELECT in the PackingDetail modal
+- `im_upsert-item` — single endpoint for create / update branches
+- `im_delete-item` — reversible soft delete (sets `is_active = false`; preserves FK integrity and historic audit rows)
+
+#### Delete Semantics
+- **Hard cascade → soft delete.** Previously a mis-click wiped stock ledger, movement lines, and packing records. Now a single `UPDATE items SET is_active = false` preserves every child row; restore by flipping the flag.
+- Audit log captures a full pre-delete snapshot + reason + JWT-derived user identity.
+
+#### Schema Migration (Phases 1–3a applied; 3b deferred)
+- `items.part_number` is now **UNIQUE** (5 pre-existing duplicates resolved via rename + deactivate)
+- 24 dependent tables (13 FK + 11 denormalized packing tables) carry a populated `part_number_new` column with FK → `items.part_number`
+- Legacy `item_code` columns **retained** — Phase 3b cutover is held until a verified backup exists (free tier, no PITR)
+- Audit `target_id` and the UI toast now prefer `part_number`
+
+#### Client Changes
+- `src/utils/api/itemsSupabase.ts` rewritten as a thin wrapper over the four `im_*` functions. Public shape unchanged.
+- `UnifiedItemMaster.tsx` — no more direct Supabase queries; summary counts folded into the list response; toast copy updated to "deactivated"
+
+#### Documentation
+- [`docs/SCHEMA_MIGRATION_item_code_to_part_number.md`](docs/SCHEMA_MIGRATION_item_code_to_part_number.md) — 6-phase migration plan across 13 FK tables, 11 denormalized tables, 17 edge functions, and supporting RPCs/views
+- [`docs/releases/CHANGES_0.5.4.md`](docs/releases/CHANGES_0.5.4.md) — detailed release notes
 
 ### v0.5.3 — Edge Function Reorganization & Documentation Refresh (2026-04-18)
 
