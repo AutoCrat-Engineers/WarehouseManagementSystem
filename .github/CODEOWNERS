@@ -1,0 +1,32 @@
+# CODEOWNERS — Warehouse Management System
+#
+# This file defines code review requirements.
+# Last match wins. Update handles as your team grows.
+#
+# Syntax: <path-pattern>    <owner1> <owner2> ...
+
+# ── Default owner (catch-all) ──────────────────────────────────────────────
+*                               @AutoCrat-Engineers/core-team
+
+# ── Edge functions ──────────────────────────────────────────────────────────
+/supabase/functions/            @AutoCrat-Engineers/core-team
+
+# ── Frontend / application code ─────────────────────────────────────────────
+/src/                           @AutoCrat-Engineers/core-team
+/src/components/                @AutoCrat-Engineers/core-team
+
+# ── Configuration & build ───────────────────────────────────────────────────
+/package.json                   @AutoCrat-Engineers/core-team
+/tsconfig*.json                 @AutoCrat-Engineers/core-team
+/vite.config.ts                 @AutoCrat-Engineers/core-team
+
+# ── CI/CD & infrastructure ──────────────────────────────────────────────────
+/.github/                       @AutoCrat-Engineers/core-team
+/.github/CODEOWNERS             @AutoCrat-Engineers/core-team
+
+# ── Security-sensitive paths ────────────────────────────────────────────────
+/src/utils/supabase/            @AutoCrat-Engineers/core-team
+
+# NOTE: If your GitHub org doesn't have a team called "core-team" yet,
+# create it at: https://github.com/orgs/AutoCrat-Engineers/teams
+# or replace with individual GitHub usernames (e.g., @yourusername).

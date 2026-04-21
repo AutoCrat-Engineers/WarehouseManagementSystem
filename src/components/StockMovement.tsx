@@ -38,11 +38,8 @@ import {
   StatusFilter, AddButton, ExportCSVButton, DateRangeFilter, ClearFiltersButton, Pagination
 } from './ui/SharedComponents';
 import { getSupabaseClient } from '../utils/supabase/client';
-import { createPackingFromMovementApproval, createPackingFromMovementRejection } from './packing/packingService';
-import { notifyOnRequestCreated, notifyOnRequestDecision } from '../utils/notifications/notificationService';
-import { calculatePalletImpact } from './packing-engine/packingEngineService';
+import { FUNCTIONS_BASE } from '../utils/supabase/info';
 import type { PalletImpact } from './packing-engine/packingEngineService';
-import { useSessionPersistence } from '../hooks/useSessionPersistence';
 
 // ============================================================================
 // TYPES
@@ -92,6 +89,7 @@ interface MovementRecord {
   reason_code: string | null;
   reference_document_type: string | null;
   reference_document_number: string | null;
+  box_breakdown: { boxes: number; perBox: number; total: number; adjBoxes?: number; adjQty?: number } | null;
 }
 
 interface ReasonCode {
@@ -335,33 +333,6 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   const [referenceType, setReferenceType] = useState<string>('');
   const [referenceId, setReferenceId] = useState<string>('');
 
-  // ── SESSION PERSISTENCE (stock movement form) ──
-  const {
-    patchSession: patchSmSession,
-    completeSession: completeSmSession,
-    abandonSession: abandonSmSession,
-  } = useSessionPersistence(
-    'stock_movement_form',
-    undefined,
-    undefined,
-    {
-      onRecover: (data, isNew) => {
-        if (!isNew && data && data.showModal) {
-          // Restore modal form state
-          setShowModal(true);
-          if (data.selectedItem) setSelectedItem(data.selectedItem);
-          if (data.stockType) setStockType(data.stockType);
-          if (data.selectedWarehouse) setSelectedWarehouse(data.selectedWarehouse);
-          if (data.quantity) setQuantity(data.quantity);
-          if (data.boxCount) setBoxCount(data.boxCount);
-          if (data.note) setNote(data.note);
-          if (data.referenceType) setReferenceType(data.referenceType);
-          if (data.referenceId) setReferenceId(data.referenceId);
-          if (data.selectedCategory) setSelectedCategory(data.selectedCategory);
-        }
-      },
-    }
-  );
 
   // Supervisor review modal state
   const [showReviewModal, setShowReviewModal] = useState(false);
@@ -390,6 +361,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   const [page, setPage] = useState(0);
   const [totalDbCount, setTotalDbCount] = useState(0);
   const realtimeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const itemSearchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Debounced search for server-side queries (300ms delay after last keystroke)
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -415,198 +387,49 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
     setLoading(true);
     try {
       const filters = filtersRef.current;
-
-      // ── PRE-SEARCH: Cross-table text search (item_code, part_number, MSN) ──
-      let searchHeaderIds: string[] | null = null;
-      if (filters.search) {
-        const term = filters.search;
-        const { data: matchingItems } = await supabase
-          .from('items')
-          .select('item_code')
-          .or(`item_code.ilike.%${term}%,part_number.ilike.%${term}%,master_serial_no.ilike.%${term}%`)
-          .limit(200);
-        const matchingItemCodes = (matchingItems || []).map((i: any) => i.item_code);
-        if (matchingItemCodes.length > 0) {
-          const { data: matchingLines } = await supabase
-            .from('inv_movement_lines')
-            .select('header_id')
-            .in('item_code', matchingItemCodes);
-          searchHeaderIds = [...new Set((matchingLines || []).map((l: any) => l.header_id as string))];
-        } else {
-          searchHeaderIds = [];
-        }
-      }
-
-      // ── BUILD QUERY: Filters applied BEFORE pagination (critical fix) ──
-      let query = supabase
-        .from('inv_movement_headers')
-        .select(`
-          id, movement_number, movement_date, movement_type, status,
-          reason_code, reason_description, notes, created_at,
-          requested_by, approval_status,
-          reference_document_type, reference_document_number,
-          source_warehouse_id, destination_warehouse_id,
-          source_warehouse:source_warehouse_id ( warehouse_name, warehouse_code ),
-          destination_warehouse:destination_warehouse_id ( warehouse_name, warehouse_code )
-        `, { count: 'exact' });
-
-      // Status filter (server-side)
-      if (filters.status !== 'ALL') {
-        if (filters.status === 'COMPLETED' || filters.status === 'PARTIALLY_APPROVED') {
-          // DB stores both as 'APPROVED'; client distinguishes full vs partial after fetch
-          query = query.eq('status', 'APPROVED');
-        } else {
-          query = query.eq('status', filters.status);
-        }
-      }
-
-      // Movement type filter
-      if (filters.type !== 'ALL') {
-        query = query.eq('movement_type', filters.type);
-      }
-
-      // Stock type filter (maps to movement type groups)
-      if (filters.stockType !== 'ALL') {
-        if (filters.stockType === 'REJECTION') {
-          query = query.in('movement_type', REVERSE_MOVEMENT_TYPES);
-        } else {
-          query = query.not('movement_type', 'in', `(${REVERSE_MOVEMENT_TYPES.join(',')})`);
-        }
-      }
-
-      // Date range filter
-      if (filters.dateFrom) query = query.gte('movement_date', filters.dateFrom);
-      if (filters.dateTo) query = query.lte('movement_date', filters.dateTo);
-
-      // Search filter (movement_number + pre-searched item matches)
-      if (filters.search) {
-        const term = filters.search;
-        if (searchHeaderIds && searchHeaderIds.length > 0) {
-          const limitedIds = searchHeaderIds.slice(0, 100);
-          query = query.or(`movement_number.ilike.%${term}%,id.in.(${limitedIds.join(',')})`);
-        } else {
-          query = query.ilike('movement_number', `%${term}%`);
-        }
-      }
-
-      // STEP 1: Ordering + Pagination applied AFTER all filters
-      const { data: headers, count, error: headErr } = await query
-        .order('created_at', { ascending: false })
-        .range(offset, offset + PAGE_SIZE - 1);
-      if (headErr) throw headErr;
-      setTotalDbCount(count ?? 0);
-
-      const headerIds = (headers || []).map((h: any) => h.id);
-      const userIds = [...new Set((headers || []).map((h: any) => h.requested_by).filter(Boolean))];
-
-      // STEP 2: Fetch lines + profiles IN PARALLEL (both depend only on headers)
-      const [linesResult, profilesResult] = await Promise.all([
-        headerIds.length > 0
-          ? supabase.from('inv_movement_lines')
-            .select('header_id, item_code, actual_quantity, requested_quantity, approved_quantity')
-            .in('header_id', headerIds)
-          : Promise.resolve({ data: [] }),
-        userIds.length > 0
-          ? supabase.from('profiles').select('id, full_name').in('id', userIds)
-          : Promise.resolve({ data: [] }),
-      ]);
-
-      // Build lines map
-      let linesMap: Record<string, { item_code: string; actual_quantity: number; requested_quantity: number; approved_quantity: number }> = {};
-      ((linesResult as any).data || []).forEach((l: any) => {
-        if (!linesMap[l.header_id]) linesMap[l.header_id] = {
-          item_code: l.item_code,
-          actual_quantity: l.actual_quantity || 0,
-          requested_quantity: l.requested_quantity || 0,
-          approved_quantity: l.approved_quantity || 0,
-        };
+      const res = await fetch(`${FUNCTIONS_BASE}/sm_get-movements`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({
+          offset,
+          pageSize: PAGE_SIZE,
+          filters: {
+            status: filters.status,
+            movementType: filters.type,
+            stockType: filters.stockType,
+            dateFrom: filters.dateFrom,
+            dateTo: filters.dateTo,
+            search: filters.search,
+          },
+        }),
       });
-
-      // Build user name map
-      let userNameMap: Record<string, string> = {};
-      ((profilesResult as any).data || []).forEach((p: any) => {
-        if (p.full_name) userNameMap[p.id] = p.full_name;
-      });
-
-      // STEP 3: Fetch item details (depends on lines data)
-      const itemCodes = [...new Set(Object.values(linesMap).map(l => l.item_code))];
-      let itemInfoMap: Record<string, { item_name: string; part_number: string | null; master_serial_no: string | null }> = {};
-      if (itemCodes.length > 0) {
-        const { data: items } = await supabase.from('items').select('item_code, item_name, part_number, master_serial_no').in('item_code', itemCodes);
-        (items || []).forEach((i: any) => {
-          itemInfoMap[i.item_code] = {
-            item_name: i.item_name,
-            part_number: i.part_number || null,
-            master_serial_no: i.master_serial_no || null,
-          };
-        });
-      }
-
-      const records: MovementRecord[] = (headers || []).map((h: any) => {
-        const line = linesMap[h.id];
-        const reqQty = line?.requested_quantity || 0;
-        const apprQty = line?.approved_quantity || 0;
-
-        // Smart status correction:
-        // - If DB says APPROVED but approved < requested → it's actually PARTIALLY_APPROVED
-        // - If DB says APPROVED and approved >= requested → it's COMPLETED (full approval)
-        let correctedStatus = h.status;
-        if (h.status === 'APPROVED') {
-          if (apprQty > 0 && reqQty > 0 && apprQty < reqQty) {
-            correctedStatus = 'PARTIALLY_APPROVED';
-          } else {
-            correctedStatus = 'COMPLETED';
-          }
-        }
-
-        return {
-          id: h.id, movement_number: h.movement_number, movement_date: h.movement_date,
-          movement_type: h.movement_type, status: correctedStatus,
-          reason_description: h.reason_description, notes: h.notes, created_at: h.created_at,
-          source_warehouse: resolveWarehouseLabel(h.source_warehouse?.warehouse_code || null, h.source_warehouse?.warehouse_name || null),
-          destination_warehouse: resolveWarehouseLabel(h.destination_warehouse?.warehouse_code || null, h.destination_warehouse?.warehouse_name || null),
-          source_warehouse_id: h.source_warehouse_id || null,
-          destination_warehouse_id: h.destination_warehouse_id || null,
-          item_code: line?.item_code || null,
-          item_name: line ? (itemInfoMap[line.item_code]?.item_name || line.item_code) : null,
-          part_number: line ? (itemInfoMap[line.item_code]?.part_number || null) : null,
-          master_serial_no: line ? (itemInfoMap[line.item_code]?.master_serial_no || null) : null,
-          quantity: line?.actual_quantity || null,
-          requested_quantity: reqQty || null,
-          approved_quantity: apprQty || null,
-          rejected_quantity: h.status === 'REJECTED' ? reqQty : (reqQty > 0 && apprQty > 0 ? reqQty - apprQty : 0),
-          supervisor_note: null,
-          requested_by: h.requested_by || null,
-          requested_by_name: h.requested_by ? (userNameMap[h.requested_by] || null) : null,
-          reason_code: h.reason_code || null,
-          reference_document_type: h.reference_document_type || null,
-          reference_document_number: h.reference_document_number || null,
-        };
-      });
-
-      setMovements(records);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Failed to fetch movements');
+      setMovements(json.data || []);
+      setTotalDbCount(json.totalCount ?? 0);
     } catch (err) { console.error('Error fetching movements:', err); }
     finally { setLoading(false); }
-  }, [supabase]);
+  }, [accessToken]);
 
   // Fetch summary counts separately (lightweight, no enrichment)
   const [summaryCounts, setSummaryCounts] = useState({ total: 0, pending: 0, completed: 0, rejected: 0 });
   const fetchSummaryCounts = useCallback(async () => {
     try {
-      const [totalR, pendingR, approvedR, rejectedR] = await Promise.all([
-        supabase.from('inv_movement_headers').select('id', { count: 'exact', head: true }),
-        supabase.from('inv_movement_headers').select('id', { count: 'exact', head: true }).eq('status', 'PENDING_APPROVAL'),
-        supabase.from('inv_movement_headers').select('id', { count: 'exact', head: true }).eq('status', 'APPROVED'),
-        supabase.from('inv_movement_headers').select('id', { count: 'exact', head: true }).eq('status', 'REJECTED'),
-      ]);
+      const res = await fetch(`${FUNCTIONS_BASE}/sm_get-movement-counts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({}),
+      });
+      const json = await res.json();
+      if (!res.ok) return; // non-critical
       setSummaryCounts({
-        total: totalR.count ?? 0,
-        pending: pendingR.count ?? 0,
-        completed: approvedR.count ?? 0,
-        rejected: rejectedR.count ?? 0,
+        total: json.total ?? 0,
+        pending: json.pending ?? 0,
+        completed: json.completed ?? 0,
+        rejected: json.rejected ?? 0,
       });
     } catch { /* non-critical */ }
-  }, [supabase]);
+  }, [accessToken]);
 
   // Fetch data when page changes
   useEffect(() => { fetchMovements(page * PAGE_SIZE); }, [fetchMovements, page]);
@@ -641,21 +464,22 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
 
   // Fetch current logged-in user's full_name for print slip Verified By
   useEffect(() => {
+    if (!accessToken) return;
     const fetchCurrentUser = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user?.id) {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('full_name')
-            .eq('id', session.user.id)
-            .single();
-          if (profile?.full_name) setCurrentUserName(profile.full_name);
+        const res = await fetch(`${FUNCTIONS_BASE}/get-user-profile`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify({}),
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.fullName) setCurrentUserName(json.fullName);
         }
       } catch (err) { console.error('Error fetching current user name:', err); }
     };
     fetchCurrentUser();
-  }, [supabase]);
+  }, [accessToken]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -681,14 +505,16 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   // Fetch reason codes on mount (category-driven)
   const fetchReasonCodes = useCallback(async () => {
     try {
-      const { data } = await supabase
-        .from('inv_reason_codes')
-        .select('id, reason_code, category:reason_category, description')
-        .eq('is_active', true)
-        .order('created_at');
-      setReasonCodes(data || []);
+      const res = await fetch(`${FUNCTIONS_BASE}/sm_get-reason-codes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) throw new Error('Failed to fetch reason codes');
+      const json = await res.json();
+      setReasonCodes(json.reasonCodes || []);
     } catch { setReasonCodes([]); }
-  }, [supabase]);
+  }, [accessToken]);
 
   useEffect(() => { fetchReasonCodes(); }, [fetchReasonCodes]);
 
@@ -704,36 +530,40 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   // MODAL FORM LOGIC
   // ============================================================================
 
-  const handleSearch = useCallback(async (query: string) => {
+  const handleSearch = useCallback((query: string) => {
     setSearchQuery(query);
-    if (query.length < 2) { setSearchResults([]); setShowDropdown(false); return; }
+    if (itemSearchDebounce.current) clearTimeout(itemSearchDebounce.current);
+    if (query.length < 2) { setSearchResults([]); setShowDropdown(false); setSearching(false); return; }
     setSearching(true); setShowDropdown(true);
-    try {
-      const { data, error } = await supabase.from('items')
-        .select('id, item_code, item_name, part_number, master_serial_no, uom')
-        .or(`item_code.ilike.%${query}%,part_number.ilike.%${query}%,master_serial_no.ilike.%${query}%`)
-        .eq('is_active', true).limit(10);
-      if (error) throw error;
-      setSearchResults(data || []);
-    } catch { setSearchResults([]); }
-    finally { setSearching(false); }
-  }, [supabase]);
+    itemSearchDebounce.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`${FUNCTIONS_BASE}/sm_search-items`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify({ query }),
+        });
+        if (!res.ok) throw new Error('Search failed');
+        const json = await res.json();
+        setSearchResults(json.items || []);
+      } catch { setSearchResults([]); }
+      finally { setSearching(false); }
+    }, 300);
+  }, [accessToken]);
 
   const fetchWarehouseStocks = useCallback(async (itemCode: string) => {
     setLoadingStocks(true);
     try {
-      const { data, error } = await supabase.from('inv_warehouse_stock')
-        .select('quantity_on_hand, inv_warehouses!inner ( warehouse_code, warehouse_name )')
-        .eq('item_code', itemCode).eq('is_active', true);
-      if (error) throw error;
-      setWarehouseStocks((data || []).map((r: any) => ({
-        warehouse_code: r.inv_warehouses?.warehouse_code || '',
-        warehouse_name: r.inv_warehouses?.warehouse_name || '',
-        quantity_on_hand: r.quantity_on_hand || 0,
-      })));
+      const res = await fetch(`${FUNCTIONS_BASE}/sm_get-item-stock`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ itemCode }),
+      });
+      if (!res.ok) throw new Error('Stock fetch failed');
+      const json = await res.json();
+      setWarehouseStocks(json.stock || []);
     } catch { setWarehouseStocks([]); }
     finally { setLoadingStocks(false); }
-  }, [supabase]);
+  }, [accessToken]);
 
   // Fetch packing spec for an item (inner_box_quantity)
   const fetchPackingSpec = useCallback(async (itemCode: string) => {
@@ -741,18 +571,19 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
     setPackingSpecError(null);
     setInnerBoxQty(0);
     try {
-      const { data, error } = await supabase
-        .from('packing_specifications')
-        .select('inner_box_quantity')
-        .eq('item_code', itemCode)
-        .eq('is_active', true)
-        .single();
-      if (error || !data) {
+      const res = await fetch(`${FUNCTIONS_BASE}/sm_get-movement-review-data`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ itemCode }),
+      });
+      if (!res.ok) throw new Error('Failed to fetch packing specification.');
+      const json = await res.json();
+      if (!json.found) {
         setPackingSpecError('No packing specification found for this item. Please add one in Packing Details first.');
         setInnerBoxQty(0);
       } else {
-        setInnerBoxQty(data.inner_box_quantity || 0);
-        if (data.inner_box_quantity <= 0) {
+        setInnerBoxQty(json.innerBoxQty || 0);
+        if (json.innerBoxQty <= 0) {
           setPackingSpecError('Inner box quantity is 0. Please update the packing specification.');
         }
       }
@@ -762,7 +593,7 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
     } finally {
       setLoadingPackingSpec(false);
     }
-  }, [supabase]);
+  }, [accessToken]);
 
   // Auto-fetch packing spec when route is PRODUCTION_RECEIPT and item is selected
   useEffect(() => {
@@ -778,19 +609,18 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
 
   const handleSelectItem = (item: ItemResult) => {
     setSelectedItem(item);
-    patchSmSession({ selectedItem: item });
     setSearchQuery(item.part_number || item.item_code);
     setShowDropdown(false);
     fetchWarehouseStocks(item.item_code);
-    
+
     // Apply user-requested defaults automatically
     setStockType('STOCK_IN');
     setSelectedWarehouse('PW');
     setReferenceType('WORK_ORDER');
     setReferenceId('AE/WO/D/');
-    
+
     setQuantity(0); setNote(''); setFormMessage(null);
-    setSelectedCategory(''); 
+    setSelectedCategory('');
     setBoxCount(0); setInnerBoxQty(0); setPackingSpecError(null);
   };
 
@@ -827,8 +657,8 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
     setPalletImpact(null); setAdjustmentAcknowledged(false);
   };
 
-  const openModal = () => { resetForm(); setShowModal(true); patchSmSession({ showModal: true }); };
-  const closeModal = () => { setShowModal(false); resetForm(); abandonSmSession(); };
+  const openModal = () => { resetForm(); setShowModal(true); };
+  const closeModal = () => { setShowModal(false); resetForm(); };
 
   // ============================================================================
   // SUBMIT REQUEST (PENDING — No Stock Movement) or IMMEDIATE for REJECTION_DISPOSAL
@@ -875,90 +705,42 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
       showToast('error', 'Validation Error', 'Please enter a Reference ID.'); return;
     }
 
-    // STOCK VALIDATION at request time — block if source warehouse has no/insufficient stock
-    // Skip for external sources (PRODUCTION, CUSTOMER) since stock enters the system for those
-    const externalSourceTypes = ['PRODUCTION_RECEIPT', 'CUSTOMER_RETURN'];
-    if (!externalSourceTypes.includes(selectedRoute.movementType)) {
-      const srcIsInternal = Object.keys(LOCATIONS).includes(selectedRoute.from);
-      if (srcIsInternal) {
-        const availableStock = getStockForLocation(selectedRoute.from as LocationCode);
-        if (availableStock <= 0) {
-          setFormMessage({ type: 'error', text: `Cannot request movement — source warehouse "${LOCATIONS[selectedRoute.from as LocationCode]?.name}" has 0 stock for this item.` });
-          showToast('error', 'Insufficient Stock', `Source warehouse "${LOCATIONS[selectedRoute.from as LocationCode]?.name}" has 0 stock for this item.`);
-          return;
-        }
-        if (finalQty > availableStock) {
-          setFormMessage({ type: 'error', text: `Requested quantity (${finalQty}) exceeds available stock (${availableStock}) in "${LOCATIONS[selectedRoute.from as LocationCode]?.name}".` });
-          showToast('warning', 'Stock Warning', `Requested quantity (${finalQty}) exceeds available stock (${availableStock}) in "${LOCATIONS[selectedRoute.from as LocationCode]?.name}".`);
-          return;
-        }
-      }
-    }
-
     setSubmitting(true); setFormMessage(null);
     try {
-      const { data: warehouses } = await supabase.from('inv_warehouses').select('id, warehouse_code').eq('is_active', true);
-      const getWhId = (code: LocationCode): string | null => {
-        const dbCode = Object.entries(DB_CODE_MAP).find(([, v]) => v === code)?.[0];
-        return warehouses?.find((w: any) => w.warehouse_code === dbCode)?.id || null;
-      };
-      const srcIsInternal = Object.keys(LOCATIONS).includes(selectedRoute.from);
-      const dstIsInternal = Object.keys(LOCATIONS).includes(selectedRoute.to);
-      const srcId = srcIsInternal ? getWhId(selectedRoute.from as LocationCode) : null;
-      const dstId = dstIsInternal ? getWhId(selectedRoute.to as LocationCode) : null;
-
-      // DB constraint requires both warehouse IDs to be non-null.
-      // For external entities (PRODUCTION, CUSTOMER), use the internal warehouse for both.
-      const finalSrcId = srcId || dstId;
-      const finalDstId = dstId || srcId;
-
-      const { data: { session } } = await supabase.auth.getSession();
-      const userId = session?.user?.id;
-      const movNum = `MOV-${Date.now().toString(36).toUpperCase()}`;
-
-      // Create PENDING header — NO stock updates (all movements go through approval)
-      const { data: header, error: hErr } = await supabase.from('inv_movement_headers').insert({
-        movement_number: movNum,
-        movement_date: new Date().toISOString().split('T')[0],
-        movement_type: selectedRoute.movementType,
-        source_warehouse_id: finalSrcId,
-        destination_warehouse_id: finalDstId,
-        status: 'PENDING_APPROVAL',
-        approval_status: 'PENDING',
-        reason_code: selectedCategory || null,
-        reason_description: (isProductionReceipt && palletImpact?.adjustmentBoxIncluded) ? `${note.trim()} [Top-off: ${palletImpact.totalAdjustmentBoxes || 1} Box of ${palletImpact.adjustmentBoxQty} PCS]` : note.trim(),
-        reference_document_type: referenceType || null,
-        reference_document_number: referenceId || null,
-        notes: isProductionReceipt
-          ? (palletImpact?.adjustmentBoxIncluded
-            ? `${selectedRoute.label} | Boxes: ${palletImpact.adjustedInnerBoxCount} x ${innerBoxQty} PCS/box + ${palletImpact.totalAdjustmentBoxes || 1} Top-off Box${(palletImpact.totalAdjustmentBoxes || 1) > 1 ? 'es' : ''} x ${palletImpact.adjustmentBoxQty} PCS = ${finalQty} PCS | Stock Type: ${stockType}`
-            : `${selectedRoute.label} | Boxes: ${boxCount} x ${innerBoxQty} PCS/box = ${finalQty} PCS | Stock Type: ${stockType}`)
-          : `${selectedRoute.label} | Requested Qty: ${finalQty} | Stock Type: ${stockType}`,
-        requested_by: userId,
-        created_by: userId,
-      }).select().single();
-      if (hErr) throw hErr;
-
-      // Create movement line
-      await supabase.from('inv_movement_lines').insert({
-        header_id: header.id, line_number: 1, item_code: selectedItem.item_code,
-        requested_quantity: finalQty, line_status: 'PENDING_APPROVAL', created_by: userId,
+      const res = await fetch(`${FUNCTIONS_BASE}/sm_submit-movement-request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({
+          itemCode: selectedItem.item_code,
+          movementType: selectedRoute.movementType,
+          fromLocation: selectedRoute.from,
+          toLocation: selectedRoute.to,
+          finalQty,
+          boxCount: isProductionReceipt ? boxCount : undefined,
+          innerBoxQty: isProductionReceipt ? innerBoxQty : undefined,
+          stockType,
+          reasonCode: selectedCategory || '',
+          note: note.trim(),
+          routeLabel: selectedRoute.label,
+          referenceType,
+          referenceDocNumber: referenceId,
+        }),
       });
+      const json = await res.json();
+      if (!res.ok) {
+        if (json.code === 'INSUFFICIENT_STOCK_AT_REQUEST') {
+          setFormMessage({ type: 'error', text: json.error });
+          showToast('warning', 'Insufficient Stock', json.error);
+          return;
+        }
+        throw new Error(json.error || 'Failed to submit request.');
+      }
 
+      const movNum: string = json.movementNumber;
       setFormMessage({ type: 'success', text: `Request ${movNum} submitted for approval.` });
       showToast('success', 'Request Submitted', `Movement ${movNum} has been submitted for supervisor approval.`);
       fetchMovements(); fetchSummaryCounts();
-
-      // ── NOTIFICATION: Notify supervisors (L2/L3) about new request ──
-      notifyOnRequestCreated(
-        movNum,
-        selectedItem.item_name || selectedItem.item_code,
-        finalQty,
-        userId || '',
-        header.id,
-      ).catch(err => console.error('Notification send failed (non-blocking):', err));
-
-      setTimeout(() => { closeModal(); completeSmSession(); }, 1500);
+      setTimeout(() => { closeModal(); }, 1500);
     } catch (err: any) {
       console.error('Submit error:', err);
       setFormMessage({ type: 'error', text: err.message || 'Failed to submit request.' });
@@ -983,13 +765,16 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
       if (rc) {
         setReviewReasonCode(rc);
       } else {
-        // Fallback: fetch from DB by reason_code
-        const { data } = await supabase
-          .from('inv_reason_codes')
-          .select('id, reason_code, category:reason_category, description')
-          .eq('reason_code', m.reason_code)
-          .single();
-        if (data) setReviewReasonCode(data as any);
+        // Fallback: fetch from edge function by reason_code
+        const res = await fetch(`${FUNCTIONS_BASE}/sm_get-reason-codes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify({ reasonCode: m.reason_code }),
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.reasonCode) setReviewReasonCode(json.reasonCode as any);
+        }
       }
     }
 
@@ -997,76 +782,21 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
     // to show CORRECT box breakdown (multi-pallet aware)
     if (m.movement_type === 'PRODUCTION_RECEIPT' && m.item_code) {
       try {
-        // Parallel fetch: packing spec + ADJUSTMENT_REQUIRED pallets
-        const [specResult, adjPalletsResult] = await Promise.all([
-          supabase
-            .from('packing_specifications')
-            .select('inner_box_quantity, outer_box_quantity')
-            .eq('item_code', m.item_code)
-            .eq('is_active', true)
-            .single(),
-          supabase
-            .from('pack_pallets')
-            .select('id')
-            .eq('item_code', m.item_code)
-            .eq('state', 'ADJUSTMENT_REQUIRED'),
-        ]);
+        const reviewRes = await fetch(`${FUNCTIONS_BASE}/sm_get-movement-review-data`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify({ itemCode: m.item_code, reqQty: m.requested_quantity || 0 }),
+        });
+        const reviewJson = reviewRes.ok ? await reviewRes.json() : null;
 
-        const spec = specResult.data;
-        const adjPalletsCount = adjPalletsResult.data?.length || 0;
+        const spec = reviewJson?.found
+          ? { inner_box_quantity: reviewJson.innerBoxQty, outer_box_quantity: reviewJson.outerBoxQty }
+          : null;
+        const adjPalletsCount = reviewJson?.adjustmentPalletCount || 0;
 
-        if (spec && spec.inner_box_quantity > 0) {
-          const reqQty = m.requested_quantity || 0;
-          const perBox = spec.inner_box_quantity;
-          const outerQty = spec.outer_box_quantity || 0;
-          const adjQty = outerQty > 0 ? outerQty % perBox : 0;
-
-          // MULTI-PALLET AWARE BREAKDOWN:
-          // The total qty includes both adjustment boxes and inner boxes.
-          // We query ADJUSTMENT_REQUIRED pallets to know exactly how many
-          // adj boxes will be created, instead of using a naive heuristic.
-          let adjBoxCount = 0;
-          let innerBoxCount = 0;
-
-          if (adjQty > 0 && adjPalletsCount > 0) {
-            // Determine how many adj boxes fit in the total qty
-            // Cap by actual pallets needing adjustment
-            const maxAdjFromQty = Math.floor(reqQty / adjQty);
-            adjBoxCount = Math.min(adjPalletsCount, maxAdjFromQty);
-            const adjTotal = adjBoxCount * adjQty;
-            const remainingQty = reqQty - adjTotal;
-            innerBoxCount = Math.floor(remainingQty / perBox);
-            // Check if remainder matches (validation)
-            const calculatedTotal = (adjBoxCount * adjQty) + (innerBoxCount * perBox);
-            if (calculatedTotal !== reqQty) {
-              // Remainder doesn't match perfectly — might have a boundary adj too
-              const leftover = reqQty - calculatedTotal;
-              if (leftover === adjQty) {
-                adjBoxCount += 1; // boundary adjustment for current filling pallet
-              }
-            }
-          } else if (adjQty > 0) {
-            // No ADJUSTMENT_REQUIRED pallets — check if qty has remainder
-            innerBoxCount = Math.floor(reqQty / perBox);
-            const leftover = reqQty - (innerBoxCount * perBox);
-            if (leftover === adjQty) {
-              adjBoxCount = 1; // single boundary adjustment
-            } else {
-              innerBoxCount = Math.round(reqQty / perBox);
-            }
-          } else {
-            innerBoxCount = Math.round(reqQty / perBox);
-          }
-
-          const hasAdj = adjBoxCount > 0;
-          setReviewBoxInfo({
-            boxes: innerBoxCount,
-            perBox,
-            total: reqQty,
-            adjQty: hasAdj ? adjQty : undefined,
-            adjBoxCount: hasAdj ? adjBoxCount : undefined,
-            adjIncluded: hasAdj,
-          });
+        // Box breakdown now computed server-side in get-movement-review-data (Issue 2)
+        if (reviewJson?.boxBreakdown) {
+          setReviewBoxInfo(reviewJson.boxBreakdown);
         }
       } catch {
         // Non-critical — box breakdown just won't show
@@ -1086,154 +816,30 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
 
     const reqQty = reviewMovement.requested_quantity || 0;
     const finalApproved = action === 'REJECTED' ? 0 : (action === 'PARTIALLY_APPROVED' ? approvedQty : reqQty);
-    const finalRejected = reqQty - finalApproved;
-
-    if (action === 'PARTIALLY_APPROVED' && !canPartialApprove(reviewMovement.movement_type)) {
-      showToast('warning', 'Not Allowed', 'Partial approval is not allowed for this movement type.'); return;
-    }
-    if (action === 'PARTIALLY_APPROVED' && (finalApproved <= 0 || finalApproved >= reqQty)) {
-      showToast('warning', 'Invalid Quantity', 'Partial quantity must be between 1 and ' + (reqQty - 1) + '.'); return;
-    }
-
     setReviewSubmitting(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const userId = session?.user?.id;
-
-      // STOCK VALIDATION — check if source has enough stock before approving
-      // Skip for routes where stock comes from external sources (production/customer returns)
-      const externalSourceTypes = ['PRODUCTION_RECEIPT', 'CUSTOMER_RETURN'];
-      if (action !== 'REJECTED' && !externalSourceTypes.includes(reviewMovement.movement_type)) {
-        const srcId = reviewMovement.source_warehouse_id;
-        const itemCode = reviewMovement.item_code;
-        if (srcId && itemCode) {
-          const { data: stockRecord } = await supabase.from('inv_warehouse_stock')
-            .select('quantity_on_hand').eq('warehouse_id', srcId)
-            .eq('item_code', itemCode).eq('is_active', true).single();
-          const availableQty = stockRecord?.quantity_on_hand || 0;
-          if (availableQty < finalApproved) {
-            setReviewSubmitting(false);
-            showToast('error', 'Insufficient Stock', `Source warehouse has only ${availableQty} units available but ${finalApproved} were requested. Please reduce the quantity or reject this movement.`, 8000);
-            return;
-          }
-        }
-      }
-
-      // Write DB-valid status values (the fetchMovements smart correction
-      // handles display: APPROVED with partial qty → "Partial", full qty → "Completed")
-      // DB only accepts: APPROVED, PENDING_APPROVAL, REJECTED (not PARTIALLY_APPROVED or COMPLETED)
-      const headerStatus = action === 'REJECTED' ? 'REJECTED' : 'APPROVED';
-
-      // Update header (only columns that exist on inv_movement_headers)
-      await supabase.from('inv_movement_headers').update({
-        status: headerStatus,
-        approval_status: headerStatus,
-        approved_by: userId,
-        approved_at: new Date().toISOString(),
-      }).eq('id', reviewMovement.id);
-
-      // Update movement line
-      await supabase.from('inv_movement_lines').update({
-        approved_quantity: finalApproved,
-        actual_quantity: finalApproved,
-        line_status: headerStatus,
-      }).eq('header_id', reviewMovement.id);
-
-      // Create approval audit record
-      await supabase.from('inv_movement_approvals').insert({
-        movement_header_id: reviewMovement.id,
-        action, requested_quantity: reqQty,
-        approved_quantity: finalApproved, rejected_quantity: finalRejected,
-        supervisor_note: supervisorNote, approved_by: userId,
+      const res = await fetch(`${FUNCTIONS_BASE}/sm_approve-movement`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({
+          movementId: reviewMovement.id,
+          action,
+          approvedQty: finalApproved,
+          supervisorNote,
+        }),
       });
-
-      // ==================================================================
-      // STOCK UPDATES — IMMEDIATE for ALL movement types EXCEPT
-      // PRODUCTION_RECEIPT (stock moves via Packing module transfers)
-      // ==================================================================
-      const skipImmediateStock = reviewMovement.movement_type === 'PRODUCTION_RECEIPT';
-
-      if (action !== 'REJECTED' && finalApproved > 0 && !skipImmediateStock) {
-        const srcId = reviewMovement.source_warehouse_id;
-        const dstId = reviewMovement.destination_warehouse_id;
-        const itemCode = reviewMovement.item_code;
-        const qty = finalApproved;
-        const movType = reviewMovement.movement_type;
-        const isDisposal = OUT_ONLY_MOVEMENT_TYPES.includes(movType);
-
-        // External SOURCE: stock comes from outside — only INCREMENT destination
-        const hasExternalSource = ['CUSTOMER_RETURN'].includes(movType);
-        // External DESTINATION: stock goes outside — only DECREMENT source
-        const hasExternalDest = ['CUSTOMER_SALE', 'RETURN_TO_PRODUCTION'].includes(movType) || isDisposal;
-
-        // Decrement source — SKIP if source is external
-        if (!hasExternalSource && srcId && itemCode) {
-          const { data: ss } = await supabase.from('inv_warehouse_stock')
-            .select('id, quantity_on_hand').eq('warehouse_id', srcId)
-            .eq('item_code', itemCode).eq('is_active', true).single();
-          if (ss) {
-            const nq = Math.max(0, ss.quantity_on_hand - qty);
-            await supabase.from('inv_warehouse_stock').update({ quantity_on_hand: nq, last_issue_date: new Date().toISOString(), updated_by: userId }).eq('id', ss.id);
-            await supabase.from('inv_stock_ledger').insert({
-              warehouse_id: srcId, item_code: itemCode,
-              transaction_type: isDisposal ? 'STOCK_REMOVAL' : 'TRANSFER_OUT',
-              quantity_change: -qty, quantity_before: ss.quantity_on_hand, quantity_after: nq,
-              reference_type: movType, reference_id: reviewMovement.id,
-              notes: isDisposal
-                ? `OUT: ${qty} units | REJECTION DISPOSAL — Final removal from system | ${supervisorNote}`
-                : `OUT: ${qty} units | ${supervisorNote}`,
-              created_by: userId,
-            });
-          }
+      const json = await res.json();
+      if (!res.ok) {
+        if (json.code === 'INSUFFICIENT_STOCK') {
+          showToast('error', 'Insufficient Stock', `Source warehouse has only ${json.available} units available but ${finalApproved} were requested. Please reduce the quantity or reject this movement.`, 8000);
+          return;
         }
-        // Increment destination — SKIP if destination is external
-        if (!hasExternalDest && dstId && itemCode) {
-          const { data: ds } = await supabase.from('inv_warehouse_stock')
-            .select('id, quantity_on_hand').eq('warehouse_id', dstId)
-            .eq('item_code', itemCode).eq('is_active', true).single();
-          if (ds) {
-            const nq = ds.quantity_on_hand + qty;
-            await supabase.from('inv_warehouse_stock').update({ quantity_on_hand: nq, last_receipt_date: new Date().toISOString(), updated_by: userId }).eq('id', ds.id);
-            await supabase.from('inv_stock_ledger').insert({ warehouse_id: dstId, item_code: itemCode, transaction_type: 'TRANSFER_IN', quantity_change: qty, quantity_before: ds.quantity_on_hand, quantity_after: nq, reference_type: movType, reference_id: reviewMovement.id, notes: `IN: ${qty} units | ${supervisorNote}`, created_by: userId });
-          } else {
-            await supabase.from('inv_warehouse_stock').insert({ warehouse_id: dstId, item_code: itemCode, quantity_on_hand: qty, last_receipt_date: new Date().toISOString(), created_by: userId });
-            await supabase.from('inv_stock_ledger').insert({ warehouse_id: dstId, item_code: itemCode, transaction_type: 'TRANSFER_IN', quantity_change: qty, quantity_before: 0, quantity_after: qty, reference_type: movType, reference_id: reviewMovement.id, notes: `IN: ${qty} units | ${supervisorNote}`, created_by: userId });
-          }
-        }
-      }
-
-      // ==================================================================
-      // PACKING REQUEST — auto-create for PRODUCTION_RECEIPT only
-      // v5: Stock does NOT move on approval. Packing module handles
-      //     stock transfer from Production → FG Warehouse when operator
-      //     explicitly packs boxes and triggers the transfer.
-      // ==================================================================
-      if (reviewMovement.movement_type === 'PRODUCTION_RECEIPT') {
-        try {
-          const itemCode = reviewMovement.item_code || '';
-          const operatorId = reviewMovement.requested_by || userId || '';
-          if (action === 'REJECTED') {
-            await createPackingFromMovementRejection(
-              reviewMovement.id, reviewMovement.movement_number,
-              itemCode, reqQty, operatorId, userId || '',
-              supervisorNote, reviewMovement.reason_description || null,
-            );
-          } else {
-            await createPackingFromMovementApproval(
-              reviewMovement.id, reviewMovement.movement_number,
-              itemCode, finalApproved, operatorId, userId || '',
-              supervisorNote, reviewMovement.reason_description || null,
-            );
-          }
-        } catch (packErr: any) {
-          console.error('Packing request creation failed (non-blocking):', packErr);
-        }
+        throw new Error(json.error || 'Failed to process the approval action.');
       }
 
       setShowReviewModal(false);
       fetchMovements(); fetchSummaryCounts();
 
-      // Show success toast
       const movNum = reviewMovement.movement_number;
       if (action === 'REJECTED') {
         showToast('error', 'Movement Rejected', `Movement ${movNum} has been rejected. No stock has been moved.`);
@@ -1251,20 +857,6 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
           : `${reviewMovement.requested_quantity ?? 0} units moved successfully`;
         showToast('success', 'Movement Completed', `Movement ${movNum} fully approved — ${stockMsg}.${extra}`);
       }
-
-      // ── NOTIFICATION: Notify the operator about the decision ──
-      if (reviewMovement.requested_by) {
-        notifyOnRequestDecision(
-          reviewMovement.movement_number,
-          reviewMovement.item_name || reviewMovement.item_code || 'Unknown item',
-          action,
-          finalApproved,
-          reqQty,
-          reviewMovement.requested_by,
-          userId || '',
-          reviewMovement.id,
-        ).catch(err => console.error('Notification send failed (non-blocking):', err));
-      }
     } catch (err: any) {
       console.error('Approval error:', err);
       showToast('error', 'Approval Failed', err.message || 'Failed to process the approval action.');
@@ -1275,11 +867,8 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
   // FILTER / SEARCH
   // ============================================================================
 
-  // ── DISPLAY: Most filters applied server-side. Only client-side post-filter
-  // is COMPLETED vs PARTIALLY_APPROVED (DB stores both as 'APPROVED'). ──
-  const filteredMovements = (filterStatus === 'COMPLETED' || filterStatus === 'PARTIALLY_APPROVED')
-    ? movements.filter(m => m.status === filterStatus)
-    : movements;
+  // All filtering including COMPLETED / PARTIALLY_APPROVED is now server-side (Issue 7)
+  const filteredMovements = movements;
 
   const displayedMovements = filteredMovements;
   const hasMore = movements.length < totalDbCount;
@@ -1346,41 +935,8 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
     // Parse box breakdown from notes field for Production Receipt movements
     // New format: "... | Boxes: 67 x 450 PCS/box + 1 Adj Box x 300 PCS = 30450 PCS | ..."
     // Old format: "... | Boxes: 68 × 450 PCS/box = 30450 PCS | ..."
-    let boxBreakdown: { boxes: number; perBox: number; total: number; adjBoxes?: number; adjQty?: number } | null = null;
-    if ((m.movement_type === 'PRODUCTION_RECEIPT' || m.reference_document_type === 'INVENTORY_ADJUSTMENT') && m.notes) {
-      // Try new format with adj box first
-      const adjMatch = m.notes.match(/Boxes:\s*(\d+)\s*x\s*(\d+)\s*PCS\/box\s*\+\s*(\d+)\s*(?:Adj|Top-off)\s*Box\s*x\s*(\d+)\s*PCS\s*=\s*([\d,]+)\s*PCS/i);
-      if (adjMatch) {
-        boxBreakdown = {
-          boxes: parseInt(adjMatch[1], 10),
-          perBox: parseInt(adjMatch[2], 10),
-          adjBoxes: parseInt(adjMatch[3], 10),
-          adjQty: parseInt(adjMatch[4], 10),
-          total: parseInt(adjMatch[5].replace(/,/g, ''), 10),
-        };
-      } else {
-        // Try old format (× or x)
-        const boxMatch = m.notes.match(/Boxes:\s*(\d+)\s*[×x]\s*(\d+)\s*PCS\/box\s*=\s*([\d,]+)\s*PCS/i);
-        if (boxMatch) {
-          const innerBoxes = parseInt(boxMatch[1], 10);
-          const perBox = parseInt(boxMatch[2], 10);
-          const total = parseInt(boxMatch[3].replace(/,/g, ''), 10);
-          const expectedTotal = innerBoxes * perBox;
-          // Detect adjustment from math mismatch
-          if (total !== expectedTotal && total < expectedTotal) {
-            // total is less than boxes × perBox → adj box is included, calculate adj qty
-            const adjQtyCalc = total - ((innerBoxes - 1) * perBox);
-            if (adjQtyCalc > 0 && adjQtyCalc < perBox) {
-              boxBreakdown = { boxes: innerBoxes - 1, perBox, total, adjBoxes: 1, adjQty: adjQtyCalc };
-            } else {
-              boxBreakdown = { boxes: innerBoxes, perBox, total };
-            }
-          } else {
-            boxBreakdown = { boxes: innerBoxes, perBox, total };
-          }
-        }
-      }
-    }
+    // Box breakdown now parsed server-side in get-movements (Issue 4)
+    const boxBreakdown = m.box_breakdown || null;
     const printTimestamp = new Date().toLocaleString('en-IN', {
       day: '2-digit', month: 'short', year: 'numeric',
       hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
@@ -2028,16 +1584,16 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
 
       {/* Results Summary */}
       <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          fontSize: '12px',
-          color: 'var(--enterprise-gray-600)',
-          marginTop: '16px'
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        fontSize: '12px',
+        color: 'var(--enterprise-gray-600)',
+        marginTop: '16px'
       }}>
-          <span>
-              Total Records: {totalDbCount}
-          </span>
+        <span>
+          Total Records: {totalDbCount}
+        </span>
       </div>
 
       {/* ─── NEW MOVEMENT MODAL ─── */}
@@ -2384,7 +1940,13 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                           setLoadingPalletImpact(true);
                           palletImpactTimer.current = setTimeout(async () => {
                             try {
-                              const impact = await calculatePalletImpact(selectedItem.item_code, val);
+                              const res = await fetch(`${FUNCTIONS_BASE}/sm_calculate-pallet-impact`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+                                body: JSON.stringify({ itemCode: selectedItem.item_code, boxCount: val }),
+                              });
+                              if (!res.ok) throw new Error('Pallet impact calculation failed');
+                              const impact = await res.json();
                               setPalletImpact(impact);
                             } catch (err: any) {
                               console.warn('[PalletImpact] Calculation failed:', err.message);
@@ -2983,32 +2545,32 @@ export function StockMovement({ accessToken, userRole, userPerms = {} }: StockMo
                   }}>
                     {/* Inner boxes row */}
                     {reviewBoxInfo.boxes > 0 && (
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr', alignItems: 'center' }}>
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Inner Boxes</div>
-                        <div style={{ fontSize: '28px', fontWeight: 800, color: '#1e3a8a', lineHeight: '1', letterSpacing: '-0.5px' }}>
-                          {reviewBoxInfo.boxes}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto 1fr', alignItems: 'center' }}>
+                        <div style={{ textAlign: 'center' }}>
+                          <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Inner Boxes</div>
+                          <div style={{ fontSize: '28px', fontWeight: 800, color: '#1e3a8a', lineHeight: '1', letterSpacing: '-0.5px' }}>
+                            {reviewBoxInfo.boxes}
+                          </div>
+                        </div>
+                        <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>×</div>
+                        <div style={{ textAlign: 'center' }}>
+                          <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Qty per Box</div>
+                          <div style={{ fontSize: '28px', fontWeight: 800, color: '#1e3a8a', lineHeight: '1', letterSpacing: '-0.5px' }}>
+                            {reviewBoxInfo.perBox}
+                            <span style={{ fontSize: '13px', fontWeight: 500, color: '#6b7a8d', marginLeft: '4px' }}>PCS</span>
+                          </div>
+                        </div>
+                        <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>=</div>
+                        <div style={{ textAlign: 'center' }}>
+                          <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>
+                            {reviewBoxInfo.adjIncluded ? 'Subtotal' : 'Total Pieces'}
+                          </div>
+                          <div style={{ fontSize: '28px', fontWeight: 800, color: reviewBoxInfo.adjIncluded ? '#1e3a8a' : '#16a34a', lineHeight: '1', letterSpacing: '-0.5px' }}>
+                            {(reviewBoxInfo.boxes * reviewBoxInfo.perBox).toLocaleString()}
+                            <span style={{ fontSize: '13px', fontWeight: 500, color: '#6b7a8d', marginLeft: '4px' }}>PCS</span>
+                          </div>
                         </div>
                       </div>
-                      <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>×</div>
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>Qty per Box</div>
-                        <div style={{ fontSize: '28px', fontWeight: 800, color: '#1e3a8a', lineHeight: '1', letterSpacing: '-0.5px' }}>
-                          {reviewBoxInfo.perBox}
-                          <span style={{ fontSize: '13px', fontWeight: 500, color: '#6b7a8d', marginLeft: '4px' }}>PCS</span>
-                        </div>
-                      </div>
-                      <div style={{ fontSize: '20px', fontWeight: 700, color: '#93a8d2', padding: '0 8px' }}>=</div>
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: '11px', fontWeight: 700, color: '#6b7a8d', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>
-                          {reviewBoxInfo.adjIncluded ? 'Subtotal' : 'Total Pieces'}
-                        </div>
-                        <div style={{ fontSize: '28px', fontWeight: 800, color: reviewBoxInfo.adjIncluded ? '#1e3a8a' : '#16a34a', lineHeight: '1', letterSpacing: '-0.5px' }}>
-                          {(reviewBoxInfo.boxes * reviewBoxInfo.perBox).toLocaleString()}
-                          <span style={{ fontSize: '13px', fontWeight: 500, color: '#6b7a8d', marginLeft: '4px' }}>PCS</span>
-                        </div>
-                      </div>
-                    </div>
                     )}
 
                     {/* Top-off box row (if applicable) */}

@@ -1,4 +1,4 @@
-import { projectId } from '../supabase/info';
+import { getEdgeFunctionUrl } from '../supabase/info';
 import { getSupabaseClient } from '../supabase/client';
 
 export class APIError extends Error {
@@ -25,7 +25,7 @@ class APIClient {
   private supabase = getSupabaseClient();
 
   constructor() {
-    this.baseUrl = `https://${projectId}.supabase.co/functions/v1/make-server-9c637d11`;
+    this.baseUrl = getEdgeFunctionUrl('make-server-9c637d11');
     this.defaultHeaders = {
       'Content-Type': 'application/json',
     };

@@ -4,8 +4,7 @@ import { clearLocalAuthSession } from './utils/supabase/auth';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LoginPage } from './auth/login/LoginPage';
 import { DashboardNew } from './components/DashboardNew';
-import { ItemMasterSupabase } from './components/ItemMasterSupabase';
-import { InventoryGrid } from './components/InventoryGrid';
+import { UnifiedItemMaster } from './components/UnifiedItemMaster';
 import { BlanketOrders } from './components/BlanketOrders';
 import { BlanketReleases } from './components/BlanketReleases';
 import { ForecastingModule } from './components/ForecastingModule';
@@ -207,8 +206,7 @@ const DISPATCH_VIEW_META: Record<string, { label: string; description: string }>
 
 const menuItems: MenuItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, description: 'Overview & KPIs' },
-  { id: 'items', label: 'Item Master', icon: Package, description: 'FG Catalog' },
-  { id: 'inventory', label: 'Inventory', icon: Boxes, description: 'Multi-Warehouse Stock' },
+  { id: 'items', label: 'Inventory Hub', icon: Boxes, description: 'FG Catalog & Stock View' },
   { id: 'stock-movements', label: 'Stock Movements', icon: ArrowRightLeft, description: 'Audit Trail' },
   { id: 'packing', label: 'Packing', icon: PackageOpen, description: 'FG Packing Workflow', hasSubmenu: true },
   { id: 'dispatch' as View, label: 'Dispatch', icon: CargoShip as any, description: 'Dispatch & Shipping', hasSubmenu: true },
@@ -754,11 +752,9 @@ export default function App() {
       case 'dashboard':
         return <DashboardNew accessToken={accessToken} onNavigate={(view) => setCurrentView(view as View)} />;
       case 'items':
-        if (!canAccessViewLocal('items')) return renderAccessDenied('Item Master');
-        return <ItemMasterSupabase userRole={userRole} userPerms={userPerms} />;
       case 'inventory':
-        if (!canAccessViewLocal('inventory')) return renderAccessDenied('Inventory');
-        return <InventoryGrid />;
+        if (!canAccessViewLocal('items') && !canAccessViewLocal('inventory')) return renderAccessDenied('Inventory');
+        return <UnifiedItemMaster userRole={userRole} userPerms={userPerms} />;
       case 'stock-movements':
         if (!canAccessViewLocal('stock-movements')) return renderAccessDenied('Stock Movements');
         return <StockMovement accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;

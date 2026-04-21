@@ -2,6 +2,8 @@
 # Dependencies
 # ============================================================================
 node_modules/
+jspm_packages/
+vendor/
 .agents/
 
 # ============================================================================
@@ -9,9 +11,15 @@ node_modules/
 # ============================================================================
 build/
 dist/
+out/
+.next/
+.turbo/
+.nuxt/
+.vercel/
+*.tsbuildinfo
 
 # ============================================================================
-# Environment Variables (NEVER commit secrets)
+# Environment Variables (NEVER commit secrets — .env.example is allowed)
 # ============================================================================
 .env
 .env.local
@@ -19,21 +27,32 @@ dist/
 .env.production
 .env.staging
 .env.*.local
+!.env.example
+!**/.env.example
 
 # ============================================================================
-# Local Database References / Scripts (kept locally, not pushed)
+# Local Database References
 # ============================================================================
 .db/
 .db_reference/
+
+# ============================================================================
+# Supabase — keep functions & config tracked, ignore local state & migrations
+# ============================================================================
 supabase/.env.local
-supabase/.temp/
 supabase/.branches/
+supabase/.temp/
+supabase/functions/.env
+supabase/migrations/
+supabase.exe
+supabase.tar.gz
 
 # ============================================================================
 # Legacy Directories (moved to micro-services or .db_reference)
 # ============================================================================
 config/
 server/
+src/supabase/
 
 # ============================================================================
 # Internal / AI Prompts (local reference only)
@@ -46,9 +65,17 @@ Prompt/
 docs/migration_plan.md.resolved
 
 # ============================================================================
+# Dev Scripts (ad-hoc local scripts — only README is tracked)
+# ============================================================================
+scripts/dev/*
+!scripts/dev/README.md
+
+# ============================================================================
 # IDE / Editor Configs
 # ============================================================================
 .vscode/
+!.vscode/extensions.json
+!.vscode/settings.json.example
 .idea/
 *.swp
 *.swo
@@ -63,6 +90,7 @@ docs/migration_plan.md.resolved
 Thumbs.db
 Desktop.ini
 ehthumbs.db
+desktop.ini
 
 # ============================================================================
 # Logs & Debug Output
@@ -72,6 +100,7 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 *.log
+logs/
 log.txt
 log2.txt
 
@@ -92,14 +121,10 @@ diff_utf8.txt
 *Report*.pdf
 
 # ============================================================================
-# TypeScript Cache
-# ============================================================================
-*.tsbuildinfo
-
-# ============================================================================
-# Vite Cache
+# Vite / Build Caches
 # ============================================================================
 .vite/
+.cache/
 
 # ============================================================================
 # Temporary Files
@@ -107,11 +132,15 @@ diff_utf8.txt
 *.tmp
 *.temp
 *.bak
+tmp/
+temp/
 
 # ============================================================================
-# Test Coverage
+# Test Coverage & Caches
 # ============================================================================
 coverage/
+.nyc_output/
+.jest-cache/
 
 # ============================================================================
 # Scratch / Test Scripts (never commit ad-hoc test files)
@@ -124,5 +153,3 @@ test*.mjs
 # Misc
 # ============================================================================
 *.local
-.cache/
-
