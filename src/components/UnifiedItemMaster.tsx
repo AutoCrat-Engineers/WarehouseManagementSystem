@@ -34,7 +34,8 @@ import {
   RefreshButton, Pagination,
 } from './ui/SharedComponents';
 import * as itemsApi from '../utils/api/itemsSupabase';
-import { getSupabaseClient } from '../utils/supabase/client';
+import { fetchWithAuth } from '../utils/supabase/auth';
+import { getEdgeFunctionUrl } from '../utils/supabase/info';
 import { useItemStockDistribution } from '../hooks/useInventory';
 import type { ItemStockDashboard } from '../types/inventory';
 
@@ -465,10 +466,16 @@ function ItemViewModal({ isOpen, onClose, item }: {
     if (!item) return;
     setLoadingOrders(true);
     try {
-      const supabase = getSupabaseClient();
-      const { data, error } = await supabase.from('v_item_details').select('*').eq('id', item.id);
-      if (error) { setBlanketOrders([]); return; }
-      const ordersData = (data || []).filter((r: ViewItemDetails) => r.blanket_order_id !== null);
+      // Backed by `im_get-blanket-orders` edge function.  The server-side
+      // query already filters blanket_order_id IS NOT NULL — the client
+      // no longer needs to do the direct v_item_details SELECT.
+      const res = await fetchWithAuth(getEdgeFunctionUrl('im_get-blanket-orders'), {
+        method: 'POST',
+        body: JSON.stringify({ item_id: item.id }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.success) { setBlanketOrders([]); return; }
+      const ordersData = ((json.rows || []) as ViewItemDetails[]);
       const transformed: BlanketOrder[] = ordersData.map((row: ViewItemDetails, idx: number) => ({
         id: row.line_id || row.blanket_order_id || `order-${idx}`,
         sap_doc_no: row.sap_doc_no || 'ΓÇö', master_serial_no: row.master_serial_no || 'ΓÇö', part_number: row.part_number || 'ΓÇö',
@@ -794,20 +801,10 @@ export function UnifiedItemMaster({ userRole, userPerms = {} }: UnifiedItemMaste
     return () => document.removeEventListener('mousedown', handler);
   }, [activeDropdown]);
 
-  // ΓöÇΓöÇ FETCH: Item counts ΓöÇΓöÇ
-  const fetchCounts = useCallback(async () => {
-    try {
-      const supabase = getSupabaseClient();
-      const [totalR, activeR, inactiveR] = await Promise.all([
-        supabase.from('items').select('id', { count: 'exact', head: true }),
-        supabase.from('items').select('id', { count: 'exact', head: true }).eq('is_active', true),
-        supabase.from('items').select('id', { count: 'exact', head: true }).eq('is_active', false),
-      ]);
-      setItemStats({ totalCount: totalR.count ?? 0, activeCount: activeR.count ?? 0, inactiveCount: inactiveR.count ?? 0 });
-    } catch { /* non-critical */ }
-  }, []);
+  // Summary counts now come back from `im_list-items` alongside the
+  // paginated list — folded into fetchItems to save a round-trip.
 
-  // ΓöÇΓöÇ Debounce search term (400ms) ΓöÇΓöÇ
+  // ── Debounce search term (400ms) ──
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearchTerm(searchTerm);
@@ -815,44 +812,40 @@ export function UnifiedItemMaster({ userRole, userPerms = {} }: UnifiedItemMaste
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  // ΓöÇΓöÇ FETCH: Items (server-side filtered + paginated) ΓöÇΓöÇ
+  // ── FETCH: Items + summary counts (backed by `im_list-items` edge fn) ──
+  // Business logic is identical to the prior inline query:
+  // same sort fallback, same card-filter semantics, same .or() search,
+  // same page-size-based pagination.
   const fetchItems = useCallback(async () => {
     setError(null);
     setLoading(true);
     try {
-      const supabase = getSupabaseClient();
-      // Apply sort or default order
-      let query;
-      if (sortField && sortDirection) {
-        query = supabase.from('items').select('*', { count: 'exact' }).order(sortField, { ascending: sortDirection === 'asc' });
-      } else {
-        query = supabase.from('items').select('*', { count: 'exact' }).order('created_at', { ascending: false });
-      }
-
-      // Card filter
-      if (cardFilter === 'ACTIVE') query = query.eq('is_active', true);
-      else if (cardFilter === 'INACTIVE') query = query.eq('is_active', false);
-
-      // Dynamic search across MSN, Part Number, and Description
-      if (debouncedSearchTerm.trim()) {
-        const safe = debouncedSearchTerm.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        query = query.or(
-          `master_serial_no.ilike."%${safe}%",part_number.ilike."%${safe}%",item_name.ilike."%${safe}%"`
-        );
-      }
-
-      // Pagination
-      query = query.range(page * ITEMS_PER_PAGE, (page + 1) * ITEMS_PER_PAGE - 1);
-
-      const { data, count, error: qError } = await query;
-      if (qError) {
-        setError(qError.message);
+      const res = await fetchWithAuth(getEdgeFunctionUrl('im_list-items'), {
+        method: 'POST',
+        body: JSON.stringify({
+          page,
+          page_size: ITEMS_PER_PAGE,
+          card_filter: cardFilter,
+          search_term: debouncedSearchTerm.trim() || undefined,
+          sort_field: sortField || null,
+          sort_direction: sortField ? sortDirection : null,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.success) {
+        setError(json?.error || 'Failed to fetch items');
         setItems([]);
         setTotalCount(0);
         return;
       }
-      setItems((data as Item[]) || []);
-      setTotalCount(count ?? 0);
+
+      setItems((json.items as Item[]) || []);
+      setTotalCount(json.total_count ?? 0);
+      setItemStats({
+        totalCount: json.counts?.total ?? 0,
+        activeCount: json.counts?.active ?? 0,
+        inactiveCount: json.counts?.inactive ?? 0,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch items');
     } finally {
@@ -861,7 +854,6 @@ export function UnifiedItemMaster({ userRole, userPerms = {} }: UnifiedItemMaste
   }, [cardFilter, debouncedSearchTerm, page, sortField, sortDirection]);
 
   useEffect(() => { fetchItems(); }, [fetchItems]);
-  useEffect(() => { fetchCounts(); }, [fetchCounts]);
   useEffect(() => { if (!loading && initialLoad) setInitialLoad(false); }, [loading, initialLoad]);
   useEffect(() => { setPage(0); }, [cardFilter, debouncedSearchTerm]);
 
@@ -877,7 +869,7 @@ export function UnifiedItemMaster({ userRole, userPerms = {} }: UnifiedItemMaste
     try {
       // Clear items first so user sees the table reload
       setItems([]);
-      await Promise.all([fetchItems(), fetchCounts()]);
+      await fetchItems();
       showToast('success', 'Refreshed', 'Table data has been reloaded successfully.');
     } catch {
       showToast('error', 'Refresh Failed', 'Could not reload the table. Please try again.');
@@ -944,7 +936,6 @@ export function UnifiedItemMaster({ userRole, userPerms = {} }: UnifiedItemMaste
     showToast('success', isEditing ? 'Item Updated' : 'Item Created', `Item "${itemMsn}" has been ${isEditing ? 'updated' : 'created'} successfully.`);
     handleCloseModal();
     fetchItems();
-    fetchCounts();
   };
 
   const handleEdit = (item: Item) => {
@@ -976,7 +967,7 @@ export function UnifiedItemMaster({ userRole, userPerms = {} }: UnifiedItemMaste
     const itemMsn = itemToDelete.master_serial_no || itemToDelete.part_number || itemToDelete.item_code;
     const result = await itemsApi.deleteItem(itemToDelete.id, reason);
     if (result.error) { showToast('error', 'Deletion Failed', result.error); }
-    else { showToast('success', 'Item Deleted', `Item "${itemMsn}" has been permanently deleted.`); fetchItems(); fetchCounts(); }
+    else { showToast('success', 'Item Deactivated', `Item "${itemMsn}" has been deactivated. It stays in history for audit and can be restored if needed.`); fetchItems(); }
     setShowDeleteModal(false);
     setItemToDelete(null);
   };
