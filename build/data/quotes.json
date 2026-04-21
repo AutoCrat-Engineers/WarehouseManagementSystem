@@ -1,0 +1,156 @@
+{
+  "version": "1.0.0",
+  "lastUpdated": "2025-02-06",
+  "quotes": [
+    {
+      "id": 1,
+      "text": "Precision in inventory, excellence in delivery",
+      "category": "operations"
+    },
+    {
+      "id": 2,
+      "text": "Every item counted, every shipment tracked",
+      "category": "operations"
+    },
+    {
+      "id": 3,
+      "text": "Streamlined workflows for manufacturing success",
+      "category": "efficiency"
+    },
+    {
+      "id": 4,
+      "text": "Your gateway to operational excellence",
+      "category": "operations"
+    },
+    {
+      "id": 5,
+      "text": "Real-time visibility, informed decisions",
+      "category": "analytics"
+    },
+    {
+      "id": 6,
+      "text": "From raw materials to finished goods — managed seamlessly",
+      "category": "supply-chain"
+    },
+    {
+      "id": 7,
+      "text": "Reducing waste, maximizing efficiency",
+      "category": "efficiency"
+    },
+    {
+      "id": 8,
+      "text": "Inventory intelligence at your fingertips",
+      "category": "analytics"
+    },
+    {
+      "id": 9,
+      "text": "Built for precision manufacturing environments",
+      "category": "manufacturing"
+    },
+    {
+      "id": 10,
+      "text": "Trusted by operations teams across the enterprise",
+      "category": "trust"
+    },
+    {
+      "id": 11,
+      "text": "Accurate forecasting, confident planning",
+      "category": "planning"
+    },
+    {
+      "id": 12,
+      "text": "Connecting every link in your supply chain",
+      "category": "supply-chain"
+    },
+    {
+      "id": 13,
+      "text": "Where quality meets operational control",
+      "category": "quality"
+    },
+    {
+      "id": 14,
+      "text": "Simplifying complexity, one process at a time",
+      "category": "efficiency"
+    },
+    {
+      "id": 15,
+      "text": "Your partner in lean manufacturing",
+      "category": "manufacturing"
+    },
+    {
+      "id": 16,
+      "text": "Traceability from source to shipment",
+      "category": "supply-chain"
+    },
+    {
+      "id": 17,
+      "text": "Empowering teams with actionable insights",
+      "category": "analytics"
+    },
+    {
+      "id": 18,
+      "text": "Optimized stock levels, reduced carrying costs",
+      "category": "efficiency"
+    },
+    {
+      "id": 19,
+      "text": "Demand-driven replenishment, automated precision",
+      "category": "planning"
+    },
+    {
+      "id": 20,
+      "text": "Built for scale, designed for simplicity",
+      "category": "operations"
+    },
+    {
+      "id": 21,
+      "text": "Where data meets decision-making",
+      "category": "analytics"
+    },
+    {
+      "id": 22,
+      "text": "Engineering excellence through systematic control",
+      "category": "manufacturing"
+    },
+    {
+      "id": 23,
+      "text": "Zero tolerance for errors, maximum tolerance for growth",
+      "category": "quality"
+    },
+    {
+      "id": 24,
+      "text": "Seamless integration, unified operations",
+      "category": "operations"
+    },
+    {
+      "id": 25,
+      "text": "Your daily companion in warehouse excellence",
+      "category": "operations"
+    },
+    {
+      "id": 26,
+      "text": "Turning inventory challenges into competitive advantages",
+      "category": "efficiency"
+    },
+    {
+      "id": 27,
+      "text": "Consistent quality, consistent results",
+      "category": "quality"
+    },
+    {
+      "id": 28,
+      "text": "Intelligent automation for modern manufacturing",
+      "category": "manufacturing"
+    },
+    {
+      "id": 29,
+      "text": "From planning to execution — one platform",
+      "category": "planning"
+    },
+    {
+      "id": 30,
+      "text": "Visibility that drives accountability",
+      "category": "analytics"
+    }
+  ]
+}
