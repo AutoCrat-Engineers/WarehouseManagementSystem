@@ -44,7 +44,7 @@ export type ItemFormData = Omit<Item, 'id' | 'created_at' | 'updated_at' | 'dele
 export const itemFormDefault: ItemFormData = {
   item_code: '',
   item_name: '',
-  uom: 'PCS',
+  uom: 'NOS',
   unit_price: null,
   standard_cost: null,
   weight: null,
@@ -230,6 +230,37 @@ export async function deleteItem(id: string, deletionReason: string): Promise<De
 
   // Step 3: Delete from all child tables that reference items(item_code)
   // Order matters — deepest children first to avoid FK violations
+  
+  // Step 3a: Delete packing-related tables (packing_boxes and packing_audit_logs
+  // are children of packing_requests, which references items.item_code)
+  const { data: packingRequests } = await supabase
+    .from('packing_requests')
+    .select('id')
+    .eq('item_code', itemCode);
+  
+  if (packingRequests && packingRequests.length > 0) {
+    const prIds = packingRequests.map(pr => pr.id);
+    // Delete packing children first
+    for (const table of ['packing_boxes', 'packing_audit_logs']) {
+      const { error: packChildErr } = await supabase
+        .from(table)
+        .delete()
+        .in('packing_request_id', prIds);
+      if (packChildErr) {
+        console.warn(`Warning: Could not delete from ${table}:`, packChildErr.message);
+      }
+    }
+    // Now delete packing_requests themselves
+    const { error: prErr } = await supabase
+      .from('packing_requests')
+      .delete()
+      .eq('item_code', itemCode);
+    if (prErr) {
+      console.warn('Warning: Could not delete from packing_requests:', prErr.message);
+    }
+  }
+
+  // Step 3b: Delete from remaining child tables
   const childTables = [
     'inv_blanket_release_stock',
     'inv_stock_ledger',
@@ -242,6 +273,7 @@ export async function deleteItem(id: string, deletionReason: string): Promise<De
     'inventory',
     'blanket_releases',
     'blanket_order_lines',
+    'packing_specifications',
   ];
 
   for (const table of childTables) {
