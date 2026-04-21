@@ -60,7 +60,7 @@ jobs:
       - name: Build Docker image
         run: |
           docker pull node:20-alpine || true
-          docker build -t warehouseae.azurecr.io/wms-service:latest -f Dockerfile . 
+          docker build --no-cache -t warehouseae.azurecr.io/wms-service:latest -f Dockerfile . 
 
       - name: Push Docker image
         run: docker push warehouseae.azurecr.io/wms-service:latest
