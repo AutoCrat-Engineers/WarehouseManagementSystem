@@ -1,12 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { getSupabaseClient } from './utils/supabase/client';
-import { signInWithEmail, signOut, fetchWithAuth } from './utils/supabase/auth';
-import { getEdgeFunctionUrl } from './utils/supabase/info';
+import { fetchWithAuth, clearLocalAuthSession } from './utils/supabase/auth';
+import { getEdgeFunctionUrl, FUNCTIONS_BASE } from './utils/supabase/info';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LoginPage } from './auth/login/LoginPage';
 import { DashboardNew } from './components/DashboardNew';
-import { ItemMasterSupabase } from './components/ItemMasterSupabase';
-import { InventoryGrid } from './components/InventoryGrid';
+import { UnifiedItemMaster } from './components/UnifiedItemMaster';
 import { BlanketOrders } from './components/BlanketOrders';
 import { BlanketReleases } from './components/BlanketReleases';
 import { ForecastingModule } from './components/ForecastingModule';
@@ -80,6 +79,91 @@ declare const __APP_VERSION__: string;
 const supabase = getSupabaseClient();
 const logoImage = '/logo.png';
 const compactLogoImage = '/a-logo.png';
+const GLOBAL_SESSION_STORAGE_KEY = 'wms_global_session_id';
+const TAB_ID_STORAGE_KEY = 'wms_auth_tab_id';
+const AUTH_OWNER_STORAGE_KEY = 'wms_auth_owner';
+const CONCURRENT_TAB_LOGOUT_MESSAGE = 'Your session was ended because your account signed in from another tab.';
+
+// Edge Function base URL — shared across the app and configurable via VITE_FUNCTIONS_URL
+const EDGE_FN_URL = FUNCTIONS_BASE;
+const SESSION_VALIDATION_INTERVAL_MS = 15000;
+
+function getStoredTabSessionId(): string | null {
+  try {
+    return sessionStorage.getItem(GLOBAL_SESSION_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setStoredTabSessionId(value: string | null): void {
+  try {
+    if (value) {
+      sessionStorage.setItem(GLOBAL_SESSION_STORAGE_KEY, value);
+    } else {
+      sessionStorage.removeItem(GLOBAL_SESSION_STORAGE_KEY);
+    }
+  } catch {
+    // ignore browser storage failures
+  }
+}
+
+function getOrCreateTabId(): string {
+  try {
+    const existing = sessionStorage.getItem(TAB_ID_STORAGE_KEY);
+    if (existing) {
+      return existing;
+    }
+
+    const next = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    sessionStorage.setItem(TAB_ID_STORAGE_KEY, next);
+    return next;
+  } catch {
+    return 'tab-unknown';
+  }
+}
+
+function readAuthOwner(): { tabId: string; sessionId: string | null } | null {
+  try {
+    const raw = localStorage.getItem(AUTH_OWNER_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw);
+    return {
+      tabId: typeof parsed?.tabId === 'string' ? parsed.tabId : '',
+      sessionId: typeof parsed?.sessionId === 'string' ? parsed.sessionId : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeAuthOwner(tabId: string, sessionId: string | null): void {
+  try {
+    localStorage.setItem(AUTH_OWNER_STORAGE_KEY, JSON.stringify({
+      tabId,
+      sessionId,
+      updatedAt: Date.now(),
+    }));
+  } catch {
+    // ignore browser storage failures
+  }
+}
+
+function clearAuthOwnerIfOwnedBy(tabId: string): void {
+  try {
+    const owner = readAuthOwner();
+    if (owner?.tabId === tabId) {
+      localStorage.removeItem(AUTH_OWNER_STORAGE_KEY);
+    }
+  } catch {
+    // ignore browser storage failures
+  }
+}
 
 // User role type for RBAC
 type UserRole = 'L1' | 'L2' | 'L3' | null;
@@ -122,8 +206,7 @@ const DISPATCH_VIEW_META: Record<string, { label: string; description: string }>
 
 const menuItems: MenuItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, description: 'Overview & KPIs' },
-  { id: 'items', label: 'Item Master', icon: Package, description: 'FG Catalog' },
-  { id: 'inventory', label: 'Inventory', icon: Boxes, description: 'Multi-Warehouse Stock' },
+  { id: 'items', label: 'Inventory Hub', icon: Boxes, description: 'FG Catalog & Stock View' },
   { id: 'stock-movements', label: 'Stock Movements', icon: ArrowRightLeft, description: 'Audit Trail' },
   { id: 'packing', label: 'Packing', icon: PackageOpen, description: 'FG Packing Workflow', hasSubmenu: true },
   { id: 'dispatch' as View, label: 'Dispatch', icon: CargoShip as any, description: 'Dispatch & Shipping', hasSubmenu: true },
@@ -149,6 +232,9 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isMobile, setIsMobile] = useState(false);
+  const [globalSessionId, setGlobalSessionId] = useState<string | null>(() => {
+    return getStoredTabSessionId();
+  });
 
   // Desktop: sidebar expands on hover OR when locked; Mobile: uses isSidebarOpen toggle
   const sidebarExpanded = isMobile ? isSidebarOpen : (isSidebarLocked || isSidebarHovered);
@@ -166,6 +252,121 @@ export default function App() {
   const [dispatchMenuOpen, setDispatchMenuOpen] = useState(false);
   // Granular permission state (loaded from localStorage)
   const [userPerms, setUserPerms] = useState<PermissionMap>({});
+  const explicitLogoutRef = useRef(false);
+  const globalSessionIdRef = useRef<string | null>(globalSessionId);
+  const currentTabIdRef = useRef(getOrCreateTabId());
+
+  useEffect(() => {
+    globalSessionIdRef.current = globalSessionId;
+  }, [globalSessionId]);
+
+  const isAuthOwnedByDifferentTab = (): boolean => {
+    const owner = readAuthOwner();
+    return Boolean(
+      owner?.tabId
+      && owner.tabId !== currentTabIdRef.current
+      && owner.sessionId,
+    );
+  };
+
+  const isOwnedByAnotherTab = (): boolean => {
+    const owner = readAuthOwner();
+    const currentSessionId = globalSessionIdRef.current;
+
+    return Boolean(
+      owner?.tabId
+      && owner.tabId !== currentTabIdRef.current
+      && owner.sessionId
+      && currentSessionId
+      && owner.sessionId !== currentSessionId,
+    );
+  };
+
+  const clearClientAuthState = (
+    message?: string,
+    options?: { clearSharedAuth?: boolean; clearOwner?: boolean },
+  ) => {
+    const clearSharedAuth = options?.clearSharedAuth ?? true;
+    const clearOwner = options?.clearOwner ?? false;
+
+    if (clearSharedAuth) {
+      clearLocalAuthSession();
+    }
+    setAccessToken(null);
+    setUser(null);
+    setUserRole(null);
+    setGlobalSessionId(null);
+    globalSessionIdRef.current = null;
+    setStoredTabSessionId(null);
+    if (clearOwner) {
+      clearAuthOwnerIfOwnedBy(currentTabIdRef.current);
+    }
+    setIsAuthenticated(false);
+    setCurrentView('dashboard');
+    setError(message ?? null);
+  };
+
+  const forceClientLogout = async (message?: string) => {
+    explicitLogoutRef.current = true;
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.warn('Supabase client signOut failed during forced logout:', err);
+    } finally {
+      explicitLogoutRef.current = false;
+    }
+    clearClientAuthState(message, { clearSharedAuth: true, clearOwner: true });
+  };
+
+  const validateCurrentGlobalSession = async (): Promise<boolean> => {
+    if (isAuthOwnedByDifferentTab()) {
+      clearClientAuthState(CONCURRENT_TAB_LOGOUT_MESSAGE, {
+        clearSharedAuth: false,
+        clearOwner: false,
+      });
+      return false;
+    }
+
+    if (!isAuthenticated || !globalSessionId || !accessToken) {
+      return true;
+    }
+
+    try {
+      const response = await fetch(`${EDGE_FN_URL}/auth-validate-session`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ global_session_id: globalSessionId }),
+      });
+
+      let result: any = {};
+      try {
+        result = await response.json();
+      } catch (_) {
+        result = {};
+      }
+
+      if (!response.ok || !result.valid || result.status !== 'active') {
+        if (isOwnedByAnotherTab()) {
+          clearClientAuthState(CONCURRENT_TAB_LOGOUT_MESSAGE, {
+            clearSharedAuth: false,
+            clearOwner: false,
+          });
+          return false;
+        }
+
+        await forceClientLogout('Your session was ended because your account signed in from another browser.');
+        return false;
+      }
+
+      return true;
+    } catch (err) {
+      console.warn('Global session validation threw:', err);
+      return true;
+    }
+  };
 
   // ============================================================================
   // PERMISSION ENFORCEMENT: Uses centralized permission utility
@@ -209,16 +410,25 @@ export default function App() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (session?.access_token && session.user) {
+          if (isAuthOwnedByDifferentTab()) {
+            clearClientAuthState(CONCURRENT_TAB_LOGOUT_MESSAGE, {
+              clearSharedAuth: false,
+              clearOwner: false,
+            });
+            return;
+          }
+
           setAccessToken(session.access_token);
           setUser(session.user);
           setIsAuthenticated(true);
           setError(null);
           fetchUserRole(session.user.id);
         } else {
-          setAccessToken(null);
-          setUser(null);
-          setUserRole(null);
-          setIsAuthenticated(false);
+          if (!explicitLogoutRef.current && globalSessionIdRef.current) {
+            return;
+          }
+
+          clearClientAuthState();
         }
       }
     );
@@ -227,6 +437,58 @@ export default function App() {
       subscription.unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== AUTH_OWNER_STORAGE_KEY) {
+        return;
+      }
+
+      const owner = readAuthOwner();
+      if (
+        isAuthenticated
+        && owner?.tabId
+        && owner.tabId !== currentTabIdRef.current
+        && owner.sessionId
+        && (!globalSessionIdRef.current || owner.sessionId !== globalSessionIdRef.current)
+      ) {
+        clearClientAuthState(CONCURRENT_TAB_LOGOUT_MESSAGE, {
+          clearSharedAuth: false,
+          clearOwner: false,
+        });
+      }
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !globalSessionId) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void validateCurrentGlobalSession();
+    }, SESSION_VALIDATION_INTERVAL_MS);
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        void validateCurrentGlobalSession();
+      }
+    };
+
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+    void validateCurrentGlobalSession();
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+    };
+  }, [isAuthenticated, globalSessionId, accessToken]);
 
   const initializeAuth = async () => {
     try {
@@ -240,12 +502,25 @@ export default function App() {
       }
 
       if (session?.access_token && session.user) {
+        if (isAuthOwnedByDifferentTab()) {
+          clearClientAuthState(CONCURRENT_TAB_LOGOUT_MESSAGE, {
+            clearSharedAuth: false,
+            clearOwner: false,
+          });
+          return;
+        }
+
         setAccessToken(session.access_token);
         setUser(session.user);
         setIsAuthenticated(true);
         setError(null);
         await fetchUserRole(session.user.id);
       } else {
+        setAccessToken(null);
+        setUser(null);
+        setUserRole(null);
+        setGlobalSessionId(null);
+        setStoredTabSessionId(null);
         setIsAuthenticated(false);
       }
     } catch (err) {
@@ -266,18 +541,46 @@ export default function App() {
       setError(null);
       setIsLoading(true);
 
-      const result = await signInWithEmail(email, password);
+      const response = await fetch(`${EDGE_FN_URL}/auth-login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
 
-      if (result.error) {
-        setError(result.error);
+      const result = await response.json();
+
+      if (!response.ok) {
+        setError(result.error || 'Login failed');
         return false;
       }
 
-      if (result.session?.access_token) {
+      if (result.access_token) {
+        if (result.global_session_id) {
+          setGlobalSessionId(result.global_session_id);
+          globalSessionIdRef.current = result.global_session_id;
+          setStoredTabSessionId(result.global_session_id);
+          writeAuthOwner(currentTabIdRef.current, result.global_session_id);
+        }
 
-        setAccessToken(result.session.access_token);
-        setUser(result.session.user);
+        // Set Supabase client session with the tokens from edge function
+        await supabase.auth.setSession({
+          access_token: result.access_token,
+          refresh_token: result.refresh_token,
+        });
+
+        setAccessToken(result.access_token);
+        setUser(result.user_profile);
+        setUserRole(result.user_profile.role as UserRole);
         setIsAuthenticated(true);
+
+        // Show concurrent kill warning if applicable
+        if (result.concurrent_kill) {
+          const killedCount = result.transactions_killed?.length || 0;
+          if (killedCount > 0) {
+            setError(`Your previous session was terminated. ${killedCount} pending transaction(s) were cancelled.`);
+          }
+        }
+
         return true;
       }
 
@@ -331,8 +634,11 @@ export default function App() {
       } else {
         setUserRole(null);
         setError('Account is inactive. Please contact your administrator.');
-        await signOut();
-        setIsAuthenticated(false);
+        await supabase.auth.signOut();
+        clearClientAuthState('Account is inactive. Please contact your administrator.', {
+          clearSharedAuth: true,
+          clearOwner: true,
+        });
       }
     } catch (err) {
       console.error('💥 Error fetching user role:', err);
@@ -341,19 +647,57 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    explicitLogoutRef.current = true;
     try {
       setIsLoading(true);
-      await signOut();
-      setAccessToken(null);
-      setUser(null);
-      setUserRole(null);
-      setIsAuthenticated(false);
-      setCurrentView('dashboard');
-      setError(null);
+      const { data: { session } } = await supabase.auth.getSession();
+      const logoutToken = session?.access_token || accessToken;
+
+      const response = await fetch(`${EDGE_FN_URL}/auth-logout`, {
+        method: 'POST',
+        headers: {
+          ...(logoutToken ? { 'Authorization': `Bearer ${logoutToken}` } : {}),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ global_session_id: globalSessionId }),
+      });
+
+      let parsedLogoutResult: any = {};
+      try {
+        parsedLogoutResult = await response.clone().json();
+      } catch (_) {
+        parsedLogoutResult = {};
+      }
+
+      const isIdempotentLogout =
+        [401, 403, 404].includes(response.status) &&
+        (parsedLogoutResult?.code === 'session_not_found'
+          || parsedLogoutResult?.note === 'already_logged_out'
+          || parsedLogoutResult?.status === 'not_found'
+          || parsedLogoutResult?.reason === 'SESSION_NOT_ACTIVE');
+
+      if (!response.ok && !isIdempotentLogout && response.status >= 500) {
+        clearClientAuthState('Logout cleanup failed on the server. Local session cleared.', {
+          clearSharedAuth: true,
+          clearOwner: true,
+        });
+        return;
+      }
+
+      clearClientAuthState(undefined, {
+        clearSharedAuth: true,
+        clearOwner: true,
+      });
+      return;
+
     } catch (err) {
       console.error('Logout error:', err);
-      setError(err instanceof Error ? err.message : 'Logout failed');
+      clearClientAuthState('Logout request failed. Local session cleared.', {
+        clearSharedAuth: true,
+        clearOwner: true,
+      });
     } finally {
+      explicitLogoutRef.current = false;
       setIsLoading(false);
     }
   };
@@ -409,11 +753,9 @@ export default function App() {
       case 'dashboard':
         return <DashboardNew accessToken={accessToken} onNavigate={(view) => setCurrentView(view as View)} />;
       case 'items':
-        if (!canAccessViewLocal('items')) return renderAccessDenied('Item Master');
-        return <ItemMasterSupabase userRole={userRole} userPerms={userPerms} />;
       case 'inventory':
-        if (!canAccessViewLocal('inventory')) return renderAccessDenied('Inventory');
-        return <InventoryGrid />;
+        if (!canAccessViewLocal('items') && !canAccessViewLocal('inventory')) return renderAccessDenied('Inventory');
+        return <UnifiedItemMaster userRole={userRole} userPerms={userPerms} />;
       case 'stock-movements':
         if (!canAccessViewLocal('stock-movements')) return renderAccessDenied('Stock Movements');
         return <StockMovement accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;

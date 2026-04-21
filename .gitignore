@@ -31,17 +31,21 @@ out/
 !**/.env.example
 
 # ============================================================================
-# Local Database References
+# Local Database References & SQL Scripts
 # ============================================================================
 .db/
 .db_reference/
+sql/
 
 # ============================================================================
 # Supabase — keep functions & config tracked, ignore local state & migrations
 # ============================================================================
+supabase/.env.local
 supabase/.branches/
 supabase/.temp/
 supabase/functions/.env
+supabase/functions/proxy.ts
+supabase/functions/local-dev-server.ts
 supabase/migrations/
 supabase.exe
 supabase.tar.gz
@@ -64,10 +68,24 @@ Prompt/
 docs/migration_plan.md.resolved
 
 # ============================================================================
-# Dev Scripts (ad-hoc local scripts — only README is tracked)
+# Local Dev Scripts (Windows-only, not needed on remote)
 # ============================================================================
+deploy.ps1
+start-auth-local.ps1
+start-dev.ps1
+verify-auth-local.ps1
 scripts/dev/*
 !scripts/dev/README.md
+
+# ============================================================================
+# Lock Files (regenerated per environment)
+# ============================================================================
+deno.lock
+
+# ============================================================================
+# Runtime Logs (local dev server output)
+# ============================================================================
+run-logs/
 
 # ============================================================================
 # IDE / Editor Configs
@@ -99,9 +117,6 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 *.log
-logs/
-log.txt
-log2.txt
 
 # ============================================================================
 # Debug / Diagnostic Artifacts
@@ -109,6 +124,17 @@ log2.txt
 tsc_output.txt
 git_log_output.txt
 git_status_output.txt
+diff_output.txt
+diff_utf8.txt
+log.txt
+log2.txt
+
+# ============================================================================
+# AI Generated Reports
+# ============================================================================
+*Report*.md
+*Report*.html
+*Report*.pdf
 
 # ============================================================================
 # Vite / Build Caches
@@ -133,7 +159,7 @@ coverage/
 .jest-cache/
 
 # ============================================================================
-# Scratch / Test Scripts (never commit ad-hoc test files at root)
+# Scratch / Test Scripts (never commit ad-hoc test files)
 # ============================================================================
 test*.js
 test*.mjs

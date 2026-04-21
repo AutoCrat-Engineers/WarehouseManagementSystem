@@ -1,11 +1,15 @@
-# Supabase local development config
-# Run: supabase start  (requires Docker)
-# Serve functions: supabase functions serve
+# Supabase Configuration
+# Project: WMS (Warehouse Management System)
+# Project Ref: sugvmurszfcneaeyoagv
+
+project_id = "sugvmurszfcneaeyoagv"
 
 [api]
+enabled = true
 port = 54321
-schemas = ["public"]
+schemas = ["public", "graphql_public"]
 extra_search_path = ["public", "extensions"]
+max_rows = 1000
 
 [db]
 port = 54322
@@ -16,9 +20,35 @@ major_version = 17
 port = 54323
 
 [auth]
+enabled = true
 site_url = "http://localhost:5173"
-additional_redirect_urls = ["http://localhost:5173"]
+additional_redirect_urls = [
+  "http://127.0.0.1:3000",
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "https://localhost:3000"
+]
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+refresh_token_reuse_interval = 10
 
+# ── Auth Edge Functions (login2) ──
+[functions."auth-login"]
+verify_jwt = false
+
+[functions."auth-logout"]
+verify_jwt = false
+
+[functions."auth-validate-session"]
+verify_jwt = false
+
+[functions."session-manager"]
+verify_jwt = false
+
+[functions."make-server-9c637d11"]
+verify_jwt = true
+
+# ── Stock Movement Edge Functions (develop-test) ──
 [functions.submit-movement-request]
 verify_jwt = false
 
