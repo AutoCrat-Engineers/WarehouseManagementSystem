@@ -7,7 +7,7 @@
  *   - im_list-items          → list + 3 summary counts (used by UI)
  *   - im_get-blanket-orders  → v_item_details blanket-order slice
  *   - im_upsert-item         → create / update branches
- *   - im_delete-item         → hard cascade delete (13-table sequence)
+ *   - im_delete-item         → soft delete (sets is_active = false)
  *
  * The exported shapes (Item, ItemFormData, etc.) and the function
  * signatures remain unchanged, so callers don't need to adapt.
@@ -143,10 +143,10 @@ export async function updateItem(
 }
 
 /**
- * Delete item (HARD DELETE, cascade) — backed by `im_delete-item`.
- * Same 13-table cascade the old client-side code performed, now
- * server-side.  Audit log is written with the caller's identity taken
- * from the verified JWT (not the request body).
+ * Delete item (SOFT DELETE) — backed by `im_delete-item`.
+ * Flips `items.is_active = false` and writes an audit row keyed by
+ * `part_number`.  Child rows are preserved so FKs still resolve.
+ * Caller identity comes from the verified JWT (never the request body).
  */
 export async function deleteItem(id: string, deletionReason: string): Promise<DeleteResult> {
   try {

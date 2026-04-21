@@ -964,7 +964,7 @@ export function UnifiedItemMaster({ userRole, userPerms = {} }: UnifiedItemMaste
   const handleDeleteClick = (item: Item) => { setItemToDelete(item); setShowDeleteModal(true); };
   const handleDeleteConfirm = async (reason: string) => {
     if (!itemToDelete) return;
-    const itemMsn = itemToDelete.master_serial_no || itemToDelete.part_number || itemToDelete.item_code;
+    const itemMsn = itemToDelete.part_number || itemToDelete.master_serial_no || itemToDelete.item_code;
     const result = await itemsApi.deleteItem(itemToDelete.id, reason);
     if (result.error) { showToast('error', 'Deletion Failed', result.error); }
     else { showToast('success', 'Item Deactivated', `Item "${itemMsn}" has been deactivated. It stays in history for audit and can be restored if needed.`); fetchItems(); }

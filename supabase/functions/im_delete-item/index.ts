@@ -80,7 +80,7 @@ export async function handler(req: Request): Promise<Response> {
     if (fetchError || !item) {
       return json(corsHeaders, { error: fetchError?.message || 'Item not found.' }, 404);
     }
-    const itemCode = (item as any).item_code;
+    const partNumber = (item as any).part_number;
 
     // Idempotency: if the caller re-sends a delete for an already-
     // deactivated row, don't write another audit entry — just return
@@ -91,7 +91,7 @@ export async function handler(req: Request): Promise<Response> {
         success: true,
         already_inactive: true,
         item_id: itemId,
-        item_code: itemCode,
+        part_number: partNumber,
       });
     }
 
@@ -101,7 +101,7 @@ export async function handler(req: Request): Promise<Response> {
         user_id: userId,
         action: 'SOFT_DELETE_ITEM',
         target_type: 'item',
-        target_id: itemCode,
+        target_id: partNumber,
         old_value: {
           ...(item as any),
           deletion_reason: deletionReason,
@@ -135,7 +135,7 @@ export async function handler(req: Request): Promise<Response> {
       success: true,
       already_inactive: false,
       item_id: itemId,
-      item_code: itemCode,
+      part_number: partNumber,
     });
   } catch (err: any) {
     console.error('[im_delete-item] Error:', err?.message || err);
