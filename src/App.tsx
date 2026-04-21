@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { getSupabaseClient } from './utils/supabase/client';
+import { FUNCTIONS_BASE } from './utils/supabase/info';
 import { clearLocalAuthSession } from './utils/supabase/auth';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LoginPage } from './auth/login/LoginPage';
@@ -83,9 +84,8 @@ const TAB_ID_STORAGE_KEY = 'wms_auth_tab_id';
 const AUTH_OWNER_STORAGE_KEY = 'wms_auth_owner';
 const CONCURRENT_TAB_LOGOUT_MESSAGE = 'Your session was ended because your account signed in from another tab.';
 
-// Edge Function base URL — uses local server in DEV, production URL in PROD
-const EDGE_FN_URL = import.meta.env.VITE_EDGE_FN_URL
-  ?? `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
+// Edge Function base URL — shared across the app and configurable via VITE_FUNCTIONS_URL
+const EDGE_FN_URL = FUNCTIONS_BASE;
 const SESSION_VALIDATION_INTERVAL_MS = 15000;
 
 function getStoredTabSessionId(): string | null {
