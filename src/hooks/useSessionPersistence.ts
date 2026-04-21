@@ -31,9 +31,7 @@ import {
     updateSession,
     completeSession as completeSessionApi,
     abandonSession as abandonSessionApi,
-    fetchActiveSession,
     type SessionType,
-    type OperationSession,
     SessionApiError,
 } from '../services/sessionService';
 

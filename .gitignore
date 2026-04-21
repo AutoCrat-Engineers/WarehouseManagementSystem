@@ -25,7 +25,9 @@ dist/
 # ============================================================================
 .db/
 .db_reference/
-supabase/
+supabase/.env.local
+supabase/.temp/
+supabase/.branches/
 
 # ============================================================================
 # Legacy Directories (moved to micro-services or .db_reference)
@@ -79,6 +81,15 @@ log2.txt
 tsc_output.txt
 git_log_output.txt
 git_status_output.txt
+diff_output.txt
+diff_utf8.txt
+
+# ============================================================================
+# AI Generated Reports
+# ============================================================================
+*Report*.md
+*Report*.html
+*Report*.pdf
 
 # ============================================================================
 # TypeScript Cache
