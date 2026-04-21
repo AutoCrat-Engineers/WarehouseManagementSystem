@@ -19,9 +19,10 @@ import {
     SummaryCard, SummaryCardsGrid, SearchBox, FilterBar, ActionBar,
     StatusFilter, RefreshButton, ExportCSVButton, DateRangeFilter, ClearFiltersButton, Pagination,
 } from '../ui/SharedComponents';
-import * as svc from './packingEngineService';
 import type { Pallet, PalletState, PackContainer } from './packingEngineService';
 import { getSupabaseClient } from '../../utils/supabase/client';
+import { fetchWithAuth } from '../../utils/supabase/auth';
+import { getEdgeFunctionUrl } from '../../utils/supabase/info';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
@@ -121,85 +122,51 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
 
     // ────── BACKEND AGGREGATES for summary cards (NEVER depend on paginated data) ──────
     const [counts, setCounts] = useState({ total: 0, ready: 0, filling: 0, adjustment: 0, dispatched: 0 });
-    const fetchCounts = useCallback(async () => {
-        try {
-            const [totalR, readyR, openR, fillingR, adjR, dispatchedR, inTransitR] = await Promise.all([
-                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }),
-                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'READY'),
-                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'OPEN'),
-                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'FILLING'),
-                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'ADJUSTMENT_REQUIRED'),
-                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'DISPATCHED'),
-                supabase.from('pack_pallets').select('id', { count: 'exact', head: true }).eq('state', 'IN_TRANSIT'),
-            ]);
-            setCounts({
-                total: totalR.count ?? 0,
-                ready: readyR.count ?? 0,
-                filling: (openR.count ?? 0) + (fillingR.count ?? 0),
-                adjustment: adjR.count ?? 0,
-                dispatched: (dispatchedR.count ?? 0) + (inTransitR.count ?? 0),
-            });
-        } catch { /* non-critical */ }
-    }, [supabase]);
 
-    // ────── Fetch paginated + server-filtered data ──────
+    // ────── Fetch list + summary counts + container-id map (one edge-fn call) ──────
+    // Replaces the prior client pattern (7 count queries + list + nested
+    // container pre-fetch = 9 parallel browser→DB calls).  The edge function
+    // runs the identical queries server-side and returns everything in one
+    // response.  Business logic — card aggregation, filters, ordering,
+    // enrichment shape — is preserved exactly.
     const fetchData = useCallback(async () => {
         setLoading(true);
         try {
-            let query = supabase
-                .from('pack_pallets')
-                .select(`*, items!pack_pallets_item_id_fkey (item_name, master_serial_no, part_number)`, { count: 'exact' })
-                .order('created_at', { ascending: false });
-
-            // Server-side state filter
-            if (stateFilter !== 'ALL') query = query.eq('state', stateFilter);
-
-            // Server-side date range
-            if (dateFrom) query = query.gte('created_at', dateFrom);
-            if (dateTo)   query = query.lte('created_at', dateTo + 'T23:59:59');
-
-            const offset = page * PAGE_SIZE;
-            const { data, count, error } = await query.range(offset, offset + PAGE_SIZE - 1);
-            if (error) throw error;
-
-            const mapped: Pallet[] = (data || []).map((d: any) => ({
-                ...d,
-                item_name: d.items?.item_name,
-                master_serial_no: d.items?.master_serial_no,
-                part_number: d.items?.part_number,
-            }));
-            setPallets(mapped);
-            setTotalCount(count ?? 0);
-
-            // Pre-fetch container packing IDs for the current page (for search)
-            const palletIds = mapped.map((p: Pallet) => p.id);
-            if (palletIds.length > 0) {
-                const { data: pcData } = await supabase
-                    .from('pack_pallet_containers')
-                    .select('pallet_id, pack_containers(container_number, packing_boxes:packing_box_id(packing_id))')
-                    .in('pallet_id', palletIds);
-                const map: Record<string, string[]> = {};
-                (pcData || []).forEach((row: any) => {
-                    const pid = row.pallet_id;
-                    const ctn = row.pack_containers?.container_number || '';
-                    const pkgId = row.pack_containers?.packing_boxes?.packing_id || '';
-                    if (!map[pid]) map[pid] = [];
-                    if (ctn) map[pid].push(ctn.toLowerCase());
-                    if (pkgId) map[pid].push(pkgId.toLowerCase());
-                });
-                setAllContainerMap(map);
-            } else {
-                setAllContainerMap({});
+            const res = await fetchWithAuth(getEdgeFunctionUrl('pac_dashboard_list-pallets'), {
+                method: 'POST',
+                body: JSON.stringify({
+                    page,
+                    page_size: PAGE_SIZE,
+                    state_filter: stateFilter,
+                    date_from: dateFrom || null,
+                    date_to: dateTo || null,
+                }),
+            });
+            const json = await res.json();
+            if (!res.ok || !json?.success) {
+                throw new Error(json?.error || 'Failed to load pallets');
             }
+
+            setPallets((json.pallets || []) as Pallet[]);
+            setTotalCount(json.total_count ?? 0);
+            setCounts({
+                total: json.counts?.total ?? 0,
+                ready: json.counts?.ready ?? 0,
+                filling: json.counts?.filling ?? 0,
+                adjustment: json.counts?.adjustment ?? 0,
+                dispatched: json.counts?.dispatched ?? 0,
+            });
+            setAllContainerMap(
+                (json.container_id_map || {}) as Record<string, string[]>,
+            );
         } catch (err) {
             console.error('Fetch pallets error:', err);
         } finally {
             setLoading(false);
         }
-    }, [supabase, stateFilter, dateFrom, dateTo, page]);
+    }, [stateFilter, dateFrom, dateTo, page]);
 
     useEffect(() => { fetchData(); }, [fetchData]);
-    useEffect(() => { fetchCounts(); }, [fetchCounts]);
 
     useEffect(() => {
         if (!loading && initialLoad) {
@@ -207,19 +174,21 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
         }
     }, [loading, initialLoad]);
 
-    // Real-time — refresh BOTH data and counts
+    // Real-time — refresh data (list + counts are returned by the same call now)
     useEffect(() => {
         const ch = supabase
             .channel('pallet-dashboard-rt')
             .on('postgres_changes', { event: '*', schema: 'public', table: 'pack_pallets' }, () => {
                 fetchData();
-                fetchCounts();
             })
             .subscribe();
         return () => { supabase.removeChannel(ch); };
-    }, [supabase, fetchData, fetchCounts]);
+    }, [supabase, fetchData]);
 
-    // ────── Expand pallet ──────
+    // ────── Expand pallet — via `pac_dashboard_get-containers` edge function ──────
+    // Same nested SELECT as the old svc.fetchPalletContainers, just
+    // executed server-side.  Returned shape is identical (containers
+    // enriched with operator_name + packing_id + box_number).
     const handleExpand = async (palletId: string) => {
         if (expandedPallet === palletId) {
             setExpandedPallet(null);
@@ -228,8 +197,15 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
         setExpandedPallet(palletId);
         setLoadingContainers(true);
         try {
-            const containers = await svc.fetchPalletContainers(palletId);
-            setPalletContainers(containers);
+            const res = await fetchWithAuth(getEdgeFunctionUrl('pac_dashboard_get-containers'), {
+                method: 'POST',
+                body: JSON.stringify({ pallet_id: palletId }),
+            });
+            const json = await res.json();
+            if (!res.ok || !json?.success) {
+                throw new Error(json?.error || 'Failed to load containers');
+            }
+            setPalletContainers((json.containers || []) as PackContainer[]);
         } catch (err) {
             console.error('Fetch containers error:', err);
         } finally {
@@ -395,7 +371,7 @@ export function PalletDashboard({ accessToken, userRole, userPerms = {} }: Palle
                         <ClearFiltersButton onClick={() => { setStateFilter('ALL'); setDateFrom(''); setDateTo(''); }} />
                     )}
                     <ExportCSVButton onClick={handleExport} />
-                    <RefreshButton onClick={() => { Promise.all([fetchData(), fetchCounts()]).then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); }} loading={loading} />
+                    <RefreshButton onClick={() => { fetchData().then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); }} loading={loading} />
                 </ActionBar>
             </FilterBar>
 

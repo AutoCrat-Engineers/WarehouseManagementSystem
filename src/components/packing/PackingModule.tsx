@@ -27,10 +27,11 @@ import {
 } from '../ui/SharedComponents';
 import { Printer, CheckCircle2, Clock, PackageOpen, X, XCircle, AlertTriangle, Info } from 'lucide-react';
 import { PackingDetail } from './PackingDetail';
-import * as svc from './packingService';
 import { PACKING_STATUS_CONFIG } from '../../types/packing';
 import type { PackingRequest } from '../../types/packing';
 import { getSupabaseClient } from '../../utils/supabase/client';
+import { fetchWithAuth } from '../../utils/supabase/auth';
+import { getEdgeFunctionUrl } from '../../utils/supabase/info';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
@@ -90,123 +91,36 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
     const [totalDbCount, setTotalDbCount] = useState(0);
     const realtimeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    // Fetch current user name
-    useEffect(() => {
-        const fetchUser = async () => {
-            try {
-                const { data: { session } } = await supabase.auth.getSession();
-                if (session?.user?.id) {
-                    const { data: profile } = await supabase.from('profiles').select('full_name').eq('id', session.user.id).single();
-                    if (profile?.full_name) setCurrentUserName(profile.full_name);
-                }
-            } catch { /* ignore */ }
-        };
-        fetchUser();
-    }, [supabase]);
-
-    // Fetch packing requests — server-side paginated with filters + enrichment
+    // Fetch requests + summary counts + current user — single edge function call.
+    // Replaces the prior browser→DB pattern (11+ parallel round trips per open)
+    // with one server-side consolidation in `sg_list-requests`.
     const fetchRequests = useCallback(async (offset = 0, statusOverride?: string) => {
         setLoading(true);
         try {
             const activeStatus = statusOverride ?? statusFilter;
-            const sb = getSupabaseClient();
-
-            // Build count query that respects current status filter
-            let countQuery = sb
-                .from('packing_requests')
-                .select('id', { count: 'exact', head: true })
-                .neq('status', 'REJECTED');
-                
-            if (activeStatus !== 'ALL') {
-                countQuery = countQuery.eq('status', activeStatus);
-            }
-            
-            if (searchTerm.trim()) {
-                const safeSearch = searchTerm.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-                
-                // 1. Fetch matching item_codes from items table
-                const { data: matchedItems } = await sb
-                    .from('items')
-                    .select('item_code')
-                    .or(`item_code.ilike."%${safeSearch}%",item_name.ilike."%${safeSearch}%",master_serial_no.ilike."%${safeSearch}%",part_number.ilike."%${safeSearch}%"`)
-                    .limit(500);
-                    
-                const matchedCodes = (matchedItems || []).map(i => i.item_code);
-                let orStr = `movement_number.ilike."%${safeSearch}%",item_code.ilike."%${safeSearch}%"`;
-                
-                // Add matched item codes to the OR string using .in. syntax
-                if (matchedCodes.length > 0) {
-                    // Properly quote strings for PostgREST .in. array syntax
-                    const inList = matchedCodes.map(c => `"${c.replace(/"/g, '\\"')}"`).join(',');
-                    orStr += `,item_code.in.(${inList})`;
-                }
-                
-                countQuery = countQuery.or(orStr);
-            }
-            const countResult = await countQuery;
-            setTotalDbCount(countResult.count ?? 0);
-
-            // Fetch data with server-side status filter
-            let dataQuery = sb
-                .from('packing_requests')
-                .select('*')
-                .neq('status', 'REJECTED');
-            if (activeStatus !== 'ALL') {
-                dataQuery = dataQuery.eq('status', activeStatus);
-            }
-            if (searchTerm.trim()) {
-                const safeSearch = searchTerm.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-                const { data: matchedItems } = await sb.from('items').select('item_code').or(`item_code.ilike."%${safeSearch}%",item_name.ilike."%${safeSearch}%",master_serial_no.ilike."%${safeSearch}%",part_number.ilike."%${safeSearch}%"`).limit(500);
-                const matchedCodes = (matchedItems || []).map(i => i.item_code);
-                let orStr = `movement_number.ilike."%${safeSearch}%",item_code.ilike."%${safeSearch}%"`;
-                if (matchedCodes.length > 0) {
-                    const inList = matchedCodes.map(c => `"${c.replace(/"/g, '\\"')}"`).join(',');
-                    orStr += `,item_code.in.(${inList})`;
-                }
-                dataQuery = dataQuery.or(orStr);
-            }
-            const { data, error: fetchErr } = await dataQuery
-                .order('created_at', { ascending: false })
-                .range(offset, offset + PAGE_SIZE - 1);
-            if (fetchErr) throw fetchErr;
-
-            const rows = data || [];
-            if (rows.length === 0) { setRequests([]); return; }
-
-            // ── ENRICHMENT: Fetch MSL from items + box counts from packing_boxes ──
-            const itemCodes = [...new Set(rows.map((r: any) => r.item_code).filter(Boolean))];
-            const requestIds = rows.map((r: any) => r.id);
-
-            const [itemsResult, boxesResult] = await Promise.all([
-                itemCodes.length
-                    ? sb.from('items').select('item_code, item_name, master_serial_no').in('item_code', itemCodes)
-                    : Promise.resolve({ data: [] as any[] }),
-                requestIds.length
-                    ? sb.from('packing_boxes').select('packing_request_id, box_qty').in('packing_request_id', requestIds)
-                    : Promise.resolve({ data: [] as any[] }),
-            ]);
-
-            // Build item lookup: item_code → { item_name, master_serial_no }
-            const itemMap: Record<string, { item_name: string; master_serial_no: string | null }> = {};
-            (itemsResult.data || []).forEach((i: any) => {
-                itemMap[i.item_code] = { item_name: i.item_name, master_serial_no: i.master_serial_no };
+            const res = await fetchWithAuth(getEdgeFunctionUrl('sg_list-requests'), {
+                method: 'POST',
+                body: JSON.stringify({
+                    page: Math.floor(offset / PAGE_SIZE),
+                    page_size: PAGE_SIZE,
+                    status_filter: activeStatus,
+                    search_term: searchTerm.trim() || undefined,
+                }),
             });
+            const json = await res.json();
+            if (!res.ok || !json.success) {
+                throw new Error(json.error || 'Failed to load sticker generation list');
+            }
 
-            // Build box aggregate: packing_request_id → { count }
-            const boxAgg: Record<string, number> = {};
-            (boxesResult.data || []).forEach((b: any) => {
-                boxAgg[b.packing_request_id] = (boxAgg[b.packing_request_id] || 0) + 1;
+            setTotalDbCount(json.total_count ?? 0);
+            setRequests((json.requests || []) as PackingRequest[]);
+            setSummaryCounts({
+                total: json.summary?.total ?? 0,
+                awaiting: json.summary?.awaiting ?? 0,
+                inProgress: json.summary?.inProgress ?? 0,
+                completed: json.summary?.completed ?? 0,
             });
-
-            // Enrich rows with joined/computed fields
-            const enriched = rows.map((r: any) => ({
-                ...r,
-                item_name: itemMap[r.item_code]?.item_name || r.item_code,
-                master_serial_no: itemMap[r.item_code]?.master_serial_no || null,
-                boxes_count: boxAgg[r.id] ?? null,
-            }));
-
-            setRequests(enriched);
+            if (json.current_user_name) setCurrentUserName(json.current_user_name);
         } catch (err) {
             console.error('Error fetching packing requests:', err);
         } finally {
@@ -234,28 +148,11 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
     }, [supabase, fetchRequests]);
 
     // ============================================================================
-    // SUMMARY COUNTS — Independent backend aggregates (NEVER from paginated array)
+    // SUMMARY COUNTS — sourced from `sg_list-requests` edge function response.
+    // Folded into fetchRequests to avoid a second round-trip per page load.
     // ============================================================================
 
     const [summaryCounts, setSummaryCounts] = useState({ total: 0, awaiting: 0, inProgress: 0, completed: 0 });
-    const fetchSummaryCounts = useCallback(async () => {
-        try {
-            const sb = getSupabaseClient();
-            const [totalR, awaitingR, inProgressR, completedR] = await Promise.all([
-                sb.from('packing_requests').select('id', { count: 'exact', head: true }).neq('status', 'REJECTED'),
-                sb.from('packing_requests').select('id', { count: 'exact', head: true }).eq('status', 'APPROVED'),
-                sb.from('packing_requests').select('id', { count: 'exact', head: true }).in('status', ['PACKING_IN_PROGRESS', 'PARTIALLY_TRANSFERRED']),
-                sb.from('packing_requests').select('id', { count: 'exact', head: true }).eq('status', 'COMPLETED'),
-            ]);
-            setSummaryCounts({
-                total: totalR.count ?? 0,
-                awaiting: awaitingR.count ?? 0,
-                inProgress: inProgressR.count ?? 0,
-                completed: completedR.count ?? 0,
-            });
-        } catch { /* non-critical */ }
-    }, []);
-    useEffect(() => { fetchSummaryCounts(); }, [fetchSummaryCounts]);
 
     // ============================================================================
     // EXCEL EXPORT
@@ -407,7 +304,7 @@ export function PackingModule({ accessToken, userRole }: PackingModuleProps) {
                         <ClearFiltersButton onClick={() => { setStatusFilter('ALL'); setDateFrom(''); setDateTo(''); setPage(0); }} />
                     )}
                     <ExportCSVButton onClick={handleExport} />
-                    <RefreshButton onClick={() => { fetchRequests(page * PAGE_SIZE).then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); fetchSummaryCounts(); }} loading={loading} />
+                    <RefreshButton onClick={() => { fetchRequests(page * PAGE_SIZE).then(() => showToast('info', 'Refreshed', 'Data refreshed successfully.')); }} loading={loading} />
                 </ActionBar>
             </FilterBar>
 

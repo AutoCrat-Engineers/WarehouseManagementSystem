@@ -40,9 +40,10 @@ export type {
     DispatchAuditEntry,
 } from './mplService';
 
-// Re-export the core engine function for use by packing module
+// Re-export engine service functions.
+// `processPackingBoxAsContainer` was removed — the sticker-generation
+// migration moved that routing logic server-side into `sg_auto-generate`.
 export {
-    processPackingBoxAsContainer,
     getPackingSpecForItem,
     fetchPackingSpecs,
     calculatePalletImpact,

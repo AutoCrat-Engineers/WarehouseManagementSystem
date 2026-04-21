@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { getSupabaseClient } from './utils/supabase/client';
-import { signInWithEmail, signOut } from './utils/supabase/auth';
+import { signInWithEmail, signOut, fetchWithAuth } from './utils/supabase/auth';
+import { getEdgeFunctionUrl } from './utils/supabase/info';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LoginPage } from './auth/login/LoginPage';
 import { DashboardNew } from './components/DashboardNew';
@@ -292,31 +293,34 @@ export default function App() {
     }
   };
 
-  // Fetch user role from profiles table
+  // Fetch user role from the profile via `au_get-profile` edge function.
+  // The permissions RPC still runs from the browser (by design — RPC
+  // migration is a separate follow-up).  Both requests still fire in
+  // parallel via Promise.allSettled, preserving the prior latency.
   const fetchUserRole = async (userId: string) => {
     try {
-      // PERF: Fetch profile and permissions IN PARALLEL instead of sequentially
       const [profileResult, permsResult] = await Promise.allSettled([
-        supabase
-          .from('profiles')
-          .select('role, is_active, email, full_name')
-          .eq('id', userId)
-          .single(),
+        fetchWithAuth(getEdgeFunctionUrl('au_get-profile'), { method: 'POST' })
+          .then(async (r) => {
+            const j = await r.json().catch(() => null);
+            if (!r.ok || !j?.success) {
+              throw new Error(j?.error || 'Failed to fetch profile');
+            }
+            return j.profile as { role: string; is_active: boolean; email: string; full_name: string };
+          }),
         getUserPermissions(userId),
       ]);
 
-      // Handle profile result
-      const profileData = profileResult.status === 'fulfilled' ? profileResult.value : null;
-      const data = profileData?.data;
-      const error = profileData?.error;
+      const data = profileResult.status === 'fulfilled' ? profileResult.value : null;
 
-      if (error || !data) {
-        console.error('❌ Could not fetch user role:', error);
+      if (!data) {
+        console.error('❌ Could not fetch user role:',
+          profileResult.status === 'rejected' ? profileResult.reason : 'no data');
         setUserRole('L1');
         return;
       }
 
-      if (data && data.is_active) {
+      if (data.is_active) {
         setUserRole(data.role as UserRole);
         // Apply permissions (already fetched in parallel)
         if (data.role !== 'L3' && permsResult.status === 'fulfilled') {
@@ -324,13 +328,11 @@ export default function App() {
         } else if (data.role !== 'L3') {
           setUserPerms({});
         }
-      } else if (data && !data.is_active) {
+      } else {
         setUserRole(null);
         setError('Account is inactive. Please contact your administrator.');
         await signOut();
         setIsAuthenticated(false);
-      } else {
-        setUserRole('L1');
       }
     } catch (err) {
       console.error('💥 Error fetching user role:', err);
