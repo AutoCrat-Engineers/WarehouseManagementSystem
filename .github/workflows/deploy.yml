@@ -1,0 +1,110 @@
+
+name: Build, Test, Deploy (deploy/pre-prod)
+
+on:
+  push:
+    branches:
+      - deploy/pre-prod
+
+jobs:
+
+  build-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test --if-present
+
+      - name: Build app
+        run: npm run build
+
+  deploy:
+    needs: build-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Login to Azure Container Registry
+        run: |
+          echo "${{ secrets.ACR_PASSWORD }}" | docker login warehouseae.azurecr.io \
+           -u ${{ secrets.ACR_USERNAME }} \
+           --password-stdin
+      
+      - name: Build Docker image
+        run: |
+          docker pull node:20-alpine || true
+          docker build -t warehouseae.azurecr.io/wms-service:latest -f Dockerfile . 
+      - name: Push Docker image
+        run: docker push warehouseae.azurecr.io/wms-service:latest
+        
+      - name: Deploy on Azure VM (clean replace strategy)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VM_IP }}
+          username: azureuser
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            echo "===== ACR LOGIN ====="
+            echo "${{ secrets.ACR_PASSWORD }}" | docker login warehouseae.azurecr.io \
+            -u ${{ secrets.ACR_USERNAME }} \
+            --password-stdin
+
+            echo "===== DOCKER CLEANUP ====="
+            docker stop wms || true
+            docker rm wms || true
+            docker stop wms-new || true
+            docker rm wms-new || true
+
+            echo "===== REMOVE UNUSED IMAGES ====="
+            docker image prune -af || true
+
+            echo "===== PULL LATEST IMAGE ====="
+            docker pull warehouseae.azurecr.io/wms-service:latest
+   
+            echo "===== START VALIDATION CONTAINER ====="
+            docker run -d \
+            --name wms-new \
+            -p 127.0.0.1:8080:80 \
+             --env PDF_API_KEY=${{ secrets.PDF_API_KEY }} \
+             --restart unless-stopped \
+             warehouseae.azurecr.io/wms-service:latest
+  
+            echo "Waiting for container startup..."
+            sleep 15
+
+            echo "===== VALIDATE CONTAINER ====="
+             docker ps | grep wms-new
+
+            echo "===== HEALTH CHECK ====="
+             curl -f http://localhost:8080 || exit 1
+
+             echo "Validation success → switching production container"
+             docker stop wms-new
+              docker rm wms-new
+
+            docker run -d \
+            --name wms \
+            -p 127.0.0.1:8080:80 \
+            --env PDF_API_KEY=${{ secrets.PDF_API_KEY }} \
+            --restart unless-stopped \
+            warehouseae.azurecr.io/wms-service:latest
+
+            echo "===== CLEANUP STALE NGINX CONFIGS ====="
+            sudo rm -f /etc/nginx/conf.d/default.conf
+
+            echo "===== DEPLOYMENT SUCCESS ====="
+            docker ps
