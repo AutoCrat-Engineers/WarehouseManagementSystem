@@ -46,7 +46,13 @@ jobs:
       - name: Build Docker image
         run: |
           docker pull node:20-alpine || true
-          docker build -t warehouseae.azurecr.io/wms-service:latest -f Dockerfile . 
+          docker build \
+            --no-cache \
+            --build-arg VITE_SUPABASE_URL="${{ secrets.VITE_SUPABASE_URL }}" \
+            --build-arg VITE_SUPABASE_ANON_KEY="${{ secrets.VITE_SUPABASE_ANON_KEY }}" \
+            --build-arg VITE_PDF_SERVICE_URL="${{ secrets.VITE_PDF_SERVICE_URL }}" \
+            --build-arg VITE_PDF_SERVICE_API_KEY="${{ secrets.VITE_PDF_SERVICE_API_KEY }}" \
+            -t warehouseae.azurecr.io/wms-service:latest -f Dockerfile .
       - name: Push Docker image
         run: docker push warehouseae.azurecr.io/wms-service:latest
         
@@ -90,7 +96,7 @@ jobs:
              docker ps | grep wms-new
 
             echo "===== HEALTH CHECK ====="
-             curl -f http://localhost:8080 || exit 1
+             curl -sf http://localhost:8080 | grep -q 'id="root"' || (echo "Health check failed — index.html missing SPA root"; docker logs wms-new --tail 50; exit 1)
 
              echo "Validation success → switching production container"
              docker stop wms-new

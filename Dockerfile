@@ -3,6 +3,18 @@ FROM node:20-alpine AS build
 
 WORKDIR /app
 
+# Build-time env vars baked into the JS bundle by Vite.
+# Must be supplied via --build-arg in the CI build step; otherwise
+# src/utils/supabase/info.tsx throws [FATAL] at runtime.
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_ANON_KEY
+ARG VITE_PDF_SERVICE_URL
+ARG VITE_PDF_SERVICE_API_KEY
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL
+ENV VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
+ENV VITE_PDF_SERVICE_URL=$VITE_PDF_SERVICE_URL
+ENV VITE_PDF_SERVICE_API_KEY=$VITE_PDF_SERVICE_API_KEY
+
 COPY package*.json ./
 RUN npm install
 
