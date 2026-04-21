@@ -1,47 +1,20 @@
 /**
- * Enterprise Authentication Module
- * 
- * Location: src/auth/index.ts
- * 
- * Centralized exports for the RBAC authentication system
- * 
- * Role Hierarchy:
- *   L3 (Manager)    - Full access, user management
- *   L2 (Supervisor) - Operations oversight
- *   L1 (Operator)   - Day-to-day operations
+ * Enterprise authentication/RBAC module exports.
+ *
+ * Login/logout are owned by App.tsx and the auth Edge Functions. This barrel
+ * only re-exports active user, role, and permission APIs.
  */
 
-// ============================================================================
-// AUTH CONTEXT
-// ============================================================================
-export { AuthProvider, useAuth } from './context/AuthContext';
-export type { AuthContextType } from './context/AuthContext';
-
-// ============================================================================
-// AUTH SERVICES
-// ============================================================================
 export {
-    signIn,
-    signOut,
-    getCurrentSession,
-    getAccessToken,
-    refreshToken,
     hasMinimumRole,
-    onAuthStateChange,
     ROLE_CONFIG,
 } from './services/authService';
 
 export type {
     UserRole,
     UserProfile,
-    AuthSession,
-    Permission,
-    AuthResult,
 } from './services/authService';
 
-// ============================================================================
-// USER MANAGEMENT SERVICES (L3 Only)
-// ============================================================================
 export {
     getAllUsers,
     getUserById,
@@ -59,9 +32,6 @@ export type {
     UserListItem,
 } from './services/userService';
 
-// ============================================================================
-// PERMISSION SERVICES — Single source of truth for GRBAC
-// ============================================================================
 export {
     getUserPermissions,
     saveUserPermissions,
@@ -84,9 +54,6 @@ export type {
     UserOverridesResult,
 } from './services/permissionService';
 
-// ============================================================================
-// PERMISSION UTILITIES — Centralized access checks
-// ============================================================================
 export {
     canAccessView,
     canAccess,
@@ -100,12 +67,8 @@ export type {
     ModulePermissions,
 } from './utils/permissionUtils';
 
-// ============================================================================
-// COMPONENTS
-// ============================================================================
 export { LoginPage } from './login/LoginPage';
 export { UserManagement } from './users/UserManagement';
 export { RoleBadge } from './components/RoleBadge';
-export { ProtectedRoute, useRoleAccess, withRoleAccess } from './components/ProtectedRoute';
 export { GrantAccessModal, MODULE_CONFIG } from './components/GrantAccessModal';
 export type { PermissionMap, PermissionAction, ModuleConfig, SubmoduleConfig } from './components/GrantAccessModal';

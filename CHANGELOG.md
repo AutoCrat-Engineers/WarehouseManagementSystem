@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.4] — 2026-04-21
+
+### Release Type: Minor — Item Master Edge Functions, Soft Delete & Schema Migration Groundwork
+
+### Added
+
+- **Item Master Edge Functions (`im_*`)** — four new Supabase functions covering the entire Item Master module:
+  - `im_list-items` — list + 3 summary counts in a single round trip (server-side sort, search, filter, pagination)
+  - `im_get-blanket-orders` — replaces direct `v_item_details` SELECT in PackingDetail modal
+  - `im_upsert-item` — single endpoint for create / update branches
+  - `im_delete-item` — reversible soft delete (see _Changed_ below)
+- **Schema Migration Plan** — [`docs/SCHEMA_MIGRATION_item_code_to_part_number.md`](docs/SCHEMA_MIGRATION_item_code_to_part_number.md) documents the 6-phase `item_code → part_number` cutover across 13 FK tables + 11 denormalized tables + 17 edge functions
+- **Release Notes** — [`docs/releases/CHANGES_0.5.4.md`](docs/releases/CHANGES_0.5.4.md)
+
+### Changed
+
+- **Item deletion semantics — HARD CASCADE → SOFT DELETE** — `im_delete-item` now sets `items.is_active = false` instead of deleting the row + cascading through 13 child tables. Audit log captures a full pre-delete snapshot; an accidental delete is reversed by flipping the flag. Idempotent on already-inactive rows.
+- **`items.part_number` is now UNIQUE** — `items_part_number_unique` constraint added after resolving 5 pre-existing duplicates via rename + deactivate (zero data loss)
+- **Dependent tables carry `part_number_new`** — 24 child tables (13 FK tables + 11 denormalized `pack_*` / packing tables) now have a populated `part_number_new` column with an FK to `items.part_number`. Legacy `item_code` columns remain in place; Phase 3b cutover deferred pending backup
+- **Delete audit keys on `part_number`** — `im_delete-item` writes `audit_log.target_id = part_number` (was `item_code`); response payload and UI toast prefer `part_number` first
+- **`src/utils/api/itemsSupabase.ts`** — rewritten as a thin wrapper over the four `im_*` edge functions. Public API (`Item`, `ItemFormData`, `fetchItems`, `createItem`, `updateItem`, `deleteItem`) unchanged
+- **`UnifiedItemMaster.tsx`** — removed direct Supabase client imports; `fetchCounts` folded into `fetchItems`; delete-success toast copy updated from "permanently deleted" to "deactivated"
+
+### Deferred
+
+- **Phase 3b / 4 / 5 of the schema migration** — dropping `items.item_code`, renaming `part_number_new → part_number`, and rewriting 17 edge functions + 3 RPCs + 14 views against `part_number` is held until a verified `pg_dump` backup (or Supabase Pro PITR) is available. All applied phases are additive and reversible.
+
+### Security
+
+- **No new attack surface** — soft delete preserves FK integrity (no orphaned child rows). JWT-derived `user_id` in the audit log prevents spoofing via the request body.
+
+### Docs
+
+- New release notes, schema migration plan, and this CHANGELOG entry
+
+---
+
+## [0.5.3] — 2026-04-18
+
+### Release Type: Patch — Edge Function Reorganization & Documentation Refresh
+
+### Added
+
+- **Edge Function READMEs** — per-function documentation for all 10 Supabase functions covering purpose, request/response schemas, error codes, env vars, and local-test commands
+- **Master Edge Function Index** — [`supabase/functions/README.md`](supabase/functions/README.md) documents all functions, naming convention, deployment workflow, and contribution guide
+- **Environment Template** — [`supabase/functions/.env.example`](supabase/functions/.env.example) with placeholders for auto-injected and custom secrets
+- **ADR Process** — [`docs/adr/`](docs/adr/) with index, MADR-format template, and the first ADR documenting the Stock Movement function prefix + JWT auth decision
+- **CODEOWNERS** — [`.github/CODEOWNERS`](.github/CODEOWNERS) with placeholder team handles mapping paths to review ownership
+- **Release Notes** — [`docs/releases/CHANGES_0.5.3.md`](docs/releases/CHANGES_0.5.3.md)
+- **Item search debounce** — 300ms debounce on the New Stock Movement item search input (collapses typing bursts into a single request)
+
+### Changed
+
+- **Edge Function Naming** — all Stock Movement functions renamed with `sm_` prefix (e.g. `approve-movement` → `sm_approve-movement`); visual grouping in Supabase dashboard
+- **Edge Function Auth** — `userClient` now uses a custom `PUBLISHABLE_KEY` secret instead of the reserved `SUPABASE_ANON_KEY`; `auth.getUser(jwt)` called with explicit JWT; `auth: { persistSession: false, autoRefreshToken: false }` set on all edge-function Supabase clients
+- **Deployment Flag** — all functions deployed with `--no-verify-jwt` so CORS preflight reaches the in-function handler
+- **Client URLs** — [`StockMovement.tsx`](src/components/StockMovement.tsx) `FUNCTIONS_BASE` URLs point to new `sm_*` paths
+- **`.env.local`** — `VITE_FUNCTIONS_URL` override removed so frontend uses the deployed Supabase URL
+
+### Fixed
+
+- **401 Unauthorized on edge functions** — root cause was the legacy HS256 anon key being used against new ES256 user JWTs; resolved by migrating to the current `sb_publishable_*` key via the `PUBLISHABLE_KEY` custom secret
+- **CORS preflight failures** — resolved by deploying with `--no-verify-jwt`; OPTIONS requests now receive CORS headers from the in-function handler
+
+### Deprecated
+
+- Old (unprefixed) edge function deployments remain live on Supabase but are **unreferenced by client code**. Should be deleted from the dashboard.
+
+### Security
+
+- Flagged hardcoded legacy JWT fallback in [`src/utils/supabase/info.tsx`](src/utils/supabase/info.tsx). Anon key is expected to be public for SPAs, but the fallback is now stale after publishable-key rotation. Follow-up patch to sync.
+
+### Docs
+
+- 13 new markdown files under `supabase/functions/`, `docs/adr/`, `.github/`, and `docs/releases/`
+
+---
+
 ## [0.5.2] — 2026-04-11
 
 ### Release Type: Codebase Cleanup, Branch Alignment & Security Hardening

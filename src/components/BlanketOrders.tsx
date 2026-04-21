@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { projectId } from '../utils/supabase/info';
+import { getEdgeFunctionUrl } from '../utils/supabase/info';
 import { Plus, Edit2, FileText, Loader2, Search, Trash2, Eye, Package } from 'lucide-react';
 import { ModuleLoader } from './ui/EnterpriseUI';
 
@@ -72,10 +72,10 @@ export function BlanketOrders({ accessToken, userRole, userPerms = {} }: Blanket
   const fetchData = async () => {
     try {
       const [ordersResponse, itemsResponse] = await Promise.all([
-        fetch(`https://${projectId}.supabase.co/functions/v1/make-server-9c637d11/blanket-orders`, {
+        fetch(getEdgeFunctionUrl('make-server-9c637d11/blanket-orders'), {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         }),
-        fetch(`https://${projectId}.supabase.co/functions/v1/make-server-9c637d11/items`, {
+        fetch(getEdgeFunctionUrl('make-server-9c637d11/items'), {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         })
       ]);
@@ -99,7 +99,7 @@ export function BlanketOrders({ accessToken, userRole, userPerms = {} }: Blanket
   const fetchOrderLines = async (orderId: string) => {
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-9c637d11/blanket-orders/${orderId}/lines`,
+        getEdgeFunctionUrl(`make-server-9c637d11/blanket-orders/${orderId}/lines`),
         {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         }
@@ -119,7 +119,7 @@ export function BlanketOrders({ accessToken, userRole, userPerms = {} }: Blanket
 
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-9c637d11/blanket-orders`,
+        getEdgeFunctionUrl('make-server-9c637d11/blanket-orders'),
         {
           method: 'POST',
           headers: {

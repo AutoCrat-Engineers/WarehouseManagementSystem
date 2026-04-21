@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { projectId } from '../utils/supabase/info';
+import { getEdgeFunctionUrl } from '../utils/supabase/info';
 import { Plus, Calendar, Loader2, Search, Truck, Package, AlertCircle, CheckCircle } from 'lucide-react';
 import { ModuleLoader } from './ui/EnterpriseUI';
 
@@ -75,14 +75,14 @@ export function BlanketReleases({ accessToken, userRole, userPerms = {} }: Blank
   const fetchData = async () => {
     try {
       const url = statusFilter === 'ALL'
-        ? `https://${projectId}.supabase.co/functions/v1/make-server-9c637d11/blanket-releases`
-        : `https://${projectId}.supabase.co/functions/v1/make-server-9c637d11/blanket-releases?status=${statusFilter}`;
+        ? getEdgeFunctionUrl('make-server-9c637d11/blanket-releases')
+        : getEdgeFunctionUrl(`make-server-9c637d11/blanket-releases?status=${statusFilter}`);
 
       const [releasesResponse, linesResponse] = await Promise.all([
         fetch(url, {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         }),
-        fetch(`https://${projectId}.supabase.co/functions/v1/make-server-9c637d11/blanket-orders/lines/available`, {
+        fetch(getEdgeFunctionUrl('make-server-9c637d11/blanket-orders/lines/available'), {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         })
       ]);
@@ -108,7 +108,7 @@ export function BlanketReleases({ accessToken, userRole, userPerms = {} }: Blank
 
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-9c637d11/blanket-releases`,
+        getEdgeFunctionUrl('make-server-9c637d11/blanket-releases'),
         {
           method: 'POST',
           headers: {
@@ -139,7 +139,7 @@ export function BlanketReleases({ accessToken, userRole, userPerms = {} }: Blank
 
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-9c637d11/blanket-releases/${releaseId}/status`,
+        getEdgeFunctionUrl(`make-server-9c637d11/blanket-releases/${releaseId}/status`),
         {
           method: 'PUT',
           headers: {

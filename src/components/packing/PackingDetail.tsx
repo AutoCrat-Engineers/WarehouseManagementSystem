@@ -28,7 +28,8 @@ import {
     generatePackingId, formatAuditDetails,
 } from '../../types/packing';
 import type { PackingRequest, PackingBox, PackingAuditLog, StickerData, PackingRequestStatus } from '../../types/packing';
-import { getSupabaseClient } from '../../utils/supabase/client';
+import { fetchWithAuth } from '../../utils/supabase/auth';
+import { getEdgeFunctionUrl } from '../../utils/supabase/info';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
@@ -40,8 +41,6 @@ interface PackingDetailProps {
 }
 
 export function PackingDetail({ requestId, userRole, onBack, currentUserName }: PackingDetailProps) {
-    const supabase = getSupabaseClient();
-
     const [request, setRequest] = useState<PackingRequest | null>(null);
     const [boxes, setBoxes] = useState<PackingBox[]>([]);
     const [auditLogs, setAuditLogs] = useState<PackingAuditLog[]>([]);
@@ -61,48 +60,28 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
-            // PHASE 1: Fetch request (needed to derive item_code + profile IDs)
-            const { data: reqData, error: reqErr } = await supabase
-                .from('packing_requests').select('*').eq('id', requestId).single();
-            if (reqErr) throw reqErr;
-
-            // PHASE 2: All remaining fetches in parallel (items, profiles, boxes, audit)
-            const profileIds = [reqData.created_by, reqData.approved_by].filter(Boolean);
-            const [itemResult, profilesResult, boxesData, auditData] = await Promise.all([
-                supabase.from('items')
-                    .select('item_name, part_number, master_serial_no, revision')
-                    .eq('item_code', reqData.item_code).single(),
-                profileIds.length
-                    ? supabase.from('profiles').select('id, full_name').in('id', profileIds)
-                    : Promise.resolve({ data: [] as any[] }),
-                svc.fetchBoxesForRequest(requestId),
-                svc.fetchAuditLogs(requestId),
-            ]);
-
-            const itemData = itemResult.data;
-            const nameMap: Record<string, string> = {};
-            ((profilesResult.data || []) as any[]).forEach((p: any) => { nameMap[p.id] = p.full_name; });
-
-            const enrichedReq: PackingRequest = {
-                ...reqData,
-                item_name: itemData?.item_name || reqData.item_code,
-                part_number: itemData?.part_number || null,
-                master_serial_no: itemData?.master_serial_no || null,
-                revision: itemData?.revision || null,
-                created_by_name: nameMap[reqData.created_by] || undefined,
-                approved_by_name: reqData.approved_by ? nameMap[reqData.approved_by] : undefined,
-            };
-            setRequest(enrichedReq);
-            setBoxes(boxesData);
-            setAuditLogs(auditData);
-
+            // Single call to `sg_get-detail` — server-side consolidation of the
+            // prior 5-call load (packing_requests + items + profiles + boxes +
+            // audit logs). Business logic is unchanged; enrichment maps live
+            // in the edge function now.
+            const res = await fetchWithAuth(getEdgeFunctionUrl('sg_get-detail'), {
+                method: 'POST',
+                body: JSON.stringify({ request_id: requestId }),
+            });
+            const json = await res.json();
+            if (!res.ok || !json.success) {
+                throw new Error(json.error || 'Failed to load data');
+            }
+            setRequest(json.request as PackingRequest);
+            setBoxes((json.boxes || []) as PackingBox[]);
+            setAuditLogs((json.audit_logs || []) as PackingAuditLog[]);
         } catch (err: any) {
             console.error('Error loading packing data:', err);
             setMessage({ type: 'error', text: err.message || 'Failed to load data' });
         } finally {
             setLoading(false);
         }
-    }, [requestId, supabase]);
+    }, [requestId]);
 
     useEffect(() => { loadData(); }, [loadData]);
 
@@ -123,11 +102,31 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
         setGenerating(true);
         setMessage(null);
         try {
-            const generatedBoxes = await svc.autoGenerateBoxes(requestId);
+            // Migrated to server-side edge function `sg_auto-generate`.
+            // Business logic unchanged — the function executes the same Phase 1-5
+            // sequence that previously ran in the browser (and the sequential
+            // container-assignment loop), but collocates all DB calls with the
+            // database instead of round-tripping from the client.
+            const res = await fetchWithAuth(getEdgeFunctionUrl('sg_auto-generate'), {
+                method: 'POST',
+                body: JSON.stringify({ packing_request_id: requestId }),
+            });
+            const json = await res.json();
+            if (!res.ok || !json.success) {
+                throw new Error(json.error || 'Failed to auto-generate boxes');
+            }
+            const generatedBoxes: PackingBox[] = (json.boxes || []).map((b: any) => ({
+                ...b,
+                packing_id: b.packing_id,
+                is_transferred: b.is_transferred || false,
+                transferred_at: b.transferred_at || null,
+            }));
             setBoxes(generatedBoxes);
-            // Reload full data to get updated status
+            // Reload full data to get updated status + enriched fields
             await loadData();
-            setMessage({ type: 'success', text: `Auto-generated ${generatedBoxes.length} box sticker(s) based on packing specifications.` });
+            if (!json.already_generated) {
+                setMessage({ type: 'success', text: `Auto-generated ${generatedBoxes.length} box sticker(s) based on packing specifications.` });
+            }
         } catch (err: any) {
             console.error('Auto-generate failed:', err);
             setMessage({ type: 'error', text: err.message || 'Failed to auto-generate boxes' });
@@ -165,7 +164,16 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
         const box = boxes.find(b => (b.packing_id || generatePackingId(b.id)) === stickerData?.packingId);
         if (!box) return;
         try {
-            await svc.markStickerPrinted(requestId, box.id);
+            // Migrated to server-side `sg_mark-printed`. Same UPDATE + audit
+            // INSERT semantics as the prior client-side markStickerPrinted().
+            const res = await fetchWithAuth(getEdgeFunctionUrl('sg_mark-printed'), {
+                method: 'POST',
+                body: JSON.stringify({ packing_request_id: requestId, box_id: box.id }),
+            });
+            const json = await res.json();
+            if (!res.ok || !json.success) {
+                throw new Error(json.error || 'Failed to mark sticker as printed');
+            }
             setStickerData(null);
             await loadData();
             setMessage({ type: 'success', text: `Sticker printed for Box #${box.box_number} (${box.packing_id})` });
@@ -302,9 +310,22 @@ ${stickerPages}
                 if (printWindow.closed) {
                     clearInterval(checkClosed);
                     try {
-                        // Mark all printed boxes in DB
-                        for (const boxId of boxIds) {
-                            await svc.markStickerPrinted(requestId, boxId);
+                        // Migrated to server-side edge function `sg_mark-all-printed`.
+                        // Business logic unchanged — the server runs the same
+                        // batch UPDATE + single audit INSERT pattern that
+                        // `markAllStickersPrinted()` uses, scoped to the exact
+                        // box_ids that were printed in this batch. Replaces the
+                        // prior per-box sequential loop (N DB round trips).
+                        const res = await fetchWithAuth(getEdgeFunctionUrl('sg_mark-all-printed'), {
+                            method: 'POST',
+                            body: JSON.stringify({
+                                packing_request_id: requestId,
+                                box_ids: boxIds,
+                            }),
+                        });
+                        const json = await res.json();
+                        if (!res.ok || !json.success) {
+                            throw new Error(json.error || 'Failed to update print status');
                         }
                         await loadData();
                         setMessage({ type: 'success', text: `All ${boxIds.length} sticker(s) ${reprintAll ? 'reprinted' : 'printed'} successfully.` });

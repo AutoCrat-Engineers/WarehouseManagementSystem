@@ -29,31 +29,6 @@ export type SessionType =
 
 export type SessionStatus = 'draft' | 'in_progress' | 'completed' | 'abandoned';
 
-export interface OperationSession {
-    id: string;
-    session_type: SessionType;
-    status: SessionStatus;
-    version: number;
-    session_data: Record<string, any>;
-    user_id: string;
-    entity_id: string | null;
-    entity_type: string | null;
-    created_at: string;
-    updated_at: string;
-    last_activity_at: string;
-    completed_at: string | null;
-    expires_at: string | null;
-}
-
-export interface SessionEvent {
-    id: string;
-    session_id: string;
-    event_type: string;
-    event_data: Record<string, any>;
-    version_at: number;
-    created_at: string;
-}
-
 // ── Error types returned by the Edge Function ──
 
 export type SessionErrorCode =
@@ -214,32 +189,6 @@ export async function updateSession(
 }
 
 /**
- * Fetch the active session for a given type and optional entity.
- */
-export async function fetchActiveSession(
-    sessionType: SessionType,
-    entityId?: string
-): Promise<OperationSession | null> {
-    const params: Record<string, string> = { session_type: sessionType };
-    if (entityId) params.entity_id = entityId;
-
-    const result = await edgeFetch<{ session: OperationSession | null }>('/active', 'GET', undefined, params);
-    return result.session;
-}
-
-/**
- * Fetch a session by ID.
- */
-export async function getSession(
-    sessionId: string
-): Promise<OperationSession> {
-    const result = await edgeFetch<{ session: OperationSession }>('/get', 'GET', undefined, {
-        session_id: sessionId,
-    });
-    return result.session;
-}
-
-/**
  * Mark a session as completed. No further updates allowed.
  */
 export async function completeSession(sessionId: string): Promise<void> {
@@ -251,26 +200,4 @@ export async function completeSession(sessionId: string): Promise<void> {
  */
 export async function abandonSession(sessionId: string): Promise<void> {
     await edgeFetch('/abandon', 'POST', { session_id: sessionId });
-}
-
-/**
- * Get the audit log for a session.
- */
-export async function getSessionEvents(
-    sessionId: string,
-    limit = 50
-): Promise<SessionEvent[]> {
-    const result = await edgeFetch<{ events: SessionEvent[] }>('/events', 'GET', undefined, {
-        session_id: sessionId,
-        limit: String(limit),
-    });
-    return result.events;
-}
-
-/**
- * Admin: cleanup expired sessions.
- */
-export async function cleanupExpiredSessions(): Promise<number> {
-    const result = await edgeFetch<{ cleaned: number }>('/cleanup', 'POST');
-    return result.cleaned;
 }
