@@ -1,6 +1,6 @@
 services:
   frontend:
-    image: autocratwms.azurecr.io/wms-service:latest
+    image: warehouseae.azurecr.io/wms-service:latest
     container_name: wms
     ports:
       - "8080:80"
