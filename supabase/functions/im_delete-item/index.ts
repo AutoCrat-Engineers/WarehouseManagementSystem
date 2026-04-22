@@ -115,10 +115,14 @@ export async function handler(req: Request): Promise<Response> {
     }
 
     // ── Step 3: soft delete ──────────────────────────────────────────
+    // deleted_at added in migration 018 — this is the authoritative
+    // "when was this item deactivated?" timestamp. Queries should filter
+    // on deleted_at IS NULL to exclude soft-deleted rows.
     const { error: updateError } = await db
       .from('items')
       .update({
         is_active: false,
+        deleted_at: new Date().toISOString(),
         deleted_by: userId,
         updated_at: new Date().toISOString(),
       })

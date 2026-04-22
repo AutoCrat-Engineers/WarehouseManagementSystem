@@ -92,6 +92,22 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
     const [wizardLoading, setWizardLoading] = useState(false);
     const [saving, setSaving] = useState(false);
 
+    // BPA auto-suggestion (filtered, sorted by earliest expiry → creation date)
+    // Pre-fills purchase_order_number when the wizard opens if field is empty.
+    interface BpaSuggestion {
+        agreement_id:     string;
+        agreement_number: string;
+        revision:         number;
+        status:           string;
+        agreement_date:   string;
+        effective_end_date: string;
+        pending_quantity: number;
+        blanket_quantity: number;
+        part_number:      string;
+    }
+    const [bpaSuggestions, setBpaSuggestions] = useState<BpaSuggestion[]>([]);
+    const [bpaDropdownOpen, setBpaDropdownOpen] = useState(false);
+
     // Summary
     const [summary, setSummary] = useState({ total: 0, pending: 0, printed: 0, dispatched: 0 });
 
@@ -202,6 +218,100 @@ export function MasterPackingListHome({ userRole, userPerms = {}, onNavigate }: 
                     };
                 });
                 setEnrichedPallets(enriched);
+
+                // ── BPA auto-suggestion ──────────────────────────────────────
+                // For the distinct part_numbers on this MPL, find eligible BPAs:
+                //   status in ACTIVE / AMENDED, not expired, pending qty > 0.
+                // Sort: effective_end_date ASC (expiring first), then
+                // created_at ASC (oldest first). Pre-fill the BPA input with
+                // the first suggestion if it's currently empty.
+                try {
+                    const partNumbers = [...new Set(
+                        (enriched || []).map((p) => p.part_number || p.item_code).filter(Boolean)
+                    )];
+                    if (partNumbers.length > 0) {
+                        const today = new Date().toISOString().slice(0, 10);
+                        const { data: agrParts } = await supabase
+                            .from('customer_agreement_parts')
+                            .select(`
+                                part_number,
+                                blanket_quantity,
+                                agreement:customer_agreements!inner (
+                                    id, agreement_number, agreement_revision,
+                                    status, agreement_date, effective_end_date, created_at
+                                )
+                            `)
+                            .in('part_number', partNumbers)
+                            .eq('is_active', true);
+
+                        const agreementIds = [...new Set(
+                            (agrParts || []).map((r: any) => r.agreement?.id).filter(Boolean)
+                        )];
+                        // Also fetch line config for pending_quantity (per agreement × part)
+                        const { data: lcs } = agreementIds.length > 0 ? await supabase
+                            .from('blanket_order_line_configs')
+                            .select('agreement_id, part_number, pending_quantity')
+                            .in('agreement_id', agreementIds)
+                            .in('part_number', partNumbers)
+                            : { data: [] as any[] };
+                        const pendingMap = new Map<string, number>();
+                        for (const lc of (lcs || [])) {
+                            pendingMap.set(`${lc.agreement_id}|${lc.part_number}`, lc.pending_quantity ?? 0);
+                        }
+
+                        const suggestions: BpaSuggestion[] = ((agrParts || []) as any[])
+                            .map((r: any) => {
+                                const a = r.agreement || {};
+                                // Fallback pending = full blanket qty if no line config yet
+                                const pending = pendingMap.has(`${a.id}|${r.part_number}`)
+                                    ? pendingMap.get(`${a.id}|${r.part_number}`)!
+                                    : (r.blanket_quantity ?? 0);
+                                return {
+                                    agreement_id:       a.id,
+                                    agreement_number:   a.agreement_number,
+                                    revision:           a.agreement_revision ?? 0,
+                                    status:             a.status,
+                                    agreement_date:     a.agreement_date,
+                                    effective_end_date: a.effective_end_date,
+                                    pending_quantity:   pending,
+                                    blanket_quantity:   r.blanket_quantity ?? 0,
+                                    part_number:        r.part_number,
+                                };
+                            })
+                            // Filter: eligible to ship against
+                            .filter((s) =>
+                                ['ACTIVE', 'AMENDED'].includes(s.status) &&
+                                s.effective_end_date >= today &&
+                                s.pending_quantity > 0
+                            )
+                            // Sort: soonest to expire, then oldest agreement first
+                            .sort((a, b) => {
+                                if (a.effective_end_date !== b.effective_end_date) {
+                                    return a.effective_end_date < b.effective_end_date ? -1 : 1;
+                                }
+                                return a.agreement_date.localeCompare(b.agreement_date);
+                            });
+
+                        setBpaSuggestions(suggestions);
+
+                        // Pre-fill if field is empty and we have a top suggestion
+                        if (suggestions.length > 0) {
+                            setDispatchForm((prev) => ({
+                                ...prev,
+                                purchase_order_number: prev.purchase_order_number
+                                    || suggestions[0].agreement_number,
+                                purchase_order_date: prev.purchase_order_date
+                                    || suggestions[0].agreement_date,
+                            }));
+                        }
+                    } else {
+                        setBpaSuggestions([]);
+                    }
+                } catch (bpaErr) {
+                    // Non-critical — BPA field stays manual
+                    console.warn('[BPA suggestions] fetch failed:', bpaErr);
+                    setBpaSuggestions([]);
+                }
             }
         } catch (err: any) { setError(err.message); } finally { setWizardLoading(false); }
     };
@@ -945,9 +1055,87 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
                                 <div style={{ marginBottom: 20 }}>
                                     <div style={{ fontSize: 11, fontWeight: 700, color: '#1e3a8a', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}><FileText size={12} /> Blanket Purchase Agreement Details</div>
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                                        <div>
-                                            <label style={{ ...lbl, color: '#374151' }}>BPA Number (SAP) <span style={{ color: '#ef4444' }}>*</span></label>
-                                            <input value={dispatchForm.purchase_order_number} onChange={e => updateDispatchField('purchase_order_number', e.target.value)} style={{ ...inp, borderColor: !dispatchForm.purchase_order_number ? '#fca5a5' : '#d1d5db', borderRadius: 10, padding: '10px 14px', borderWidth: 2, transition: 'border-color 0.15s' }} placeholder="260067798" onFocus={e => e.currentTarget.style.borderColor = '#1e3a8a'} onBlur={e => e.currentTarget.style.borderColor = !dispatchForm.purchase_order_number ? '#fca5a5' : '#d1d5db'} />
+                                        <div style={{ position: 'relative' }}>
+                                            <label style={{ ...lbl, color: '#374151', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                BPA Number (SAP) <span style={{ color: '#ef4444' }}>*</span>
+                                                {bpaSuggestions.length > 0 && (
+                                                    <span style={{ fontSize: 10, fontWeight: 600, color: '#059669', background: '#dcfce7', padding: '2px 6px', borderRadius: 4 }}>
+                                                        {bpaSuggestions.length} suggested
+                                                    </span>
+                                                )}
+                                            </label>
+                                            <div style={{ position: 'relative' }}>
+                                                <input
+                                                    value={dispatchForm.purchase_order_number}
+                                                    onChange={e => updateDispatchField('purchase_order_number', e.target.value)}
+                                                    onFocus={(e) => { e.currentTarget.style.borderColor = '#1e3a8a'; if (bpaSuggestions.length > 0) setBpaDropdownOpen(true); }}
+                                                    onBlur={(e) => { e.currentTarget.style.borderColor = !dispatchForm.purchase_order_number ? '#fca5a5' : '#d1d5db'; setTimeout(() => setBpaDropdownOpen(false), 200); }}
+                                                    style={{ ...inp, borderColor: !dispatchForm.purchase_order_number ? '#fca5a5' : '#d1d5db', borderRadius: 10, padding: '10px 36px 10px 14px', borderWidth: 2, transition: 'border-color 0.15s', width: '100%' }}
+                                                    placeholder="260067798"
+                                                />
+                                                {bpaSuggestions.length > 0 && (
+                                                    <button
+                                                        type="button"
+                                                        onMouseDown={(e) => { e.preventDefault(); setBpaDropdownOpen((o) => !o); }}
+                                                        style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', color: '#6b7280' }}
+                                                        title="Show suggested BPAs"
+                                                    >
+                                                        <ChevronDown size={16} />
+                                                    </button>
+                                                )}
+                                                {bpaDropdownOpen && bpaSuggestions.length > 0 && (
+                                                    <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, background: 'white', border: '1px solid #d1d5db', borderRadius: 10, boxShadow: '0 8px 16px rgba(0,0,0,0.08)', maxHeight: 280, overflowY: 'auto', zIndex: 10 }}>
+                                                        <div style={{ padding: '8px 12px', fontSize: 11, color: '#6b7280', borderBottom: '1px solid #e5e7eb', background: '#f9fafb' }}>
+                                                            Sorted by earliest expiry • showing BPAs with pending qty
+                                                        </div>
+                                                        {bpaSuggestions.map((s, idx) => {
+                                                            const isSelected = dispatchForm.purchase_order_number === s.agreement_number;
+                                                            return (
+                                                                <div
+                                                                    key={s.agreement_id}
+                                                                    onMouseDown={(e) => {
+                                                                        e.preventDefault();
+                                                                        setDispatchForm((prev) => ({
+                                                                            ...prev,
+                                                                            purchase_order_number: s.agreement_number,
+                                                                            purchase_order_date: s.agreement_date || prev.purchase_order_date,
+                                                                        }));
+                                                                        setBpaDropdownOpen(false);
+                                                                    }}
+                                                                    style={{
+                                                                        padding: '10px 12px',
+                                                                        cursor: 'pointer',
+                                                                        borderBottom: idx < bpaSuggestions.length - 1 ? '1px solid #f3f4f6' : 'none',
+                                                                        background: isSelected ? '#eff6ff' : 'white',
+                                                                        transition: 'background 0.1s',
+                                                                    }}
+                                                                    onMouseEnter={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = '#f9fafb'; }}
+                                                                    onMouseLeave={(e) => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = 'white'; }}
+                                                                >
+                                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                                                                        <div style={{ fontWeight: 700, color: '#1e3a8a', fontFamily: 'monospace', fontSize: 13 }}>
+                                                                            {s.agreement_number}
+                                                                            <span style={{ fontWeight: 400, color: '#6b7280', marginLeft: 4, fontSize: 11 }}>rev {s.revision}</span>
+                                                                        </div>
+                                                                        {idx === 0 && <span style={{ fontSize: 10, fontWeight: 600, color: '#059669', background: '#dcfce7', padding: '2px 6px', borderRadius: 4 }}>DEFAULT</span>}
+                                                                        {isSelected && idx > 0 && <span style={{ fontSize: 10, color: '#1e3a8a' }}>✓ selected</span>}
+                                                                    </div>
+                                                                    <div style={{ fontSize: 11, color: '#6b7280', display: 'flex', gap: 12 }}>
+                                                                        <span>{s.pending_quantity.toLocaleString()} / {s.blanket_quantity.toLocaleString()} pending</span>
+                                                                        <span>· expires {new Date(s.effective_end_date).toLocaleDateString()}</span>
+                                                                        <span style={{ color: s.status === 'AMENDED' ? '#d97706' : '#059669', fontWeight: 600 }}>{s.status}</span>
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            {bpaSuggestions.length === 0 && dispatchForm.purchase_order_number === '' && (
+                                                <p style={{ fontSize: 11, color: '#d97706', marginTop: 4 }}>
+                                                    ⚠ No active BPA found for these part(s). Enter manually or add a BPA in BPA Management.
+                                                </p>
+                                            )}
                                         </div>
                                         <div>
                                             <label style={{ ...lbl, color: '#374151' }}>PO Date</label>

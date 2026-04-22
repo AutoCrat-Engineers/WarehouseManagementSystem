@@ -64,10 +64,13 @@ export async function handler(req: Request): Promise<Response> {
 
     // ── PHASE 2: Parallel fetch — item, boxes, audit logs ──────────────
     const [itemResult, boxesResult, auditResult] = await Promise.all([
+      // items.item_code was dropped in migration 018 — packing_requests.item_code
+      // now stores the part_number value, so we match on part_number directly.
       db.from('items')
         .select('item_name, part_number, master_serial_no, revision')
-        .eq('item_code', (reqData as any).item_code)
-        .single(),
+        .eq('part_number', (reqData as any).item_code)
+        .is('deleted_at', null)
+        .maybeSingle(),
       db.from('packing_boxes')
         .select('*')
         .eq('packing_request_id', requestId)

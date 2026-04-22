@@ -24,7 +24,7 @@ import { getCorsHeaders } from '../_shared/cors.ts';
 // Mirrors ItemFormData in utils/api/itemsSupabase.ts.  All fields are
 // forwarded verbatim to the DB without transformation.
 interface ItemFormData {
-  item_code: string;
+  // item_code: REMOVED in migration 018. part_number is canonical + unique.
   item_name: string;
   uom: string;
   unit_price: number | null;
@@ -34,7 +34,7 @@ interface ItemFormData {
   is_active: boolean;
   master_serial_no: string | null;
   revision: string | null;
-  part_number: string | null;
+  part_number: string;  // now required + unique
 }
 
 interface UpsertItemBody {

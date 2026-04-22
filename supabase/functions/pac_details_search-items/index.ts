@@ -65,12 +65,14 @@ export async function handler(req: Request): Promise<Response> {
       db.from('packing_specifications')
         .select('item_id')
         .range(0, 99999),
+      // item_code dropped in migration 018 — part_number is canonical.
+      // Alias part_number AS item_code for backward compat with callers.
       db.from('items')
-        .select('id, item_code, item_name, master_serial_no, part_number, is_active')
+        .select('id, item_name, master_serial_no, part_number, is_active, item_code:part_number')
         .eq('is_active', true)
+        .is('deleted_at', null)
         .or(
-          `item_code.ilike.%${q}%,item_name.ilike.%${q}%,` +
-            `master_serial_no.ilike.%${q}%,part_number.ilike.%${q}%`,
+          `item_name.ilike.%${q}%,master_serial_no.ilike.%${q}%,part_number.ilike.%${q}%`,
         )
         .limit(10),
     ]);

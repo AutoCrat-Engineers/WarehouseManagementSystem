@@ -211,17 +211,21 @@ export async function fetchMasterPackingLists(filters?: {
     const { data, error, count } = await query;
     if (error) throw error;
 
-    // Secondary lookup: fetch master_serial_no from items table
+    // Secondary lookup: fetch master_serial_no from items table.
+    // items.item_code was dropped in migration 018 — part_number is canonical.
+    // master_packing_lists.item_code stores the part_number value, so match on
+    // part_number and alias it AS item_code for the downstream map keys.
     const itemCodes = [...new Set((data || []).map((d: any) => d.item_code).filter(Boolean))];
     let msnMap: Record<string, { msn: string; pn: string }> = {};
     if (itemCodes.length > 0) {
         const { data: items } = await supabase
             .from('items')
-            .select('item_code, master_serial_no, part_number')
-            .in('item_code', itemCodes);
+            .select('item_code:part_number, master_serial_no, part_number')
+            .in('part_number', itemCodes)
+            .is('deleted_at', null);
         if (items) {
             msnMap = Object.fromEntries(items.map((i: any) => [
-                i.item_code, 
+                i.item_code,   // = part_number via alias
                 { msn: i.master_serial_no || '', pn: i.part_number || '' }
             ]));
         }

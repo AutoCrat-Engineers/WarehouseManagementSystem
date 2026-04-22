@@ -127,7 +127,7 @@ function normalizeUom(value: string): string {
 
 /* ========== FORM DEFAULT ========== */
 const formDefault: itemsApi.ItemFormData = {
-  item_code: '',
+  // item_code: removed in migration 018; part_number is canonical.
   item_name: '',
   uom: 'NOS',
   unit_price: null,
@@ -261,19 +261,21 @@ interface DeleteConfirmModalProps {
 }
 
 function DeleteConfirmModal({ isOpen, onClose, onConfirm, item }: DeleteConfirmModalProps) {
-  const [msnInput, setMsnInput] = useState('');
+  // Renamed from msnInput → partNumberInput: delete now keys off part_number
+  // (the canonical unique identifier since item_code was dropped in migration 018).
+  const [partNumberInput, setPartNumberInput] = useState('');
   const [deletionReason, setDeletionReason] = useState('');
   const [error, setError] = useState('');
   const [showFinalConfirm, setShowFinalConfirm] = useState(false);
 
   useEffect(() => {
-    if (isOpen) { setMsnInput(''); setDeletionReason(''); setError(''); setShowFinalConfirm(false); }
+    if (isOpen) { setPartNumberInput(''); setDeletionReason(''); setError(''); setShowFinalConfirm(false); }
   }, [isOpen]);
 
   const handleConfirm = () => {
     if (!item) return;
-    if (msnInput.trim() !== (item.master_serial_no || '')) {
-      setError('MSN does not match. Please enter the exact Master Serial Number to confirm deletion.');
+    if (partNumberInput.trim() !== (item.part_number || '')) {
+      setError('Part Number does not match. Please enter the exact Part Number to confirm deletion.');
       return;
     }
     if (!deletionReason.trim()) {
@@ -314,20 +316,21 @@ function DeleteConfirmModal({ isOpen, onClose, onConfirm, item }: DeleteConfirmM
           </div>
           <div style={{ background: 'var(--enterprise-gray-50)', borderRadius: 'var(--border-radius-md)', padding: '16px' }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              <div>
-                <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', marginBottom: '4px' }}>MSN</p>
-                <p style={{ fontWeight: 'var(--font-weight-semibold)', fontFamily: 'monospace', color: 'var(--enterprise-primary)' }}>{item.master_serial_no || '-'}</p>
-              </div>
+              {/* Part Number is the canonical identifier — show it first + highlighted */}
               <div>
                 <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', marginBottom: '4px' }}>Part Number</p>
-                <p style={{ fontWeight: 'var(--font-weight-semibold)' }}>{item.part_number || '-'}</p>
+                <p style={{ fontWeight: 'var(--font-weight-semibold)', fontFamily: 'monospace', color: 'var(--enterprise-primary)' }}>{item.part_number || '-'}</p>
+              </div>
+              <div>
+                <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', marginBottom: '4px' }}>MSN</p>
+                <p style={{ fontWeight: 'var(--font-weight-semibold)' }}>{item.master_serial_no || '-'}</p>
               </div>
             </div>
           </div>
           <div>
-            <Label required>Type MSN to Confirm</Label>
-            <input type="text" value={msnInput} onChange={(e) => setMsnInput(e.target.value)} onSelect={(e) => e.stopPropagation()}
-              placeholder={`Enter "${item.master_serial_no || ''}" to confirm`}
+            <Label required>Type Part Number to Confirm</Label>
+            <input type="text" value={partNumberInput} onChange={(e) => setPartNumberInput(e.target.value)} onSelect={(e) => e.stopPropagation()}
+              placeholder={`Enter "${item.part_number || ''}" to confirm`}
               onPaste={(e) => e.preventDefault()} onCopy={(e) => e.preventDefault()} autoComplete="off"
               style={{ width: '100%', padding: '8px 12px', fontSize: 'var(--font-size-base)', color: 'var(--foreground)', backgroundColor: 'var(--background)', border: '1px solid var(--border-color)', borderRadius: 'var(--border-radius-md)', outline: 'none' }}
               onFocus={(e) => { e.target.style.borderColor = 'var(--enterprise-primary)'; e.target.style.boxShadow = '0 0 0 3px rgba(30,58,140,0.1)'; }}
@@ -343,7 +346,7 @@ function DeleteConfirmModal({ isOpen, onClose, onConfirm, item }: DeleteConfirmM
           )}
           <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
             <Button variant="tertiary" onClick={onClose}>Cancel</Button>
-            <Button variant="danger" onClick={handleConfirm} disabled={!msnInput.trim() || !deletionReason.trim()} icon={<Trash2 size={16} />}>Delete Item</Button>
+            <Button variant="danger" onClick={handleConfirm} disabled={!partNumberInput.trim() || !deletionReason.trim()} icon={<Trash2 size={16} />}>Delete Item</Button>
           </div>
         </div>
       </Modal>
@@ -363,7 +366,7 @@ function DeleteConfirmModal({ isOpen, onClose, onConfirm, item }: DeleteConfirmM
               Do you want to delete this item?
             </p>
             <p style={{ fontSize: '13px', color: 'var(--enterprise-gray-500)', lineHeight: 1.5 }}>
-              Item <strong style={{ color: 'var(--enterprise-primary)', fontFamily: 'monospace' }}>{item.master_serial_no || '-'}</strong> will be permanently removed.
+              Item <strong style={{ color: 'var(--enterprise-primary)', fontFamily: 'monospace' }}>{item.part_number || '-'}</strong> will be permanently removed.
             </p>
           </div>
           <div style={{ display: 'flex', gap: '12px', width: '100%', justifyContent: 'center' }}>
@@ -447,46 +450,85 @@ function ItemViewModal({ isOpen, onClose, item }: {
 }) {
   const [activeTab, setActiveTab] = useState<'details' | 'multiWarehouseStock' | 'blanketOrders' | 'blanketRelease'>('details');
   const [blanketOrders, setBlanketOrders] = useState<BlanketOrder[]>([]);
+  const [subInvoiceLines, setSubInvoiceLines] = useState<any[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
+  const [loadingReleases, setLoadingReleases] = useState(false);
   const [blanketSearch, setBlanketSearch] = useState('');
 
   // Eagerly fetch stock distribution when modal opens (not only on tab switch)
   // This eliminates the loading delay when user switches to Multi Warehouse tab
   const { data: distribution, loading: loadingDistribution } = useItemStockDistribution(
-    isOpen && item ? item.item_code : null
+    isOpen && item ? item.part_number : null
   );
 
   useEffect(() => { if (!isOpen) { setBlanketSearch(''); setActiveTab('details'); } }, [isOpen]);
 
   useEffect(() => {
-    if (isOpen && item && activeTab === 'blanketOrders') fetchBlanketOrders();
+    if (isOpen && item && (activeTab === 'blanketOrders' || activeTab === 'blanketRelease')) {
+      fetchItemDetail();
+    }
   }, [isOpen, item, activeTab]);
 
-  const fetchBlanketOrders = async () => {
+  // Backed by the new `item_get_full_detail` edge function (replaces the
+  // broken `im_get-blanket-orders` which queried the dropped v_item_details
+  // view). One call hydrates BOTH the Blanket Orders tab and the Blanket
+  // Release tab.
+  const fetchItemDetail = async () => {
     if (!item) return;
     setLoadingOrders(true);
+    setLoadingReleases(true);
     try {
-      // Backed by `im_get-blanket-orders` edge function.  The server-side
-      // query already filters blanket_order_id IS NOT NULL — the client
-      // no longer needs to do the direct v_item_details SELECT.
-      const res = await fetchWithAuth(getEdgeFunctionUrl('im_get-blanket-orders'), {
+      const res = await fetchWithAuth(getEdgeFunctionUrl('item_get_full_detail'), {
         method: 'POST',
         body: JSON.stringify({ item_id: item.id }),
       });
       const json = await res.json();
-      if (!res.ok || !json?.success) { setBlanketOrders([]); return; }
-      const ordersData = ((json.rows || []) as ViewItemDetails[]);
-      const transformed: BlanketOrder[] = ordersData.map((row: ViewItemDetails, idx: number) => ({
-        id: row.line_id || row.blanket_order_id || `order-${idx}`,
-        sap_doc_no: row.sap_doc_no || 'ΓÇö', master_serial_no: row.master_serial_no || 'ΓÇö', part_number: row.part_number || 'ΓÇö',
-        customer_name: row.customer_name || 'ΓÇö', line_no: row.line_number ?? idx + 1, blanket_order_qty: row.blanket_quantity ?? row.item_quantity ?? 0,
-        customer_po_number: row.customer_po_number || 'ΓÇö', order_date: row.order_date || '',
-        blanket_order_start: row.blanket_order_start || '', blanket_order_end: row.blanket_order_end || '',
-        monthly_usage: row.monthly_usage ?? 0, next_delivery: row.delivery_schedule || '',
-        order_multiples: row.order_multiple ?? 1, min_stock: row.min_stock ?? 0, max_stock: row.max_stock ?? 0, safety_stock: row.safety_stock ?? 0,
-      }));
+      if (!res.ok || !json?.success) {
+        setBlanketOrders([]); setSubInvoiceLines([]); return;
+      }
+      // Transform: one BlanketOrder per agreement_part (each part belongs
+      // to exactly one agreement). Line-config supplies running totals.
+      const agreementParts = (json.agreements || []) as any[];
+      const lineConfigs    = (json.line_configs || []) as any[];
+      const lineByAgr = new Map<string, any>();
+      for (const lc of lineConfigs) lineByAgr.set(lc.agreement_id, lc);
+
+      const transformed: BlanketOrder[] = agreementParts.map((p: any, idx: number) => {
+        const agr = p.agreement || {};
+        const lc  = lineByAgr.get(p.agreement_id) ?? {};
+        return {
+          id:                  p.id,
+          sap_doc_no:          agr.agreement_number || '—',
+          master_serial_no:    p.msn_code || '—',
+          part_number:         p.part_number || '—',
+          customer_name:       agr.customer_name || '—',
+          line_no:             p.line_number ?? idx + 1,
+          blanket_order_qty:   p.blanket_quantity ?? 0,
+          customer_po_number:  agr.agreement_number || '—',
+          order_date:          agr.effective_start_date || '',
+          blanket_order_start: agr.effective_start_date || '',
+          blanket_order_end:   agr.effective_end_date   || '',
+          monthly_usage:       Number(p.avg_monthly_demand ?? 0),
+          next_delivery:       '',
+          order_multiples:     p.release_multiple ?? 1,
+          min_stock:           p.min_warehouse_stock ?? 0,
+          max_stock:           p.max_warehouse_stock ?? 0,
+          safety_stock:        p.safety_stock ?? 0,
+          // New fields carrying running totals (extend BlanketOrder
+          // interface if the UI wants to render them).
+          _released_quantity:  lc.released_quantity ?? 0,
+          _pending_quantity:   lc.pending_quantity  ?? (p.blanket_quantity ?? 0),
+          _fulfillment_pct:    lc.fulfillment_pct   ?? 0,
+          _agreement_status:   agr.status || 'UNKNOWN',
+        } as any;
+      });
       setBlanketOrders(transformed);
-    } catch { setBlanketOrders([]); } finally { setLoadingOrders(false); }
+      setSubInvoiceLines((json.sub_invoice_lines || []) as any[]);
+    } catch {
+      setBlanketOrders([]); setSubInvoiceLines([]);
+    } finally {
+      setLoadingOrders(false); setLoadingReleases(false);
+    }
   };
 
   if (!item) return null;
@@ -707,19 +749,65 @@ function ItemViewModal({ isOpen, onClose, item }: {
         </div>
       </div>
 
-      {/* ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ TAB 4: BLANKET RELEASE ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ */}
+      {/* ══════ TAB 4: BLANKET RELEASE (sub-invoices for this part) ══════ */}
       <div style={tabContentStyle('blanketRelease')}>
-        <div style={{ textAlign: 'center', padding: '60px 40px', background: 'var(--enterprise-gray-50)', borderRadius: 'var(--border-radius-lg)' }}>
-          <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: 'linear-gradient(135deg, var(--enterprise-gray-200) 0%, var(--enterprise-gray-300) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
-            <Clock size={36} style={{ color: 'var(--enterprise-gray-500)' }} />
+        {loadingReleases ? (
+          <div style={{ textAlign: 'center', padding: '40px' }}>
+            <LoadingSpinner size={32} />
+            <p style={{ marginTop: '12px', color: 'var(--enterprise-gray-600)' }}>Loading releases…</p>
           </div>
-          <h3 style={{ color: 'var(--enterprise-gray-700)', marginBottom: '8px' }}>Blanket Release</h3>
-          <p style={{ color: 'var(--enterprise-gray-500)', fontSize: 'var(--font-size-sm)', maxWidth: '450px', margin: '0 auto', lineHeight: 1.6 }}>
-            This section will display delivery details and support planning for future deliveries.
-            <br /><strong>Implementation begins after the Delivery module is ready.</strong>
-          </p>
-          <Badge variant="neutral" style={{ marginTop: '20px' }}>Pending Delivery Module</Badge>
-        </div>
+        ) : subInvoiceLines.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '60px 40px', background: 'var(--enterprise-gray-50)', borderRadius: 'var(--border-radius-lg)' }}>
+            <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: 'linear-gradient(135deg, var(--enterprise-gray-200) 0%, var(--enterprise-gray-300) 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
+              <Clock size={36} style={{ color: 'var(--enterprise-gray-500)' }} />
+            </div>
+            <h3 style={{ color: 'var(--enterprise-gray-700)', marginBottom: '8px' }}>No Releases Yet</h3>
+            <p style={{ color: 'var(--enterprise-gray-500)', fontSize: 'var(--font-size-sm)', maxWidth: '450px', margin: '0 auto', lineHeight: 1.6 }}>
+              This part has not yet been released to a customer. Releases will appear here as sub-invoices are issued against an existing BPA.
+            </p>
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <div style={{ marginBottom: '12px', color: 'var(--enterprise-gray-600)', fontSize: '13px' }}>
+              <strong>{subInvoiceLines.length}</strong> release{subInvoiceLines.length !== 1 ? 's' : ''} for this part
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+              <thead>
+                <tr style={{ background: 'var(--enterprise-gray-50)', borderBottom: '1px solid var(--enterprise-gray-200)' }}>
+                  <th style={thStyle}>Sub-Invoice #</th>
+                  <th style={thStyle}>Date</th>
+                  <th style={thStyle}>Customer PO</th>
+                  <th style={thStyle}>Buyer</th>
+                  <th style={thStyle}>Qty</th>
+                  <th style={thStyle}>Pallets</th>
+                  <th style={thStyle}>Amount</th>
+                  <th style={thStyle}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {subInvoiceLines.map((line: any) => {
+                  const si = line.sub_invoice || {};
+                  return (
+                    <tr key={line.id} style={{ borderBottom: '1px solid var(--enterprise-gray-100)' }}>
+                      <td style={tdStyle}><strong>{si.sub_invoice_number ?? '—'}</strong></td>
+                      <td style={tdStyle}>{si.sub_invoice_date ? new Date(si.sub_invoice_date).toLocaleDateString() : '—'}</td>
+                      <td style={tdStyle}>{si.customer_po_number ?? '—'}</td>
+                      <td style={tdStyle}>{si.buyer_name ?? '—'}</td>
+                      <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600 }}>{(line.quantity ?? 0).toLocaleString()}</td>
+                      <td style={{ ...tdStyle, textAlign: 'right' }}>{line.pallet_count ?? 0}</td>
+                      <td style={{ ...tdStyle, textAlign: 'right' }}>{si.currency_code ?? 'USD'} {(line.line_total ?? 0).toLocaleString()}</td>
+                      <td style={tdStyle}>
+                        <Badge variant={si.status === 'PICKED_UP' ? 'success' : si.status === 'CANCELLED' ? 'danger' : 'neutral'}>
+                          {si.status ?? '—'}
+                        </Badge>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}><Button variant="primary" onClick={onClose}>Close</Button></div>
@@ -929,7 +1017,8 @@ export function UnifiedItemMaster({ userRole, userPerms = {} }: UnifiedItemMaste
     // Map display UOM back to DB value
     const dbUom = normalizedUom === 'NOS' ? 'NOS' : normalizedUom === 'Boxes' ? 'BOX' : normalizedUom;
 
-    const itemMsn = formData.master_serial_no || formData.part_number || formData.item_code;
+    // Part number is canonical; fall back to MSN only if part_number missing
+    const itemMsn = formData.part_number || formData.master_serial_no;
     const submitData = { ...formData, uom: dbUom, weight: weightStr ? parseFloat(weightStr) : null, unit_price: unitPriceStr ? parseFloat(unitPriceStr) : null, standard_cost: standardCostStr ? parseFloat(standardCostStr) : null };
     const result = editingItem ? await itemsApi.updateItem(editingItem.id, submitData) : await itemsApi.createItem(submitData);
     if (result.error) { showToast('error', isEditing ? 'Update Failed' : 'Creation Failed', result.error); return; }
@@ -944,7 +1033,6 @@ export function UnifiedItemMaster({ userRole, userPerms = {} }: UnifiedItemMaste
     setUnitPriceStr(item.unit_price != null ? String(item.unit_price) : '');
     setStandardCostStr(item.standard_cost != null ? String(item.standard_cost) : '');
     const data: itemsApi.ItemFormData = {
-      item_code: item.item_code,
       item_name: item.item_name || '',
       uom: item.uom,
       unit_price: item.unit_price ?? null,
@@ -954,7 +1042,7 @@ export function UnifiedItemMaster({ userRole, userPerms = {} }: UnifiedItemMaste
       is_active: item.is_active,
       master_serial_no: item.master_serial_no || '',
       revision: item.revision || '',
-      part_number: item.part_number || '',
+      part_number: item.part_number,
     };
     setFormData(data);
     setOriginalFormData(data);
@@ -964,7 +1052,7 @@ export function UnifiedItemMaster({ userRole, userPerms = {} }: UnifiedItemMaste
   const handleDeleteClick = (item: Item) => { setItemToDelete(item); setShowDeleteModal(true); };
   const handleDeleteConfirm = async (reason: string) => {
     if (!itemToDelete) return;
-    const itemMsn = itemToDelete.part_number || itemToDelete.master_serial_no || itemToDelete.item_code;
+    const itemMsn = itemToDelete.part_number || itemToDelete.master_serial_no;
     const result = await itemsApi.deleteItem(itemToDelete.id, reason);
     if (result.error) { showToast('error', 'Deletion Failed', result.error); }
     else { showToast('success', 'Item Deactivated', `Item "${itemMsn}" has been deactivated. It stays in history for audit and can be restored if needed.`); fetchItems(); }

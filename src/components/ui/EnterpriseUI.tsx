@@ -6,9 +6,11 @@ interface CardProps {
   hover?: boolean;
   className?: string;
   style?: CSSProperties;
+  onClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
+  onMouseDown?: (e: React.MouseEvent<HTMLDivElement>) => void;
 }
 
-export function Card({ children, hover = false, className = '', style = {} }: CardProps) {
+export function Card({ children, hover = false, className = '', style = {}, onClick, onMouseDown }: CardProps) {
   const [isHovered, setIsHovered] = React.useState(false);
 
   return (
@@ -23,6 +25,8 @@ export function Card({ children, hover = false, className = '', style = {} }: Ca
         transition: 'all var(--transition-fast)',
         ...style,
       }}
+      onClick={onClick}
+      onMouseDown={onMouseDown}
       onMouseEnter={() => hover && setIsHovered(true)}
       onMouseLeave={() => hover && setIsHovered(false)}
     >

@@ -85,7 +85,7 @@ export function RackView({ userRole, userPerms = {} }: RackViewProps) {
     const ohMap = useMemo(() => { const m = new Map<string, number>(); for (const i of dashItems) { if (i.masterSerialNo) m.set(i.masterSerialNo, i.usTransitStock ?? 0); } return m; }, [dashItems]);
     const allocMap = useMemo(() => { const m = new Map<string, number>(); for (const es of Object.values(rackData)) for (const e of es) m.set(e.msn, (m.get(e.msn) || 0) + e.qty); return m; }, [rackData]);
 
-    useEffect(() => { (async () => { setMsnLoading(true); try { const sb = getSupabaseClient(); const { data } = await sb.from('items').select('id, master_serial_no, item_name, item_code, part_number').eq('is_active', true).not('master_serial_no', 'is', null).order('master_serial_no', { ascending: true }); setMsnItems((data || []).filter((i: any) => i.master_serial_no) as MsnItem[]); } catch { } finally { setMsnLoading(false); } })(); }, []);
+    useEffect(() => { (async () => { setMsnLoading(true); try { const sb = getSupabaseClient(); const { data } = await sb.from('items').select('id, master_serial_no, item_name, part_number, item_code:part_number').eq('is_active', true).not('master_serial_no', 'is', null).order('master_serial_no', { ascending: true }); setMsnItems((data || []).filter((i: any) => i.master_serial_no) as MsnItem[]); } catch { } finally { setMsnLoading(false); } })(); }, []);
 
     const rackKeys = useMemo(() => Object.keys(locCounts).sort(), [locCounts]);
     useEffect(() => { setRackData(prev => { const u = { ...prev }; for (const k of Object.keys(locCounts)) { if (!u[k]) u[k] = []; } return u; }); }, [locCounts]);
