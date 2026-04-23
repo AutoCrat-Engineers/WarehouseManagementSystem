@@ -90,12 +90,19 @@ export interface AvailablePallet {
     days_in_rack:           number | null;
     parent_invoice_id:      string | null;
     parent_invoice_number:  string | null;
+    parent_invoice_date:    string | null;
+    parent_invoice_line_id: string | null;
+    parent_invoiced_qty:    number | null;
+    parent_released_qty:    number | null;
+    parent_pending_qty:     number | null;
+    parent_unit_price:      number | null;
     agreement_id:           string | null;
     agreement_number:       string | null;
     packing_list_number:    string | null;
     blanket_order_id:       string | null;
     blanket_order_number:   string | null;
     is_oldest_shipment:     boolean;
+    gr_number:              string | null;
 }
 
 export interface FifoSuggestion {

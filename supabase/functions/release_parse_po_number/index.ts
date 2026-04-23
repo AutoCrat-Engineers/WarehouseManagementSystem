@@ -68,17 +68,61 @@ export const handler = withErrorHandler(async (req) => {
             .order('line_number')
         : { data: [] };
 
-    // Count available pallets for those parts (in rack, not reserved)
+    // Count available pallets for those parts (in rack, not released).
+    // Source: goods_receipt_lines (rack_location_code NOT NULL) ∩
+    //         pack_pallets in ARRIVED_AT_3PL / IN_3PL_WAREHOUSE ∩
+    //         not in release_pallet_assignments.
     let availablePallets = 0;
     if (agreement && parts && parts.length > 0) {
         const partNumbers = parts.map(p => p.part_number);
-        const { count } = await ctx.db
-            .from('mv_rack_view')
-            .select('rack_location_id', { count: 'exact', head: true })
-            .eq('agreement_id', agreement.id)
+
+        const { data: grLines } = await ctx.db
+            .from('goods_receipt_lines')
+            .select('pallet_id, part_number, bpa_number')
             .in('part_number', partNumbers)
-            .eq('is_available', true);
-        availablePallets = count ?? 0;
+            .not('rack_location_code', 'is', null);
+
+        const candSet = new Set<string>();
+        for (const r of (grLines ?? []) as any[]) {
+            if (r.pallet_id) candSet.add(r.pallet_id);
+        }
+        const candIds = [...candSet];
+
+        if (candIds.length > 0) {
+            const { data: ppRows } = await ctx.db
+                .from('pack_pallets')
+                .select('id')
+                .in('id', candIds)
+                .in('state', ['ARRIVED_AT_3PL', 'IN_3PL_WAREHOUSE']);
+            const stateOk = new Set((ppRows ?? []).map((p: any) => p.id));
+
+            const { data: assigned } = await ctx.db
+                .from('release_pallet_assignments')
+                .select('pallet_id')
+                .in('pallet_id', candIds);
+            const released = new Set((assigned ?? []).map((a: any) => a.pallet_id));
+
+            // Agreement scoping: prefer MPL.po_number match; fall back on
+            // goods_receipt_lines.bpa_number; allow if either equals agreement_number.
+            const { data: mpp } = await ctx.db
+                .from('master_packing_list_pallets')
+                .select('pallet_id, master_packing_lists!inner(po_number)')
+                .in('pallet_id', candIds)
+                .eq('status', 'ACTIVE');
+            const palletPo = new Map<string, string>();
+            for (const r of (mpp ?? []) as any[]) palletPo.set(r.pallet_id, r.master_packing_lists?.po_number);
+
+            const grBpa = new Map<string, string | null>();
+            for (const r of (grLines ?? []) as any[]) {
+                if (r.pallet_id && !grBpa.has(r.pallet_id)) grBpa.set(r.pallet_id, r.bpa_number ?? null);
+            }
+
+            for (const id of candIds) {
+                if (!stateOk.has(id) || released.has(id)) continue;
+                const po = palletPo.get(id) ?? grBpa.get(id);
+                if (!po || po === agreement.agreement_number) availablePallets++;
+            }
+        }
     }
 
     // Duplicate-release check

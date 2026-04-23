@@ -16,7 +16,7 @@ import {
     SummaryCard, SummaryCardsGrid, SearchBox, ActionButton, ActionBar, FilterBar,
     sharedThStyle, sharedTdStyle,
 } from '../ui/SharedComponents';
-import { Card } from '../ui/EnterpriseUI';
+import { Card, ModuleLoader } from '../ui/EnterpriseUI';
 import { Badge } from '../ui/badge';
 import { LoadingSpinner } from '../ui/EnterpriseUI';
 import { listBPAs } from './bpaService';
@@ -71,6 +71,16 @@ export function BPAList({ userRole, userPerms = {} }: Props) {
     useEffect(() => { fetchData(); }, [fetchData]);
 
     const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+
+    // First-load: spinning-icon module loader (matches legacy module pattern)
+    if (loading && agreements.length === 0) {
+        return (
+            <ModuleLoader
+                moduleName="Blanket Purchase Agreements"
+                icon={<FileText size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />}
+            />
+        );
+    }
 
     const statusBadge = (status: AgreementStatus) => {
         const variant = status === 'ACTIVE'    ? 'success'

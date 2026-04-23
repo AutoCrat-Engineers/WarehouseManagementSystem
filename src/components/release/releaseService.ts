@@ -67,17 +67,21 @@ export function fifoSuggest(input: {
     return callEdge('release_fifo_suggest', input);
 }
 
-// ── Sub-invoice creation (atomic RPC via edge fn) ─────────────────────
-export function createSubInvoice(input: {
+// ── Sub-invoice creation (v2: multi-invoice allocations) ──────────────
+export interface Allocation {
     parent_invoice_line_id: string;
-    blanket_release_id?:    string;
-    pallet_ids:             string[];
+    pallet_id:              string;
     quantity:               number;
-    customer_po_number:     string;
-    buyer_name?:            string;
-    sub_invoice_date?:      string;
-    notes?:                 string;
-    idempotency_key?:       string;
+}
+
+export function createSubInvoice(input: {
+    allocations:         Allocation[];
+    blanket_release_id?: string;
+    customer_po_number:  string;
+    buyer_name?:         string;
+    sub_invoice_date?:   string;
+    notes?:              string;
+    idempotency_key?:    string;
 }): Promise<{
     sub_invoice_id:         string;
     sub_invoice_number:     string;
@@ -86,9 +90,11 @@ export function createSubInvoice(input: {
     pallet_count:           number;
     quantity:               number;
     total_amount:           number;
+    parent_invoice_count:   number;
 }> {
     return callEdge('sub_invoice_create', input);
 }
+
 
 // ── Tariff ────────────────────────────────────────────────────────────
 export function listTariffInvoices(filters: {

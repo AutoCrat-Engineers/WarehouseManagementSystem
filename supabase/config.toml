@@ -147,6 +147,22 @@ verify_jwt = false
 [functions.tariff_rates_upsert]
 verify_jwt = false
 
+# ── Goods Receipt (Milano 3PL) ──────────────────────────
+[functions.gr_search_proformas]
+verify_jwt = false
+[functions.gr_get_proforma_breakdown]
+verify_jwt = false
+[functions.gr_confirm_receipt]
+verify_jwt = false
+[functions.gr_list_pending_placement]
+verify_jwt = false
+[functions.gr_mark_placed]
+verify_jwt = false
+[functions.pallet_get_back_chain]
+verify_jwt = false
+[functions.rack_load_storage]
+verify_jwt = false
+
 # ── Shared Services ──────────────────────────────────────
 [functions.audit_log_query]
 verify_jwt = false

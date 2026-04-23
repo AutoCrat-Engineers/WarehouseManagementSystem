@@ -38,16 +38,28 @@ export const handler = withErrorHandler(async (req) => {
     if (!v.ok) return errorResponse('VALIDATION_FAILED', v.error, { origin });
 
     // Parse PO
-    const poNumber = String(body.customer_po_number).trim();
-    let poBase = poNumber, releaseSeq: number | null = null;
-    if (poNumber.includes('-')) {
-        const [b, s] = poNumber.split('-');
+    const poInput = String(body.customer_po_number).trim();
+    let poBase = poInput;
+    let releaseSeq: number | null = null;
+    if (poInput.includes('-')) {
+        const [b, s] = poInput.split('-');
         poBase = b;
         releaseSeq = s ? Number(s) : null;
     }
 
-    // Duplicate guard
-    if (releaseSeq !== null) {
+    // Auto-generate sequence when user only pastes the BPA number (no -N suffix).
+    // Convention: <bpa>-<next_seq>, where next_seq = max(existing) + 1 per po_base.
+    if (releaseSeq === null) {
+        const { data: existing } = await ctx.db
+            .from('blanket_releases')
+            .select('release_sequence')
+            .eq('customer_po_base', poBase)
+            .order('release_sequence', { ascending: false, nullsFirst: false })
+            .limit(1);
+        const prev = existing?.[0]?.release_sequence ?? 0;
+        releaseSeq = Number(prev) + 1;
+    } else {
+        // Explicit sequence — duplicate guard
         const { count } = await ctx.db
             .from('blanket_releases')
             .select('id', { count: 'exact', head: true })
@@ -55,9 +67,11 @@ export const handler = withErrorHandler(async (req) => {
             .eq('release_sequence', releaseSeq);
         if ((count ?? 0) > 0) {
             return errorResponse('CONFLICT',
-                `Release ${poNumber} already exists`, { origin });
+                `Release ${poBase}-${releaseSeq} already exists`, { origin });
         }
     }
+
+    const poNumber = `${poBase}-${releaseSeq}`;
 
     // Resolve line_config_id if part_number supplied but line_config_id not
     let lineConfigId = body.line_config_id as string | null;

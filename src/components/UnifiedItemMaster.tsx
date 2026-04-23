@@ -97,22 +97,24 @@ interface ViewItemDetails {
 
 interface BlanketOrder {
   id: string;
-  sap_doc_no: string;
+  bpa_number: string;
   master_serial_no: string;
   part_number: string;
   customer_name: string;
-  line_no: number;
   blanket_order_qty: number;
-  customer_po_number: string;
-  order_date: string;
   blanket_order_start: string;
   blanket_order_end: string;
   monthly_usage: number;
   next_delivery: string;
-  order_multiples: number;
+  release_multiple: number;
   min_stock: number;
   max_stock: number;
   safety_stock: number;
+  // BPA-layer metadata
+  agreement_status: 'ACTIVE' | 'AMENDED' | 'DRAFT' | 'EXPIRED' | 'CANCELLED' | 'UNKNOWN';
+  agreement_revision: number;
+  released_quantity: number;
+  fulfillment_pct: number;
 }
 
 /* ========== UOM NORMALIZER ========== */
@@ -403,34 +405,79 @@ function BlanketOrderRow({ order }: BlanketOrderRowProps) {
             <ChevronRight size={16} style={{ color: isExpanded ? 'white' : 'var(--enterprise-gray-500)' }} />
           </div>
         </div>
-        <div style={{ flex: 3, padding: '12px 20px', borderRight: '1px solid var(--enterprise-gray-100)', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '24px', marginBottom: '8px' }}>
-            <div><p style={upperLabelStyle}>SAP Document No</p><p style={{ ...upperValueStyle, color: 'var(--enterprise-primary)', fontWeight: 700 }}>{order.sap_doc_no}</p></div>
-            <div><p style={upperLabelStyle}>Master Serial No</p><p style={{ ...upperValueStyle, fontFamily: 'monospace' }}>{order.master_serial_no}</p></div>
-            <div><p style={upperLabelStyle}>Part Number</p><p style={{ ...upperValueStyle, color: 'var(--enterprise-info, #3b82f6)', fontWeight: 700, background: 'rgba(59,130,246,0.1)', padding: '2px 8px', borderRadius: '4px', display: 'inline-block' }}>{order.part_number}</p></div>
+        <div style={{ flex: 1, padding: '12px 20px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+          {/* Row 1: BPA NUMBER | MSN | PART NUMBER | STATUS */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 1fr', gap: '20px', marginBottom: '10px' }}>
+            <div>
+              <p style={upperLabelStyle}>BPA Number</p>
+              <p style={{ ...upperValueStyle, color: 'var(--enterprise-primary)', fontWeight: 700, fontFamily: 'monospace' }}>{order.bpa_number}</p>
+            </div>
+            <div>
+              <p style={upperLabelStyle}>Master Serial No</p>
+              <p style={{ ...upperValueStyle, fontFamily: 'monospace' }}>{order.master_serial_no}</p>
+            </div>
+            <div>
+              <p style={upperLabelStyle}>Part Number</p>
+              <p style={{ ...upperValueStyle, color: 'var(--enterprise-info, #3b82f6)', fontWeight: 700, background: 'rgba(59,130,246,0.1)', padding: '2px 8px', borderRadius: '4px', display: 'inline-block' }}>{order.part_number}</p>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <p style={upperLabelStyle}>Status</p>
+              <div style={{ display: 'flex', alignItems: 'center', minHeight: '22px' }}>
+                <Badge variant={
+                  order.agreement_status === 'ACTIVE'    ? 'success' :
+                  order.agreement_status === 'AMENDED'   ? 'warning' :
+                  order.agreement_status === 'DRAFT'     ? 'info'    :
+                  order.agreement_status === 'CANCELLED' ? 'danger'  : 'neutral'
+                } style={{ fontWeight: 700, fontSize: '11px', letterSpacing: '0.5px' }}>
+                  {order.agreement_status === 'UNKNOWN' ? '—' : order.agreement_status}
+                </Badge>
+              </div>
+            </div>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '24px' }}>
-            <div><p style={upperLabelStyle}>Customer Name</p><p style={{ ...upperValueStyle, color: 'var(--enterprise-gray-700)' }}>{order.customer_name}</p></div>
-            <div><p style={upperLabelStyle}>Line No</p><Badge variant="info" style={{ fontWeight: 700, fontSize: '12px' }}>{order.line_no}</Badge></div>
-            <div><p style={upperLabelStyle}>Blanket Quantity</p><p style={{ ...upperValueStyle, color: 'var(--enterprise-success)', fontWeight: 700 }}>{order.blanket_order_qty.toLocaleString()}</p></div>
+          {/* Row 2: CUSTOMER NAME | REVISION | BLANKET QUANTITY | FULFILLMENT */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 1fr', gap: '20px' }}>
+            <div>
+              <p style={upperLabelStyle}>Customer Name</p>
+              <p style={{ ...upperValueStyle, color: 'var(--enterprise-gray-700)' }}>{order.customer_name}</p>
+            </div>
+            <div>
+              <p style={upperLabelStyle}>Revision</p>
+              <p style={{ ...upperValueStyle, color: 'var(--enterprise-gray-800)', fontWeight: 600 }}>{order.agreement_revision ?? 0}</p>
+            </div>
+            <div>
+              <p style={upperLabelStyle}>Blanket Quantity</p>
+              <p style={{ ...upperValueStyle, color: 'var(--enterprise-success)', fontWeight: 700 }}>{order.blanket_order_qty.toLocaleString()}</p>
+            </div>
+            <div>
+              <p style={upperLabelStyle}>Fulfillment</p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontWeight: 700, fontSize: '13px', color: order.fulfillment_pct >= 100 ? 'var(--enterprise-success)' : 'var(--enterprise-gray-800)', minWidth: '44px' }}>
+                  {order.fulfillment_pct.toFixed(1)}%
+                </span>
+                <div style={{ flex: 1, height: '4px', background: 'var(--enterprise-gray-200)', borderRadius: '2px', overflow: 'hidden' }}>
+                  <div style={{
+                    width: `${Math.min(100, order.fulfillment_pct)}%`,
+                    height: '100%',
+                    background: order.fulfillment_pct >= 100 ? 'var(--enterprise-success)' : 'var(--enterprise-primary)',
+                    transition: 'width 0.3s ease',
+                  }} />
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
-        <div style={{ flex: 1, padding: '12px 20px', display: 'flex', flexDirection: 'column', justifyContent: 'center', background: 'var(--enterprise-gray-50)', minWidth: '180px' }}>
-          <div style={{ marginBottom: '8px' }}><p style={upperLabelStyle}>Customer PO Number</p><p style={{ ...upperValueStyle, fontFamily: 'monospace', color: order.customer_po_number === 'ΓÇö' ? 'var(--enterprise-gray-400)' : 'var(--enterprise-gray-800)' }}>{order.customer_po_number}</p></div>
-          <div><p style={upperLabelStyle}>Order Date</p><p style={{ ...upperValueStyle, color: 'var(--enterprise-gray-700)', display: 'flex', alignItems: 'center', gap: '6px' }}><Calendar size={12} style={{ color: 'var(--enterprise-gray-400)' }} />{order.order_date ? new Date(order.order_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'ΓÇö'}</p></div>
         </div>
       </div>
       {isExpanded && (
         <div style={{ background: 'linear-gradient(180deg, rgba(30,58,138,0.04) 0%, rgba(30,58,138,0.02) 100%)', borderTop: '1px solid var(--enterprise-gray-200)', padding: '20px 54px', animation: 'slideDown 0.25s ease-out' }}>
-          <p style={{ fontSize: 'var(--font-size-xs)', fontWeight: 'var(--font-weight-bold)', color: 'var(--enterprise-primary)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}><Package size={14} /> Order Details</p>
+          <p style={{ fontSize: 'var(--font-size-xs)', fontWeight: 'var(--font-weight-bold)', color: 'var(--enterprise-primary)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}><Package size={14} /> BPA Details</p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px', marginBottom: '14px' }}>
-            <div style={detailCardStyle}><p style={labelStyle}>Blanket Order Start</p><p style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-gray-800)' }}>{order.blanket_order_start ? new Date(order.blanket_order_start).toLocaleDateString() : '-'}</p></div>
-            <div style={detailCardStyle}><p style={labelStyle}>Blanket Order End</p><p style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-gray-800)' }}>{order.blanket_order_end ? new Date(order.blanket_order_end).toLocaleDateString() : '-'}</p></div>
+            <div style={detailCardStyle}><p style={labelStyle}>BPA Start Date</p><p style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-gray-800)' }}>{order.blanket_order_start ? new Date(order.blanket_order_start).toLocaleDateString() : '-'}</p></div>
+            <div style={detailCardStyle}><p style={labelStyle}>BPA End Date</p><p style={{ fontWeight: 'var(--font-weight-semibold)', color: 'var(--enterprise-gray-800)' }}>{order.blanket_order_end ? new Date(order.blanket_order_end).toLocaleDateString() : '-'}</p></div>
             <div style={detailCardStyle}><p style={labelStyle}>Monthly Usage</p><p style={{ fontWeight: 'var(--font-weight-bold)', color: 'var(--enterprise-info)', fontSize: 'var(--font-size-lg)' }}>{(order.monthly_usage || 0).toLocaleString()}</p></div>
             <div style={{ ...detailCardStyle, background: 'linear-gradient(135deg, rgba(34,197,94,0.05) 0%, rgba(34,197,94,0.1) 100%)', border: '1px solid rgba(34,197,94,0.2)' }}><p style={{ ...labelStyle, color: 'var(--enterprise-success)' }}>Next Delivery</p><p style={{ fontWeight: 'var(--font-weight-bold)', color: 'var(--enterprise-success)' }}>{order.next_delivery ? new Date(order.next_delivery).toLocaleDateString() : 'Not Scheduled'}</p></div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px' }}>
-            <div style={detailCardStyle}><p style={labelStyle}>Order Multiples</p><p style={{ fontWeight: 'var(--font-weight-semibold)' }}>{order.order_multiples || 1}</p></div>
+            <div style={detailCardStyle}><p style={labelStyle}>Release Multiple</p><p style={{ fontWeight: 'var(--font-weight-semibold)' }}>{(order.release_multiple || 1).toLocaleString()}</p></div>
             <div style={detailCardStyle}><p style={labelStyle}>Min Stock</p><p style={{ fontWeight: 'var(--font-weight-bold)', color: 'var(--enterprise-warning)' }}>{(order.min_stock || 0).toLocaleString()}</p></div>
             <div style={detailCardStyle}><p style={labelStyle}>Max Stock</p><p style={{ fontWeight: 'var(--font-weight-bold)', color: 'var(--enterprise-success)' }}>{(order.max_stock || 0).toLocaleString()}</p></div>
             <div style={detailCardStyle}><p style={labelStyle}>Safety Stock</p><p style={{ fontWeight: 'var(--font-weight-bold)', color: 'var(--enterprise-secondary, #6366f1)' }}>{(order.safety_stock || 0).toLocaleString()}</p></div>
@@ -490,37 +537,38 @@ function ItemViewModal({ isOpen, onClose, item }: {
       // to exactly one agreement). Line-config supplies running totals.
       const agreementParts = (json.agreements || []) as any[];
       const lineConfigs    = (json.line_configs || []) as any[];
+      const nextReleaseByAgr = (json.next_release_by_agreement || {}) as Record<string, string>;
       const lineByAgr = new Map<string, any>();
       for (const lc of lineConfigs) lineByAgr.set(lc.agreement_id, lc);
 
-      const transformed: BlanketOrder[] = agreementParts.map((p: any, idx: number) => {
+      const transformed: BlanketOrder[] = agreementParts.map((p: any) => {
         const agr = p.agreement || {};
         const lc  = lineByAgr.get(p.agreement_id) ?? {};
+        const blanketQty   = Number(p.blanket_quantity ?? 0);
+        const releasedQty  = Number(lc.released_quantity ?? 0);
+        const fulfillPct   = lc.fulfillment_pct != null
+            ? Number(lc.fulfillment_pct)
+            : (blanketQty > 0 ? (releasedQty / blanketQty) * 100 : 0);
         return {
           id:                  p.id,
-          sap_doc_no:          agr.agreement_number || '—',
+          bpa_number:          agr.agreement_number || '—',
           master_serial_no:    p.msn_code || '—',
           part_number:         p.part_number || '—',
           customer_name:       agr.customer_name || '—',
-          line_no:             p.line_number ?? idx + 1,
-          blanket_order_qty:   p.blanket_quantity ?? 0,
-          customer_po_number:  agr.agreement_number || '—',
-          order_date:          agr.effective_start_date || '',
+          blanket_order_qty:   blanketQty,
           blanket_order_start: agr.effective_start_date || '',
           blanket_order_end:   agr.effective_end_date   || '',
           monthly_usage:       Number(p.avg_monthly_demand ?? 0),
-          next_delivery:       '',
-          order_multiples:     p.release_multiple ?? 1,
+          next_delivery:       nextReleaseByAgr[p.agreement_id] ?? '',
+          release_multiple:    p.release_multiple ?? 1,
           min_stock:           p.min_warehouse_stock ?? 0,
           max_stock:           p.max_warehouse_stock ?? 0,
           safety_stock:        p.safety_stock ?? 0,
-          // New fields carrying running totals (extend BlanketOrder
-          // interface if the UI wants to render them).
-          _released_quantity:  lc.released_quantity ?? 0,
-          _pending_quantity:   lc.pending_quantity  ?? (p.blanket_quantity ?? 0),
-          _fulfillment_pct:    lc.fulfillment_pct   ?? 0,
-          _agreement_status:   agr.status || 'UNKNOWN',
-        } as any;
+          agreement_status:    (agr.status || 'UNKNOWN') as BlanketOrder['agreement_status'],
+          agreement_revision:  Number(agr.agreement_revision ?? 0),
+          released_quantity:   releasedQty,
+          fulfillment_pct:     Math.round(fulfillPct * 10) / 10,
+        };
       });
       setBlanketOrders(transformed);
       setSubInvoiceLines((json.sub_invoice_lines || []) as any[]);
@@ -571,10 +619,10 @@ function ItemViewModal({ isOpen, onClose, item }: {
           <Package size={14} /> Multi Warehouse
         </button>
         <button style={tabStyle(activeTab === 'blanketOrders')} onClick={() => setActiveTab('blanketOrders')}>
-          <FileText size={14} /> Blanket Orders
+          <FileText size={14} /> BPA
         </button>
         <button style={tabStyle(activeTab === 'blanketRelease')} onClick={() => setActiveTab('blanketRelease')}>
-          <Clock size={14} /> Blanket Release
+          <Calendar size={14} /> Blanket Release
         </button>
       </div>
 
@@ -714,7 +762,7 @@ function ItemViewModal({ isOpen, onClose, item }: {
             <div style={{ position: 'relative' }}>
               <Search size={18} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--enterprise-gray-400)' }} />
               <input type="text" value={blanketSearch} onChange={(e) => setBlanketSearch(e.target.value)}
-                placeholder="Search by SAP Doc No, MSN, Part Number, Customer Name..."
+                placeholder="Search by BPA Number, MSN, Part Number, Customer Name..."
                 style={{ width: '100%', padding: '12px 14px 12px 44px', border: '1.5px solid var(--enterprise-gray-200)', borderRadius: 'var(--border-radius-lg)', fontSize: 'var(--font-size-sm)', background: 'var(--enterprise-gray-50)', outline: 'none' }}
                 onFocus={(e) => { e.target.style.borderColor = 'var(--enterprise-primary)'; e.target.style.background = 'white'; e.target.style.boxShadow = '0 0 0 3px rgba(30,58,138,0.1)'; }}
                 onBlur={(e) => { e.target.style.borderColor = 'var(--enterprise-gray-200)'; e.target.style.background = 'var(--enterprise-gray-50)'; e.target.style.boxShadow = 'none'; }}
@@ -725,22 +773,22 @@ function ItemViewModal({ isOpen, onClose, item }: {
             </div>
           </div>
           {loadingOrders ? (
-            <div style={{ textAlign: 'center', padding: '40px' }}><LoadingSpinner size={32} /><p style={{ marginTop: '12px', color: 'var(--enterprise-gray-600)' }}>Loading blanket orders...</p></div>
+            <div style={{ textAlign: 'center', padding: '40px' }}><LoadingSpinner size={32} /><p style={{ marginTop: '12px', color: 'var(--enterprise-gray-600)' }}>Loading BPAs...</p></div>
           ) : blanketOrders.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--enterprise-gray-500)' }}><Package size={48} style={{ display: 'block', margin: '0 auto 12px', opacity: 0.5 }} /><p>No blanket orders found for this item.</p></div>
+            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--enterprise-gray-500)' }}><Package size={48} style={{ display: 'block', margin: '0 auto 12px', opacity: 0.5 }} /><p>No BPAs found for this item.</p></div>
           ) : (() => {
             const s = blanketSearch.toLowerCase().trim();
-            const filtered = s ? blanketOrders.filter(o => o.sap_doc_no.toLowerCase().includes(s) || o.master_serial_no.toLowerCase().includes(s) || o.part_number.toLowerCase().includes(s) || o.customer_name.toLowerCase().includes(s) || o.customer_po_number.toLowerCase().includes(s)) : blanketOrders;
+            const filtered = s ? blanketOrders.filter(o => o.bpa_number.toLowerCase().includes(s) || o.master_serial_no.toLowerCase().includes(s) || o.part_number.toLowerCase().includes(s) || o.customer_name.toLowerCase().includes(s)) : blanketOrders;
             if (filtered.length === 0) return (
               <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--enterprise-gray-500)', background: 'var(--enterprise-gray-50)', borderRadius: 'var(--border-radius-lg)', border: '1px dashed var(--enterprise-gray-200)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
                 <Search size={40} style={{ marginBottom: '12px', opacity: 0.4 }} />
-                <p style={{ fontWeight: 600, color: 'var(--enterprise-gray-600)' }}>No blanket orders match your search</p>
+                <p style={{ fontWeight: 600, color: 'var(--enterprise-gray-600)' }}>No BPAs match your search</p>
               </div>
             );
             return (
               <div>
                 <p style={{ fontSize: '12px', color: 'var(--enterprise-gray-500)', marginBottom: '12px', paddingLeft: '4px' }}>
-                  Showing <strong>{filtered.length}</strong> of <strong>{blanketOrders.length}</strong> blanket order{blanketOrders.length !== 1 ? 's' : ''}
+                  Showing <strong>{filtered.length}</strong> of <strong>{blanketOrders.length}</strong> BPA{blanketOrders.length !== 1 ? 's' : ''}
                 </p>
                 {filtered.map((order, idx) => <BlanketOrderRow key={order.id || idx} order={order} />)}
               </div>
@@ -767,51 +815,196 @@ function ItemViewModal({ isOpen, onClose, item }: {
             </p>
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <div style={{ marginBottom: '12px', color: 'var(--enterprise-gray-600)', fontSize: '13px' }}>
-              <strong>{subInvoiceLines.length}</strong> release{subInvoiceLines.length !== 1 ? 's' : ''} for this part
-            </div>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-              <thead>
-                <tr style={{ background: 'var(--enterprise-gray-50)', borderBottom: '1px solid var(--enterprise-gray-200)' }}>
-                  <th style={thStyle}>Sub-Invoice #</th>
-                  <th style={thStyle}>Date</th>
-                  <th style={thStyle}>Customer PO</th>
-                  <th style={thStyle}>Buyer</th>
-                  <th style={thStyle}>Qty</th>
-                  <th style={thStyle}>Pallets</th>
-                  <th style={thStyle}>Amount</th>
-                  <th style={thStyle}>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {subInvoiceLines.map((line: any) => {
-                  const si = line.sub_invoice || {};
-                  return (
-                    <tr key={line.id} style={{ borderBottom: '1px solid var(--enterprise-gray-100)' }}>
-                      <td style={tdStyle}><strong>{si.sub_invoice_number ?? '—'}</strong></td>
-                      <td style={tdStyle}>{si.sub_invoice_date ? new Date(si.sub_invoice_date).toLocaleDateString() : '—'}</td>
-                      <td style={tdStyle}>{si.customer_po_number ?? '—'}</td>
-                      <td style={tdStyle}>{si.buyer_name ?? '—'}</td>
-                      <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 600 }}>{(line.quantity ?? 0).toLocaleString()}</td>
-                      <td style={{ ...tdStyle, textAlign: 'right' }}>{line.pallet_count ?? 0}</td>
-                      <td style={{ ...tdStyle, textAlign: 'right' }}>{si.currency_code ?? 'USD'} {(line.line_total ?? 0).toLocaleString()}</td>
-                      <td style={tdStyle}>
-                        <Badge variant={si.status === 'PICKED_UP' ? 'success' : si.status === 'CANCELLED' ? 'danger' : 'neutral'}>
-                          {si.status ?? '—'}
-                        </Badge>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <ItemReleaseSections lines={subInvoiceLines} />
         )}
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px' }}><Button variant="primary" onClick={onClose}>Close</Button></div>
     </Modal>
+  );
+}
+
+// ============================================================================
+// ItemReleaseSections — two-bucket card layout for the Blanket Release tab
+// ============================================================================
+
+const DRAFT_STATUSES    = ['DRAFT', 'CONFIRMED', 'AWAITING_PICKUP'];
+const DELIVERED_STATUSES = ['PICKED_UP', 'DELIVERED'];
+
+function ItemReleaseSections({ lines }: { lines: any[] }) {
+  const drafted   = lines.filter(l => DRAFT_STATUSES.includes(l.sub_invoice?.status));
+  const delivered = lines.filter(l => DELIVERED_STATUSES.includes(l.sub_invoice?.status));
+  const cancelled = lines.filter(l => l.sub_invoice?.status === 'CANCELLED');
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+      <ItemReleaseSection
+        title="Drafted · In Progress"
+        subtitle="Releases created against a BPA, awaiting delivery"
+        gradient="linear-gradient(135deg, #2563eb 0%, #1e3a8a 100%)"
+        icon={<Clock size={18} color="#fff" />}
+        items={drafted}
+        emptyLabel="No drafted releases for this part."
+        emphasis="open"
+      />
+      <ItemReleaseSection
+        title="Completed Releases"
+        subtitle="Delivered to customer and closed"
+        gradient="linear-gradient(135deg, #16a34a 0%, #14532d 100%)"
+        icon={<CheckCircle size={18} color="#fff" />}
+        items={delivered}
+        emptyLabel="No completed releases yet."
+        emphasis="done"
+        collapsedByDefault={drafted.length > 0}
+      />
+      {cancelled.length > 0 && (
+        <ItemReleaseSection
+          title="Cancelled"
+          subtitle="Withdrawn or voided releases"
+          gradient="linear-gradient(135deg, #6b7280 0%, #374151 100%)"
+          icon={<XCircle size={18} color="#fff" />}
+          items={cancelled}
+          emptyLabel="No cancelled releases."
+          emphasis="muted"
+          collapsedByDefault
+        />
+      )}
+    </div>
+  );
+}
+
+function ItemReleaseSection({
+  title, subtitle, gradient, icon, items, emptyLabel, emphasis, collapsedByDefault = false,
+}: {
+  title: string; subtitle: string; gradient: string; icon: React.ReactNode;
+  items: any[]; emptyLabel: string; emphasis: 'open' | 'done' | 'muted'; collapsedByDefault?: boolean;
+}) {
+  const [open, setOpen] = useState(!collapsedByDefault);
+  const totalQty = items.reduce((s, l) => s + Number(l.quantity ?? 0), 0);
+
+  return (
+    <div style={{ border: '1px solid var(--enterprise-gray-200)', borderRadius: 'var(--border-radius-lg)', overflow: 'hidden', background: 'white', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+      <div onClick={() => setOpen(v => !v)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: gradient, color: '#fff', cursor: 'pointer' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ width: '30px', height: '30px', borderRadius: '8px', background: 'rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            {icon}
+          </div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: '14px', letterSpacing: '0.2px' }}>{title}</div>
+            <div style={{ fontSize: '11px', opacity: 0.85, marginTop: '1px' }}>{subtitle}</div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ textAlign: 'right', fontSize: '11px' }}>
+            <div style={{ fontWeight: 700, fontSize: '15px' }}>{items.length}</div>
+            <div style={{ opacity: 0.85 }}>{items.length === 1 ? 'release' : 'releases'}</div>
+          </div>
+          <div style={{ textAlign: 'right', fontSize: '11px', borderLeft: '1px solid rgba(255,255,255,0.2)', paddingLeft: '12px' }}>
+            <div style={{ fontWeight: 700, fontSize: '13px', fontFamily: 'monospace' }}>{totalQty.toLocaleString()}</div>
+            <div style={{ opacity: 0.85 }}>total qty</div>
+          </div>
+          <ChevronRight size={18} style={{ transform: open ? 'rotate(90deg)' : 'rotate(0)', transition: 'transform 0.2s ease' }} />
+        </div>
+      </div>
+
+      {open && (
+        <div style={{ padding: '12px 12px 4px', background: emphasis === 'muted' ? 'var(--enterprise-gray-50)' : 'white' }}>
+          {items.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--enterprise-gray-500)', fontSize: 13 }}>{emptyLabel}</div>
+          ) : (
+            items.map((line: any) => <ItemReleaseCard key={line.id} line={line} emphasis={emphasis} />)
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ItemReleaseCard({ line, emphasis }: { line: any; emphasis: 'open' | 'done' | 'muted' }) {
+  const [expanded, setExpanded] = useState(false);
+  const si = line.sub_invoice || {};
+  const done      = DELIVERED_STATUSES.includes(si.status);
+  const cancelled = si.status === 'CANCELLED';
+  const accent    = done ? '#16a34a' : cancelled ? '#6b7280' : 'var(--enterprise-primary)';
+  const releaseNo = si.customer_po_number ?? si.sub_invoice_number ?? '—';
+
+  return (
+    <div style={{
+      border: expanded ? `1.5px solid ${accent}` : '1px solid var(--enterprise-gray-200)',
+      borderRadius: 'var(--border-radius-lg)',
+      overflow: 'hidden',
+      marginBottom: '8px',
+      background: 'white',
+      boxShadow: expanded ? '0 4px 14px rgba(30,58,138,0.1)' : '0 1px 2px rgba(0,0,0,0.03)',
+      transition: 'all 0.2s cubic-bezier(0.4,0,0.2,1)',
+      opacity: cancelled ? 0.75 : 1,
+    }}>
+      <div onClick={() => setExpanded(v => !v)} style={{ display: 'flex', cursor: 'pointer', background: expanded ? 'linear-gradient(135deg, rgba(30,58,138,0.03) 0%, rgba(30,58,138,0.07) 100%)' : 'white' }}>
+        <div style={{ width: '32px', minWidth: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRight: '1px solid var(--enterprise-gray-100)', background: expanded ? accent : 'var(--enterprise-gray-50)' }}>
+          <ChevronRight size={14} style={{ color: expanded ? 'white' : 'var(--enterprise-gray-500)', transform: expanded ? 'rotate(90deg)' : 'rotate(0)', transition: 'transform 0.25s ease' }} />
+        </div>
+        <div style={{ flex: 1, padding: '10px 16px' }}>
+          {/* Row 1 */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '18px', marginBottom: '8px' }}>
+            <MiniField label="Release #">
+              <span style={{ fontFamily: 'monospace', fontWeight: 700, color: accent, fontSize: 13 }}>{releaseNo}</span>
+            </MiniField>
+            <MiniField label="Need By">
+              <span style={{ fontWeight: 600, color: si.blanket_release?.need_by_date && !done && !cancelled ? 'var(--enterprise-primary)' : 'var(--enterprise-gray-700)', fontSize: 13 }}>
+                {si.blanket_release?.need_by_date ? new Date(si.blanket_release.need_by_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+              </span>
+            </MiniField>
+            <MiniField label="Buyer">
+              <span style={{ color: 'var(--enterprise-gray-700)', fontSize: 13 }}>{si.buyer_name ?? '—'}</span>
+            </MiniField>
+          </div>
+          {/* Row 2 */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: '18px' }}>
+            <MiniField label="Quantity">
+              <span style={{ fontWeight: 700, color: 'var(--enterprise-success)', fontSize: 13 }}>{Number(line.quantity ?? 0).toLocaleString()}</span>
+            </MiniField>
+            <MiniField label="Pallets">
+              <span style={{ fontWeight: 600, color: 'var(--enterprise-gray-800)', fontSize: 13 }}>{line.pallet_count ?? 0}</span>
+            </MiniField>
+            <MiniField label="Release Date">
+              <span style={{ color: 'var(--enterprise-gray-700)', fontSize: 13 }}>
+                {si.sub_invoice_date ? new Date(si.sub_invoice_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+              </span>
+            </MiniField>
+          </div>
+        </div>
+      </div>
+
+      {expanded && (
+        <div style={{ background: 'linear-gradient(180deg, rgba(30,58,138,0.03) 0%, rgba(30,58,138,0.01) 100%)', borderTop: '1px solid var(--enterprise-gray-200)', padding: '14px 48px' }}>
+          <p style={{ fontSize: 10, fontWeight: 700, color: accent, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '10px' }}>Release Details</p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
+            <MiniDetailCard label="Sub-Invoice #"  value={si.sub_invoice_number ?? '—'} mono />
+            <MiniDetailCard label="Total Pallets"  value={String(si.total_pallets ?? line.pallet_count ?? 0)} />
+            <MiniDetailCard label="Total Qty"      value={Number(si.total_quantity ?? line.quantity ?? 0).toLocaleString()} />
+            <MiniDetailCard label="Currency"       value={si.currency_code ?? 'USD'} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MiniField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p style={{ fontSize: 9.5, fontWeight: 600, color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 3 }}>{label}</p>
+      <div style={{ display: 'flex', alignItems: 'center', minHeight: 16 }}>{children}</div>
+    </div>
+  );
+}
+
+function MiniDetailCard({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div style={{ background: 'white', border: '1px solid var(--enterprise-gray-200)', borderRadius: 'var(--border-radius-md)', padding: '8px 10px' }}>
+      <p style={{ fontSize: 9.5, fontWeight: 600, color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 3 }}>{label}</p>
+      <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--enterprise-gray-800)', fontFamily: mono ? 'monospace' : 'inherit' }}>{value}</p>
+    </div>
   );
 }
 

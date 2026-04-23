@@ -36,8 +36,8 @@ export const handler = withErrorHandler(async (req) => {
     const partNumber = item.part_number;
 
     // ── Parallel fan-out: agreement parts, line configs, sub-invoices,
-    //    shipments, rack placements (all keyed on part_number) ────────
-    const [agrPartsR, lineConfigsR, subInvLinesR, shipmentsR, rackR] = await Promise.all([
+    //    shipments, rack placements, next upcoming release per agreement ─
+    const [agrPartsR, lineConfigsR, subInvLinesR, shipmentsR, rackR, nextReleasesR] = await Promise.all([
         // Agreement parts (with their parent agreement eager-joined)
         ctx.db.from('customer_agreement_parts')
             .select(`
@@ -66,7 +66,7 @@ export const handler = withErrorHandler(async (req) => {
                 sub_invoice:pack_sub_invoices(
                     id, sub_invoice_number, sub_invoice_date, status,
                     customer_po_number, buyer_name, total_quantity, total_pallets,
-                    total_amount, currency_code
+                    total_amount, currency_code, blanket_release_id
                 )
             `)
             .eq('part_number', partNumber)
@@ -84,18 +84,57 @@ export const handler = withErrorHandler(async (req) => {
             .select('rack_location_id, rack, location_number, location_code, pallet_id, pallet_number, pallet_quantity, pallet_state, placed_at, shipment_sequence, agreement_number, warehouse_name, is_available, is_reserved')
             .eq('part_number', partNumber)
             .order('placed_at', { ascending: true }),
+
+        // Upcoming/scheduled releases for this part — used for "Next Delivery"
+        // card. Any release that's still open and has a need_by_date counts.
+        ctx.db.from('blanket_releases')
+            .select('agreement_id, need_by_date, status, release_number')
+            .not('need_by_date', 'is', null)
+            .in('status', ['OPEN', 'DRAFT', 'SCHEDULED', 'PARTIAL'])
+            .order('need_by_date', { ascending: true }),
     ]);
 
     if (agrPartsR.error) return errorResponse('INTERNAL_ERROR', agrPartsR.error.message, { origin });
+
+    // Pick earliest upcoming need_by_date per agreement (first occurrence wins;
+    // query already ordered ascending)
+    const nextReleaseByAgreement: Record<string, string> = {};
+    for (const r of (nextReleasesR?.data ?? []) as any[]) {
+        if (r.agreement_id && !nextReleaseByAgreement[r.agreement_id] && r.need_by_date) {
+            nextReleaseByAgreement[r.agreement_id] = r.need_by_date;
+        }
+    }
+
+    // Stitch blanket_release need_by_date onto each sub-invoice line (sub-invoice
+    // → blanket_release is a soft FK; PostgREST embed is unreliable, so fetch
+    // + merge manually).
+    const subInvoiceLines = (subInvLinesR.data ?? []) as any[];
+    const releaseIds = Array.from(new Set(
+        subInvoiceLines.map(l => l.sub_invoice?.blanket_release_id).filter(Boolean)
+    ));
+    if (releaseIds.length > 0) {
+        const { data: releases } = await ctx.db
+            .from('blanket_releases')
+            .select('id, release_number, need_by_date, status')
+            .in('id', releaseIds);
+        const releaseMap = new Map((releases ?? []).map((r: any) => [r.id, r]));
+        for (const l of subInvoiceLines) {
+            const relId = l.sub_invoice?.blanket_release_id;
+            if (relId && releaseMap.has(relId)) {
+                l.sub_invoice.blanket_release = releaseMap.get(relId);
+            }
+        }
+    }
 
     return jsonResponse({
         success:          true,
         item,
         agreements:       agrPartsR.data ?? [],
         line_configs:     lineConfigsR.data ?? [],
-        sub_invoice_lines: subInvLinesR.data ?? [],
+        sub_invoice_lines: subInvoiceLines,
         shipment_log:     shipmentsR.data ?? [],
         rack_placements:  rackR.data ?? [],
+        next_release_by_agreement: nextReleaseByAgreement,
     }, { origin });
 });
 

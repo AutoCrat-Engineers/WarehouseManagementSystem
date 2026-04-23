@@ -51,6 +51,7 @@ import {
   Layers,
   Forklift,
   Stamp,
+  Truck,
 } from 'lucide-react';
 import './styles/sidebar-animations.css';
 
@@ -216,13 +217,10 @@ const menuItems: MenuItem[] = [
   { id: 'stock-movements', label: 'Stock Movements', icon: ArrowRightLeft, description: 'Audit Trail' },
   { id: 'packing', label: 'Packing', icon: PackageOpen, description: 'FG Packing Workflow', hasSubmenu: true },
   { id: 'dispatch' as View, label: 'Dispatch', icon: CargoShip as any, description: 'Dispatch & Shipping', hasSubmenu: true },
-  { id: 'bpa', label: 'BPA Agreements', icon: Stamp, description: 'Customer BPAs (New)' },
-  { id: 'orders', label: 'Blanket Orders', icon: FileText, description: 'Customer Orders' },
-  { id: 'rack-view-v2', label: 'Rack View', icon: Grid3X3, description: 'Milano 3PL Racks' },
-  { id: 'rack-view', label: 'Rack View (Legacy)', icon: Grid3X3, description: 'Old local-state rack view' },
-  { id: 'releases-v2', label: 'Releases & Sub-Inv', icon: Calendar, description: 'Customer PO Releases' },
-  { id: 'tariff-queue', label: 'Tariff Invoices', icon: Stamp, description: 'US Tariff Queue (Finance)' },
-  { id: 'releases', label: 'Releases (Legacy)', icon: Calendar, description: 'Old blanket release UI' },
+  { id: 'bpa', label: 'Blanket Purchase Agreement', icon: FileText, description: 'Customer BPAs' },
+  { id: 'rack-view-v2', label: 'Inbound Receiving', icon: Truck, description: 'Shipment verify & Goods Receipt' },
+  { id: 'rack-view', label: 'Rack Storage', icon: Grid3X3, description: 'Physical rack placement & movement' },
+  { id: 'releases-v2', label: 'Blanket Release', icon: Calendar, description: 'Customer PO Releases' },
   { id: 'forecast', label: 'Forecasting', icon: TrendingUp, description: 'Demand Prediction' },
 
 ];
@@ -233,6 +231,9 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [userRole, setUserRole] = useState<UserRole>(null);
   const [currentView, setCurrentView] = useState<View>('dashboard');
+  // GR putaway context — when set, legacy RackView enters putaway mode.
+  // Set by ReceiveShipmentScreen's auto-navigate on GR confirmation.
+  const [activeGrNumber, setActiveGrNumber] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true); // mobile only
   const [isSidebarHovered, setIsSidebarHovered] = useState(false);
   const [isSidebarLocked, setIsSidebarLocked] = useState(() => {
@@ -771,12 +772,29 @@ export default function App() {
         return <StockMovement accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
       case 'rack-view':
         if (!canAccessViewLocal('rack-view')) return renderAccessDenied('Rack View');
-        return <RackView userRole={userRole} userPerms={userPerms} />;
+        return (
+          <RackView
+            userRole={userRole}
+            userPerms={userPerms}
+            grNumber={activeGrNumber ?? undefined}
+            onGrPlacementDone={() => setActiveGrNumber(null)}
+          />
+        );
       case 'rack-view-v2':
         // New DB-backed rack view — hydrates from mv_rack_view, shows back-chain,
-        // supports receive + place + move via RPCs.
+        // and hosts the Receive Shipment / GR wizard. On GR confirm, auto-jumps
+        // to the legacy rack view (which handles physical placement).
         if (!canAccessViewLocal('rack-view')) return renderAccessDenied('Rack View');
-        return <RackViewGrid userRole={userRole} userPerms={userPerms} />;
+        return (
+          <RackViewGrid
+            userRole={userRole}
+            userPerms={userPerms}
+            onGrConfirmed={(grNumber) => {
+              setActiveGrNumber(grNumber);
+              setCurrentView('rack-view');
+            }}
+          />
+        );
       case 'bpa':
         // Customer Agreement (BPA) management — blanket qty, MIN/MAX, REL MULT,
         // revision tracking. Feeds into Blanket Orders via "Activate BO".

@@ -30,9 +30,12 @@ const SHIPMENT_COLORS: Record<string, { bg: string; border: string }> = {
 interface Props {
     userRole?: string;
     userPerms?: Record<string, boolean>;
+    /** Fired after a Goods Receipt is confirmed; App redirects to legacy
+     *  RackView with this GR number to drive physical placement. */
+    onGrConfirmed?: (grNumber: string) => void;
 }
 
-export function RackViewGrid({ userRole, userPerms = {} }: Props) {
+export function RackViewGrid({ userRole, userPerms = {}, onGrConfirmed }: Props) {
     const hasPerms = Object.keys(userPerms).length > 0;
     const canReceive = userRole === 'L3' || userRole === 'ADMIN' || userRole === 'THIRD_PARTY_USER'
         || (hasPerms ? userPerms['rack-view.receive'] === true : userRole === 'L2');
@@ -99,9 +102,9 @@ export function RackViewGrid({ userRole, userPerms = {} }: Props) {
     return (
         <div style={{ padding: '20px 24px' }}>
             <div style={{ marginBottom: '20px' }}>
-                <h1 style={{ fontSize: '1.5rem', fontWeight: 700 }}>Rack View — Milano 3PL</h1>
+                <h1 style={{ fontSize: '1.5rem', fontWeight: 700 }}>Inbound Receiving — Milano 3PL</h1>
                 <p style={{ fontSize: '13px', color: 'var(--enterprise-gray-600)', marginTop: '4px' }}>
-                    Physical rack occupancy. Cells colour-coded by shipment. Click any cell for full back-chain.
+                    Verify arriving shipments, issue Goods Receipts, and trace pallets through the full back-chain.
                 </p>
             </div>
 
@@ -257,11 +260,18 @@ export function RackViewGrid({ userRole, userPerms = {} }: Props) {
                 />
             )}
 
-            {/* Receive flow */}
+            {/* Receive flow — on GR confirm, hand off to App → legacy RackView */}
             {showReceive && (
                 <ReceiveShipmentScreen
                     onClose={() => setShowReceive(false)}
-                    onCompleted={() => { setShowReceive(false); refresh(); }}
+                    onCompleted={(grNumber?: string) => {
+                        setShowReceive(false);
+                        if (grNumber && onGrConfirmed) {
+                            onGrConfirmed(grNumber);
+                        } else {
+                            refresh();
+                        }
+                    }}
                 />
             )}
         </div>
