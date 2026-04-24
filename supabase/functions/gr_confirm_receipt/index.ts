@@ -48,6 +48,7 @@ export const handler = withErrorHandler(async (req) => {
         p_notes:               body.notes ?? null,
         p_user_id:             ctx.userId,
         p_idempotency_key:     body.idempotency_key ?? null,
+        p_mpl_id:              body.mpl_id ?? null,
     });
 
     if (error) {

@@ -58,9 +58,120 @@ export const handler = withErrorHandler(async (req) => {
 
     if (listR.error) return errorResponse('INTERNAL_ERROR', listR.error.message, { origin });
 
+    // Attach linked part (via line_config) + sub-invoice metadata
+    const releases = (listR.data ?? []) as any[];
+    const ids = releases.map(r => r.id).filter(Boolean);
+    const lineConfigIds = Array.from(new Set(releases.map(r => r.line_config_id).filter(Boolean))) as string[];
+
+    // Parts (from blanket_order_line_configs)
+    const lineConfigById = new Map<string, any>();
+    if (lineConfigIds.length > 0) {
+        const { data: lcs } = await ctx.db
+            .from('blanket_order_line_configs')
+            .select('id, part_number, msn_code')
+            .in('id', lineConfigIds);
+        for (const l of (lcs ?? []) as any[]) lineConfigById.set(l.id, l);
+    }
+
+    // Sub-invoices + their lines (for per-parent-invoice breakdown on expand)
+    const subByRelease = new Map<string, any>();
+    const linesBySubInv = new Map<string, any[]>();
+    if (ids.length > 0) {
+        const { data: subs } = await ctx.db
+            .from('pack_sub_invoices')
+            .select('id, sub_invoice_number, blanket_release_id, status, total_quantity, total_pallets')
+            .in('blanket_release_id', ids);
+        for (const s of (subs ?? []) as any[]) {
+            if (s.blanket_release_id && !subByRelease.has(s.blanket_release_id)) {
+                subByRelease.set(s.blanket_release_id, s);
+            }
+        }
+
+        const subIds = (subs ?? []).map((s: any) => s.id);
+        if (subIds.length > 0) {
+            // Sub-invoice lines (no embed — resolve invoice number separately)
+            const { data: lines, error: linesErr } = await ctx.db
+                .from('pack_sub_invoice_lines')
+                .select('id, sub_invoice_id, parent_invoice_line_id, part_number, msn_code, quantity, pallet_count, unit_price')
+                .in('sub_invoice_id', subIds);
+            if (linesErr) console.error('sub_invoice_lines fetch error:', linesErr);
+            const linesRaw = (lines ?? []) as any[];
+
+            // Map parent_invoice_line_id → invoice_number
+            const piliIds = Array.from(new Set(linesRaw.map(l => l.parent_invoice_line_id).filter(Boolean)));
+            const invNoByPili = new Map<string, string>();
+            if (piliIds.length > 0) {
+                const { data: pilis } = await ctx.db
+                    .from('pack_invoice_line_items')
+                    .select('id, invoice_id')
+                    .in('id', piliIds);
+                const invIds = Array.from(new Set((pilis ?? []).map((p: any) => p.invoice_id).filter(Boolean)));
+                const invNoById = new Map<string, string>();
+                if (invIds.length > 0) {
+                    const { data: invs } = await ctx.db
+                        .from('pack_invoices')
+                        .select('id, invoice_number')
+                        .in('id', invIds);
+                    for (const i of (invs ?? []) as any[]) invNoById.set(i.id, i.invoice_number);
+                }
+                for (const p of (pilis ?? []) as any[]) {
+                    invNoByPili.set(p.id, invNoById.get(p.invoice_id) ?? '');
+                }
+            }
+
+            for (const l of linesRaw) {
+                l.parent_invoice_number = invNoByPili.get(l.parent_invoice_line_id) ?? null;
+                const bucket = linesBySubInv.get(l.sub_invoice_id) ?? [];
+                bucket.push(l);
+                linesBySubInv.set(l.sub_invoice_id, bucket);
+            }
+        }
+    }
+
+    // Fallback: pull part_number / msn_code from release_pallet_assignments
+    // for any release that still lacks it from line_config or sub-invoice lines
+    const partByRelease = new Map<string, { part_number: string; msn_code: string }>();
+    if (ids.length > 0) {
+        const { data: rpaRows } = await ctx.db
+            .from('release_pallet_assignments')
+            .select('blanket_release_id, part_number, msn_code')
+            .in('blanket_release_id', ids);
+        for (const rpa of (rpaRows ?? []) as any[]) {
+            if (rpa.blanket_release_id && rpa.part_number && !partByRelease.has(rpa.blanket_release_id)) {
+                partByRelease.set(rpa.blanket_release_id, {
+                    part_number: rpa.part_number,
+                    msn_code:    rpa.msn_code,
+                });
+            }
+        }
+    }
+
+    for (const r of releases) {
+        const lc    = r.line_config_id ? lineConfigById.get(r.line_config_id) : null;
+        const sub   = subByRelease.get(r.id);
+        const lines = sub ? (linesBySubInv.get(sub.id) ?? []) : [];
+        const first = lines[0];
+        const rpa   = partByRelease.get(r.id);
+
+        // Prefer: sub-invoice-line → line_config → release_pallet_assignments.
+        r.part_number         = first?.part_number ?? lc?.part_number ?? rpa?.part_number ?? null;
+        r.msn_code            = first?.msn_code    ?? lc?.msn_code    ?? rpa?.msn_code    ?? null;
+        r.sub_invoice_number  = sub?.sub_invoice_number  ?? null;
+        r.sub_invoice_status  = sub?.status              ?? null;
+        r.sub_invoice_pallets = sub?.total_pallets       ?? null;
+        r.sub_invoice_lines   = lines.map((l: any) => ({
+            parent_invoice_number: l.parent_invoice_number,
+            part_number:           l.part_number,
+            msn_code:              l.msn_code,
+            quantity:              l.quantity,
+            pallet_count:          l.pallet_count,
+            unit_price:            l.unit_price,
+        }));
+    }
+
     return jsonResponse({
         success:     true,
-        releases:    listR.data ?? [],
+        releases,
         total_count: listR.count ?? 0,
         counts: {
             total:     totalR.count ?? 0,

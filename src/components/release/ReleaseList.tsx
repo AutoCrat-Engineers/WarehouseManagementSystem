@@ -379,12 +379,22 @@ function ReleaseCard({ release: r, emphasis }: { release: BlanketRelease; emphas
                 {/* Content */}
                 <div style={{ flex: 1, padding: '12px 20px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                     {/* Row 1 */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 1fr', gap: '20px', marginBottom: '10px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1.1fr 1fr', gap: '16px', marginBottom: '10px' }}>
                         <InfoBlock label="Release #" icon={<Hash size={10} />}>
                             <span style={{ fontFamily: 'monospace', fontWeight: 700, color: accent }}>{r.release_number}</span>
                         </InfoBlock>
                         <InfoBlock label="BPA" icon={<FileText size={10} />}>
                             <span style={{ fontFamily: 'monospace', color: 'var(--enterprise-gray-800)' }}>{r.customer_po_base ?? '—'}</span>
+                        </InfoBlock>
+                        <InfoBlock label="Part" icon={<Package size={10} />}>
+                            {r.part_number ? (
+                                <span>
+                                    <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--enterprise-info, #3b82f6)' }}>{r.part_number}</span>
+                                    {r.msn_code && <span style={{ color: 'var(--enterprise-gray-600)', fontSize: 12, marginLeft: 4 }}>({r.msn_code})</span>}
+                                </span>
+                            ) : (
+                                <span style={{ color: 'var(--enterprise-gray-400)' }}>—</span>
+                            )}
                         </InfoBlock>
                         <InfoBlock label="Buyer" icon={<User size={10} />}>
                             <span style={{ color: 'var(--enterprise-gray-700)' }}>{r.buyer_name ?? '—'}</span>
@@ -392,9 +402,12 @@ function ReleaseCard({ release: r, emphasis }: { release: BlanketRelease; emphas
                     </div>
 
                     {/* Row 2 */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 1fr', gap: '20px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1.1fr 1fr', gap: '16px' }}>
                         <InfoBlock label="Requested Qty">
                             <span style={{ fontWeight: 700, color: 'var(--enterprise-success)' }}>{Number(r.requested_quantity).toLocaleString()}</span>
+                        </InfoBlock>
+                        <InfoBlock label="Pallets">
+                            <span style={{ fontWeight: 600, color: 'var(--enterprise-gray-800)' }}>{r.sub_invoice_pallets ?? '—'}</span>
                         </InfoBlock>
                         <InfoBlock label="Need By" icon={<Calendar size={10} />}>
                             <span style={{ fontWeight: 600, color: r.need_by_date && emphasis === 'open' ? 'var(--enterprise-primary)' : 'var(--enterprise-gray-700)' }}>
@@ -413,12 +426,47 @@ function ReleaseCard({ release: r, emphasis }: { release: BlanketRelease; emphas
                     <p style={{ fontSize: 'var(--font-size-xs)', fontWeight: 700, color: accent, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <Package size={14} /> Release Details
                     </p>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '14px' }}>
                         <DetailCard label="Release Sequence" value={r.release_sequence != null ? String(r.release_sequence) : '—'} />
-                        <DetailCard label="PO Base" value={r.customer_po_base ?? '—'} mono />
-                        <DetailCard label="Source" value={r.source ?? 'MANUAL'} />
+                        <DetailCard label="Sub-Invoice #" value={r.sub_invoice_number ?? '—'} mono />
                         <DetailCard label="Last Updated" value={new Date(r.updated_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} />
                     </div>
+
+                    {/* Released parts breakdown (one card per parent invoice sourced) */}
+                    {r.sub_invoice_lines && r.sub_invoice_lines.length > 0 && (
+                        <div style={{ marginTop: '18px' }}>
+                            <p style={{ fontSize: 10, fontWeight: 700, color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 8 }}>
+                                Released Against {r.sub_invoice_lines.length === 1 ? 'Parent Invoice' : `${r.sub_invoice_lines.length} Parent Invoices`}
+                            </p>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                {r.sub_invoice_lines.map((l, i) => (
+                                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr 1fr', gap: '12px', alignItems: 'center', padding: '10px 14px', background: 'white', border: '1px solid var(--enterprise-gray-200)', borderRadius: 'var(--border-radius-md)' }}>
+                                        <div>
+                                            <p style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', marginBottom: 2 }}>PARENT INVOICE</p>
+                                            <span style={{ fontFamily: 'monospace', fontWeight: 600, fontSize: 12, color: 'var(--enterprise-gray-800)' }}>{l.parent_invoice_number ?? '—'}</span>
+                                        </div>
+                                        <div>
+                                            <p style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', marginBottom: 2 }}>PART</p>
+                                            <span style={{ fontFamily: 'monospace', fontWeight: 600, fontSize: 12, color: 'var(--enterprise-info, #3b82f6)' }}>{l.part_number}</span>
+                                        </div>
+                                        <div>
+                                            <p style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', marginBottom: 2 }}>QTY</p>
+                                            <span style={{ fontWeight: 700, fontSize: 12, color: 'var(--enterprise-success)' }}>{Number(l.quantity).toLocaleString()}</span>
+                                        </div>
+                                        <div>
+                                            <p style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', marginBottom: 2 }}>PALLETS</p>
+                                            <span style={{ fontWeight: 600, fontSize: 12, color: 'var(--enterprise-gray-800)' }}>{l.pallet_count}</span>
+                                        </div>
+                                        <div>
+                                            <p style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', marginBottom: 2 }}>UNIT PRICE</p>
+                                            <span style={{ fontSize: 12, color: 'var(--enterprise-gray-700)' }}>${Number(l.unit_price ?? 0).toFixed(4)}</span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
                     {r.notes && (
                         <div style={{ marginTop: '14px', padding: '12px 14px', background: 'white', border: '1px solid var(--enterprise-gray-200)', borderRadius: 'var(--border-radius-md)' }}>
                             <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 6 }}>Notes</p>

@@ -102,6 +102,8 @@ verify_jwt = false
 verify_jwt = false
 [functions.bpa_upload_document]
 verify_jwt = false
+[functions.bpa_cancel]
+verify_jwt = false
 
 # ── BO / Dashboard ───────────────────────────────────────
 [functions.bo_create_from_bpa]
@@ -121,6 +123,12 @@ verify_jwt = false
 [functions.pallet_place]
 verify_jwt = false
 [functions.pallet_move]
+verify_jwt = false
+[functions.shipment_dashboard_list]
+verify_jwt = false
+[functions.shipment_detail_get]
+verify_jwt = false
+[functions.pending_placement_list]
 verify_jwt = false
 
 # ── Release + Sub-Invoice ────────────────────────────────

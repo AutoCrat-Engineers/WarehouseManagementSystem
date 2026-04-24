@@ -22,6 +22,20 @@ export interface BlanketRelease {
     source:             string;
     created_at:         string;
     updated_at:         string;
+    // Joined (populated by release_list)
+    part_number?:         string | null;
+    msn_code?:            string | null;
+    sub_invoice_number?:  string | null;
+    sub_invoice_status?:  string | null;
+    sub_invoice_pallets?: number | null;
+    sub_invoice_lines?:   Array<{
+        parent_invoice_number: string | null;
+        part_number:           string;
+        msn_code:              string;
+        quantity:              number;
+        pallet_count:          number;
+        unit_price:            number;
+    }>;
 }
 
 export interface SubInvoice {

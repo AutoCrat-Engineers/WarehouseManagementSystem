@@ -16,10 +16,58 @@ export interface BPAListFilters {
     customer_code?: string;
 }
 
+export interface BPAAggregate {
+    blanket_quantity:    number;
+    released_quantity:   number;
+    delivered_quantity:  number;
+    pending_quantity:    number;
+    total_value:         number;
+    released_value:      number;
+    delivered_value:     number;
+    in_rack_value:       number;
+    pallets_in_rack:     number;
+    qty_in_rack:         number;
+    parts_count:         number;
+    fulfillment_pct:     number;
+}
+
+export interface PortfolioTotals {
+    portfolio_value: number;
+    released_value:  number;
+    in_rack_value:   number;
+    expiring_soon:   number;
+}
+
+export interface FulfillmentRowRich {
+    agreement_id:          string;
+    agreement_number:      string;
+    agreement_status:      string;
+    customer_name:         string;
+    buyer_name:            string | null;
+    effective_start_date:  string | null;
+    effective_end_date:    string | null;
+    part_number:           string;
+    msn_code:              string;
+    item_name:             string | null;
+    blanket_quantity:      number;
+    released_quantity:     number;
+    delivered_quantity:    number;
+    total_value:           number;
+    unit_price:            number;
+    pallets_in_rack:       number;
+    qty_in_rack:           number;
+    fulfillment_pct:       number;
+    pending_quantity:      number;
+    release_multiple:      number;
+}
+
 export interface BPAListResponse {
     agreements:  CustomerAgreement[];
     total_count: number;
     counts: { total: number; active: number; draft: number; amended: number; expired: number; cancelled: number };
+    aggregates?: Record<string, BPAAggregate>;
+    fulfillment_rows?: FulfillmentRowRich[];
+    portfolio?:  PortfolioTotals;
 }
 
 export interface BPAGetResponse {
@@ -102,4 +150,11 @@ export async function createBOFromBPA(agreementId: string): Promise<{
     line_configs_created: number; line_configs_existing: number;
 }> {
     return callEdge('bo_create_from_bpa', { agreement_id: agreementId });
+}
+
+/** Cancel a BPA. Fails if releases already exist (use amendment flow instead). */
+export async function cancelBPA(agreementId: string, reason?: string): Promise<{
+    agreement_id: string; prev_status: string; new_status: 'CANCELLED';
+}> {
+    return callEdge('bpa_cancel', { agreement_id: agreementId, reason });
 }

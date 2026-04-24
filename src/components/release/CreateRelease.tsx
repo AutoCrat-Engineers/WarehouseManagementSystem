@@ -911,7 +911,8 @@ const backdropStyle: React.CSSProperties = {
 };
 const modalStyle: React.CSSProperties = {
     background: 'white', borderRadius: 14,
-    width: '100%', maxWidth: 1200, height: '88vh',
+    width: '100%', maxWidth: 1200,
+    minHeight: 520, maxHeight: '88vh',
     display: 'flex', flexDirection: 'column', overflow: 'hidden',
     boxShadow: '0 24px 70px rgba(0,0,0,0.3)',
 };

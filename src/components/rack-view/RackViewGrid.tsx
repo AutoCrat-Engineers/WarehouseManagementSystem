@@ -1,37 +1,113 @@
 /**
- * RackViewGrid — DB-backed rewrite of the legacy local-state RackView.
+ * RackViewGrid — Inbound Receiving dashboard (Milano 3PL).
  *
- * Hydrates from `mv_rack_view` via `rack_view_get` edge function. Cells
- * are colour-coded by shipment (matches xlsx legend). Click a cell →
- * RackCellDrawer shows full back-chain.
+ * Shipment-oriented surface: one card per proforma/shipment, with
+ * aggregate MPL + GR + placement status. This is the DASHBOARD view.
+ * Verification is launched via the "Receive Shipment" button which
+ * opens `ReceiveShipmentScreen` (the verification wizard).
+ *
+ * Phase A: dashboard + shipment cards
+ * Phase B: per-MPL sub-GRN verification flow
+ * Phase C: shipment detail drilldown page
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Grid3X3, Search, RefreshCw, Package, AlertCircle, Truck } from 'lucide-react';
 import {
-    SummaryCard, SummaryCardsGrid, SearchBox, ActionButton, ActionBar, FilterBar,
-} from '../ui/SharedComponents';
-import { Card } from '../ui/EnterpriseUI';
-import { LoadingSpinner } from '../ui/EnterpriseUI';
-import { getRackView, refreshRackView } from './rackService';
-import type { RackCell, RackSummary, RackStatusFilter } from './types';
-import { RackCellDrawer } from './RackCellDrawer';
+    Truck, Search, RefreshCw, AlertCircle, ChevronRight, CheckCircle2,
+    Clock, Package, Layers, AlertTriangle, FileText, Calendar, Loader2,
+} from 'lucide-react';
+import { Card, LoadingSpinner, ModuleLoader } from '../ui/EnterpriseUI';
+import { fetchWithAuth } from '../../utils/supabase/auth';
+import { getEdgeFunctionUrl } from '../../utils/supabase/info';
 import { ReceiveShipmentScreen } from './ReceiveShipmentScreen';
 
-// Colour palette keyed by shipment_sequence — matches the Tariff xlsx.
-const SHIPMENT_COLORS: Record<string, { bg: string; border: string }> = {
-    '1': { bg: '#FFFF00', border: '#eab308' },     // yellow
-    '2': { bg: '#C2F1C8', border: '#16a34a' },     // mint
-    '3': { bg: '#F2CFEE', border: '#a21caf' },     // pink
-    '4': { bg: '#DCEAF7', border: '#2563eb' },     // blue
-    '5': { bg: '#FBE3D6', border: '#ea580c' },     // peach
-    '6': { bg: '#CCC6FC', border: '#4f46e5' },     // lilac
-};
+// ============================================================================
+// Types + fetchers
+// ============================================================================
+
+type ShipmentStatus = 'IN_TRANSIT' | 'PARTIAL' | 'COMPLETE' | 'DISCREPANCY';
+type Filter = 'ALL' | ShipmentStatus;
+
+interface Shipment {
+    id:              string;
+    proforma_number: string;
+    shipment_number: string | null;
+    customer_name:   string;
+    bpa_number:      string | null;
+    invoice_number:  string | null;
+    dispatched_at:   string | null;
+    created_at:      string;
+    pi_status:       string;
+    status:          ShipmentStatus;
+    mpl_count:       number;
+    pallets_expected: number;
+    pallets_received: number;
+    pallets_missing:  number;
+    pallets_damaged:  number;
+    gr_count:         number;
+    gr_numbers:       string[];
+}
+
+interface Counts {
+    total: number; in_transit: number; partial: number; complete: number; discrepancy: number;
+}
+
+interface PendingLine {
+    line_id:         string;
+    gr_id:           string;
+    gr_number:       string | null;
+    pallet_id:       string;
+    pallet_number:   string | null;
+    part_number:     string | null;
+    msn_code:        string | null;
+    item_name:       string | null;
+    received_qty:    number;
+    current_qty:     number | null;
+    line_status:     string;
+    shipment_number: string | null;
+    proforma_number: string | null;
+    mpl_number:      string | null;
+    customer_name:   string | null;
+    invoice_number:  string | null;
+    bpa_number:      string | null;
+    received_at:     string | null;
+}
+
+async function fetchPendingPlacement(search?: string): Promise<{ lines: PendingLine[]; count: number }> {
+    const res = await fetchWithAuth(getEdgeFunctionUrl('pending_placement_list'), {
+        method: 'POST', body: JSON.stringify({ search_term: search ?? '', limit: 200 }),
+    });
+    const json = await res.json();
+    if (!res.ok || json?.error) throw new Error(json?.error?.message || json?.error || 'Failed to load pending');
+    return json;
+}
+
+async function markPlaced(input: { gr_id: string; pallet_id: string; rack_location_code: string }): Promise<any> {
+    const res = await fetchWithAuth(getEdgeFunctionUrl('gr_mark_placed'), {
+        method: 'POST', body: JSON.stringify(input),
+    });
+    const json = await res.json();
+    if (!res.ok || json?.error) throw new Error(json?.error?.message || json?.error || 'Placement failed');
+    return json;
+}
+
+async function fetchShipments(input: { status_filter: Filter; search_term?: string; page_size?: number }): Promise<{
+    shipments: Shipment[]; counts: Counts; total_count: number;
+}> {
+    const res = await fetchWithAuth(getEdgeFunctionUrl('shipment_dashboard_list'), {
+        method: 'POST', body: JSON.stringify(input),
+    });
+    const json = await res.json();
+    if (!res.ok || json?.error) throw new Error(json?.error?.message || json?.error || 'Failed to load');
+    return json;
+}
+
+// ============================================================================
+// Component
+// ============================================================================
 
 interface Props {
     userRole?: string;
     userPerms?: Record<string, boolean>;
-    /** Fired after a Goods Receipt is confirmed; App redirects to legacy
-     *  RackView with this GR number to drive physical placement. */
     onGrConfirmed?: (grNumber: string) => void;
 }
 
@@ -40,240 +116,957 @@ export function RackViewGrid({ userRole, userPerms = {}, onGrConfirmed }: Props)
     const canReceive = userRole === 'L3' || userRole === 'ADMIN' || userRole === 'THIRD_PARTY_USER'
         || (hasPerms ? userPerms['rack-view.receive'] === true : userRole === 'L2');
 
-    const [cells, setCells]       = useState<RackCell[]>([]);
-    const [summary, setSummary]   = useState<RackSummary | null>(null);
-    const [loading, setLoading]   = useState(false);
-    const [error, setError]       = useState<string | null>(null);
-
-    const [activeRack, setActiveRack] = useState<string>('A');
-    const [statusFilter, setStatusFilter] = useState<RackStatusFilter>('ALL');
+    const [shipments, setShipments] = useState<Shipment[]>([]);
+    const [counts, setCounts] = useState<Counts>({ total: 0, in_transit: 0, partial: 0, complete: 0, discrepancy: 0 });
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [filter, setFilter] = useState<Filter>('IN_TRANSIT');
     const [search, setSearch] = useState('');
-
-    const [selectedCellId, setSelectedCellId] = useState<string | null>(null);
     const [showReceive, setShowReceive] = useState(false);
+    const [selectedShipment, setSelectedShipment] = useState<Shipment | null>(null);
 
-    const fetchCells = useCallback(async () => {
+    const fetchData = useCallback(async () => {
         setLoading(true); setError(null);
         try {
-            const res = await getRackView({ status_filter: statusFilter });
-            setCells(res.cells); setSummary(res.summary);
+            const r = await fetchShipments({ status_filter: filter, search_term: search || undefined, page_size: 100 });
+            setShipments(r.shipments);
+            setCounts(r.counts);
         } catch (e: any) {
-            setError(e?.message ?? 'Failed to load rack view');
+            setError(e?.message ?? 'Failed to load shipments');
         } finally {
             setLoading(false);
         }
-    }, [statusFilter]);
+    }, [filter, search]);
 
-    useEffect(() => { fetchCells(); }, [fetchCells]);
+    useEffect(() => { fetchData(); }, [fetchData]);
 
-    const refresh = async () => {
-        try { await refreshRackView(); } catch { /* non-blocking */ }
-        await fetchCells();
-    };
+    // First-load module loader
+    if (loading && shipments.length === 0) {
+        return (
+            <ModuleLoader
+                moduleName="Inbound Receiving"
+                icon={<Truck size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />}
+            />
+        );
+    }
 
-    // Group cells by rack
-    const rackKeys = useMemo(() => {
-        const s = new Set(cells.map(c => c.rack));
-        return Array.from(s).sort();
-    }, [cells]);
-
-    // Cells in the active rack, filtered by search
-    const filteredCells = useMemo(() => {
-        const q = search.toLowerCase().trim();
-        return cells
-            .filter(c => c.rack === activeRack)
-            .filter(c => {
-                if (!q) return true;
-                return (c.part_number ?? '').toLowerCase().includes(q)
-                    || (c.msn_code ?? '').toLowerCase().includes(q)
-                    || (c.pallet_number ?? '').toLowerCase().includes(q)
-                    || (c.agreement_number ?? '').toLowerCase().includes(q)
-                    || (c.location_code ?? '').toLowerCase().includes(q);
-            })
-            .sort((a, b) => a.location_number - b.location_number);
-    }, [cells, activeRack, search]);
-
-    const rackCellCount = useMemo(() => {
-        const counts: Record<string, number> = {};
-        for (const c of cells) counts[c.rack] = (counts[c.rack] ?? 0) + 1;
-        return counts;
-    }, [cells]);
+    // If a shipment is selected, render the detail page instead of the dashboard
+    if (selectedShipment) {
+        return (
+            <ShipmentDetailPage
+                shipment={selectedShipment}
+                onBack={() => { setSelectedShipment(null); fetchData(); }}
+            />
+        );
+    }
 
     return (
-        <div style={{ padding: '20px 24px' }}>
-            <div style={{ marginBottom: '20px' }}>
-                <h1 style={{ fontSize: '1.5rem', fontWeight: 700 }}>Inbound Receiving — Milano 3PL</h1>
-                <p style={{ fontSize: '13px', color: 'var(--enterprise-gray-600)', marginTop: '4px' }}>
-                    Verify arriving shipments, issue Goods Receipts, and trace pallets through the full back-chain.
-                </p>
-            </div>
-
-            {/* Summary */}
-            <SummaryCardsGrid>
-                <SummaryCard label="Total Cells" value={summary?.total_cells ?? 0} icon={<Grid3X3 size={20} color="#6b7280" />} color="#374151" bgColor="#f3f4f6"
-                    isActive={statusFilter === 'ALL'} onClick={() => setStatusFilter('ALL')} />
-                <SummaryCard label="Occupied" value={summary?.occupied ?? 0} icon={<Package size={20} color="#16a34a" />} color="#16a34a" bgColor="#dcfce7"
-                    isActive={statusFilter === 'OCCUPIED'} onClick={() => setStatusFilter('OCCUPIED')} />
-                <SummaryCard label="Empty" value={summary?.empty ?? 0} icon={<Grid3X3 size={20} color="#9ca3af" />} color="#6b7280" bgColor="#f3f4f6"
-                    isActive={statusFilter === 'EMPTY'} onClick={() => setStatusFilter('EMPTY')} />
-                <SummaryCard label="Available" value={summary?.available ?? 0} icon={<Package size={20} color="#2563eb" />} color="#2563eb" bgColor="#dbeafe"
-                    isActive={statusFilter === 'AVAILABLE'} onClick={() => setStatusFilter('AVAILABLE')} />
-                <SummaryCard label="Reserved" value={summary?.reserved ?? 0} icon={<AlertCircle size={20} color="#d97706" />} color="#d97706" bgColor="#fef3c7"
-                    isActive={statusFilter === 'RESERVED'} onClick={() => setStatusFilter('RESERVED')} />
-                <SummaryCard label="Parts" value={summary?.parts_distinct ?? 0} icon={<Package size={20} color="#7c3aed" />} color="#7c3aed" bgColor="#ede9fe" />
-            </SummaryCardsGrid>
-
-            {/* Actions */}
-            <ActionBar>
-                <SearchBox
-                    value={search}
-                    onChange={(v: string) => setSearch(v)}
-                    placeholder="Search by part, MSN, pallet, cell code…"
-                />
-                <FilterBar>
-                    <ActionButton label="Refresh" icon={<RefreshCw size={14} />} onClick={refresh} spinning={loading} />
-                    {canReceive && (
-                        <ActionButton label="Receive Shipment" icon={<Truck size={14} />} onClick={() => setShowReceive(true)} variant="primary" />
-                    )}
-                </FilterBar>
-            </ActionBar>
-
-            {error && <Card style={{ background: '#fef2f2', color: '#991b1b', marginBottom: '12px' }}>⚠ {error}</Card>}
-
-            {/* Rack tabs */}
-            <div style={{ display: 'flex', gap: '4px', marginBottom: '12px' }}>
-                {rackKeys.length === 0 ? (
-                    <span style={{ fontSize: '13px', color: 'var(--enterprise-gray-500)' }}>No racks configured yet.</span>
-                ) : rackKeys.map(k => (
-                    <button key={k} onClick={() => setActiveRack(k)}
-                        style={{
-                            padding: '10px 20px',
-                            border: 'none',
-                            background: activeRack === k ? 'var(--enterprise-primary)' : 'white',
-                            color: activeRack === k ? 'white' : 'var(--enterprise-gray-700)',
-                            borderRadius: '6px 6px 0 0',
-                            fontWeight: 600, fontSize: '13px', cursor: 'pointer',
-                            borderBottom: activeRack === k ? 'none' : '1px solid var(--enterprise-gray-300)',
-                        }}>
-                        Rack {k} <span style={{ fontWeight: 400, opacity: 0.8, marginLeft: '6px' }}>({rackCellCount[k] ?? 0})</span>
-                    </button>
-                ))}
-            </div>
-
-            {/* Legend */}
-            <Card style={{ padding: '10px', marginBottom: '12px' }}>
-                <div style={{ display: 'flex', gap: '16px', alignItems: 'center', fontSize: '12px', flexWrap: 'wrap' }}>
-                    <span style={{ fontWeight: 600, color: 'var(--enterprise-gray-700)' }}>Shipment:</span>
-                    {Object.entries(SHIPMENT_COLORS).map(([k, c]) => (
-                        <span key={k} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <span style={{ width: '14px', height: '14px', border: `1px solid ${c.border}`, background: c.bg, borderRadius: '3px' }} />
-                            #{k}
-                        </span>
-                    ))}
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '12px' }}>
-                        <span style={{ width: '14px', height: '14px', border: '1px dashed #9ca3af', background: 'white', borderRadius: '3px' }} />
-                        Empty
-                    </span>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <span style={{ width: '14px', height: '14px', border: '2px solid #d97706', background: '#fef3c7', borderRadius: '3px' }} />
-                        Reserved
-                    </span>
+        <div style={{ padding: '20px 24px', maxWidth: 1400, margin: '0 auto' }}>
+            {/* Header */}
+            <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                <div>
+                    <h1 style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--enterprise-gray-900)', margin: 0 }}>
+                        Inbound Receiving — Milano 3PL
+                    </h1>
+                    <p style={{ fontSize: '13px', color: 'var(--enterprise-gray-600)', margin: '4px 0 0' }}>
+                        Incoming shipments from the factory. Verify, issue Goods Receipts, and place pallets.
+                    </p>
                 </div>
-            </Card>
+                <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={fetchData} style={ghostBtnStyle} disabled={loading}>
+                        <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : undefined }} /> Refresh
+                    </button>
+                    {canReceive && (
+                        <button onClick={() => setShowReceive(true)} style={primaryBtnStyle}>
+                            <Truck size={13} /> Receive Shipment
+                        </button>
+                    )}
+                </div>
+            </div>
 
-            {/* Grid */}
-            <Card>
-                {loading ? (
-                    <div style={{ textAlign: 'center', padding: '60px' }}>
-                        <LoadingSpinner size={32} />
-                        <p style={{ marginTop: '12px', color: 'var(--enterprise-gray-600)' }}>Loading rack view…</p>
-                    </div>
-                ) : filteredCells.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: '60px' }}>
-                        <Search size={32} style={{ color: 'var(--enterprise-gray-400)' }} />
-                        <p style={{ marginTop: '12px', color: 'var(--enterprise-gray-500)' }}>
-                            {search ? 'No cells match your search.' : `Rack ${activeRack} has no cells yet.`}
-                        </p>
-                    </div>
-                ) : (
-                    <div style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))',
-                        gap: '6px',
-                    }}>
-                        {filteredCells.map(cell => {
-                            const shipmentKey = cell.shipment_sequence != null ? String(cell.shipment_sequence) : '';
-                            const colors = SHIPMENT_COLORS[shipmentKey];
-                            const isEmpty = cell.is_empty;
-                            const style: React.CSSProperties = {
-                                padding: '8px',
-                                borderRadius: '6px',
-                                cursor: 'pointer',
-                                fontSize: '11px',
-                                minHeight: '74px',
-                                display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
-                                transition: 'transform 0.12s ease, box-shadow 0.12s ease',
-                                background: isEmpty ? 'white' : (colors?.bg ?? '#f3f4f6'),
-                                border: isEmpty
-                                    ? '1px dashed #9ca3af'
-                                    : cell.is_reserved
-                                        ? '2px solid #d97706'
-                                        : `1px solid ${colors?.border ?? '#d1d5db'}`,
-                            };
-                            return (
-                                <div key={cell.rack_location_id}
-                                    style={style}
-                                    onClick={() => setSelectedCellId(cell.rack_location_id)}
-                                    onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 4px 10px rgba(0,0,0,0.08)'; }}
-                                    onMouseLeave={(e) => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}
-                                >
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}>
-                                        <span>{cell.location_code}</span>
-                                        {shipmentKey && <span style={{ opacity: 0.6 }}>S{shipmentKey}</span>}
-                                    </div>
-                                    {isEmpty ? (
-                                        <div style={{ textAlign: 'center', color: '#9ca3af', fontStyle: 'italic' }}>empty</div>
-                                    ) : (
-                                        <>
-                                            <div style={{ fontWeight: 600, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                {cell.msn_code ?? cell.part_number ?? '—'}
-                                            </div>
-                                            <div style={{ fontSize: '10px', color: 'var(--enterprise-gray-700)' }}>
-                                                {cell.pallet_number ?? '—'} · {cell.pallet_quantity ?? 0}
-                                            </div>
-                                        </>
-                                    )}
-                                </div>
-                            );
-                        })}
-                    </div>
-                )}
-            </Card>
+            {/* Pending Placement queue (only shown when not empty) */}
+            <PendingPlacementSection onPlaced={fetchData} />
 
-            {/* Drawer */}
-            {selectedCellId && (
-                <RackCellDrawer
-                    rackLocationId={selectedCellId}
-                    onClose={() => setSelectedCellId(null)}
-                    onChanged={() => { setSelectedCellId(null); refresh(); }}
-                    canMove={userRole === 'L3' || userRole === 'ADMIN' || userRole === 'THIRD_PARTY_USER' || userPerms['rack-view.move'] === true}
+            {/* KPI strip */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 16 }}>
+                <KPICard icon={<Truck size={16} />}        iconBg="#eff6ff" iconColor="#2563eb" label="In Transit"  value={counts.in_transit}  sub="awaiting verify" />
+                <KPICard icon={<Layers size={16} />}       iconBg="#fef3c7" iconColor="#d97706" label="Partial"     value={counts.partial}     sub="some MPLs verified" />
+                <KPICard icon={<CheckCircle2 size={16} />} iconBg="#f0fdf4" iconColor="#16a34a" label="Complete"    value={counts.complete}    sub="all verified" />
+                <KPICard icon={<AlertTriangle size={16} />}iconBg="#fee2e2" iconColor="#dc2626" label="Discrepancy" value={counts.discrepancy} sub="missing / damaged" />
+                <KPICard icon={<FileText size={16} />}     iconBg="#f3f4f6" iconColor="#374151" label="Total"       value={counts.total}       sub="all shipments" />
+            </div>
+
+            {/* Filter chips */}
+            <FilterChips filter={filter} onChange={(f) => setFilter(f)} counts={counts} />
+
+            {/* Search */}
+            <div style={{ position: 'relative', marginBottom: 18 }}>
+                <Search size={16} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'var(--enterprise-gray-400)' }} />
+                <input
+                    type="text" value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search by proforma #, shipment #, or customer…"
+                    style={{ width: '100%', padding: '12px 14px 12px 42px', fontSize: 13, border: '1px solid var(--enterprise-gray-200)', borderRadius: 10, outline: 'none', background: 'white', boxShadow: '0 1px 2px rgba(0,0,0,0.02)' }}
+                    onFocus={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-primary)'}
+                    onBlur={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-gray-200)'}
                 />
+            </div>
+
+            {/* Error */}
+            {error && (
+                <div style={{ padding: '12px 16px', background: '#fef2f2', borderLeft: '3px solid #dc2626', borderRadius: 8, marginBottom: 12, color: '#991b1b', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <AlertCircle size={16} /> {error}
+                </div>
             )}
 
-            {/* Receive flow — on GR confirm, hand off to App → legacy RackView */}
+            {/* Shipment cards */}
+            {loading ? (
+                <Card style={{ padding: 0 }}>
+                    <div style={{ textAlign: 'center', padding: 60 }}>
+                        <LoadingSpinner size={32} />
+                        <p style={{ color: 'var(--enterprise-gray-600)', fontSize: 13, marginTop: 12 }}>Loading shipments…</p>
+                    </div>
+                </Card>
+            ) : shipments.length === 0 ? (
+                <EmptyState search={search} filter={filter} />
+            ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {shipments.map(s => (
+                        <ShipmentCard key={s.id} shipment={s} onOpen={() => setSelectedShipment(s)} />
+                    ))}
+                </div>
+            )}
+
+            {/* Receive Shipment modal */}
             {showReceive && (
                 <ReceiveShipmentScreen
                     onClose={() => setShowReceive(false)}
-                    onCompleted={(grNumber?: string) => {
+                    onCompleted={(grNumber) => {
                         setShowReceive(false);
-                        if (grNumber && onGrConfirmed) {
-                            onGrConfirmed(grNumber);
-                        } else {
-                            refresh();
-                        }
+                        fetchData();
+                        if (grNumber) onGrConfirmed?.(grNumber);
                     }}
                 />
             )}
         </div>
     );
 }
+
+// ============================================================================
+// KPI Card
+// ============================================================================
+
+function KPICard({ icon, iconBg, iconColor, label, value, sub }: {
+    icon: React.ReactNode; iconBg: string; iconColor: string;
+    label: string; value: number; sub: string;
+}) {
+    return (
+        <div style={{ background: 'white', border: '1px solid var(--enterprise-gray-200)', borderRadius: 12, padding: '16px 18px', boxShadow: '0 1px 2px rgba(0,0,0,0.02)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    {label}
+                </div>
+                <div style={{ width: 28, height: 28, borderRadius: 8, background: iconBg, color: iconColor, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {icon}
+                </div>
+            </div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--enterprise-gray-900)', lineHeight: 1.1 }}>{value}</div>
+            <div style={{ fontSize: 11, color: 'var(--enterprise-gray-500)', marginTop: 4 }}>{sub}</div>
+        </div>
+    );
+}
+
+// ============================================================================
+// Filter chips
+// ============================================================================
+
+function FilterChips({ filter, onChange, counts }: { filter: Filter; onChange: (f: Filter) => void; counts: Counts }) {
+    const chips: Array<{ key: Filter; label: string; count: number; color: string }> = [
+        { key: 'ALL',         label: 'All',          count: counts.total,       color: '#111827' },
+        { key: 'IN_TRANSIT',  label: 'In Transit',   count: counts.in_transit,  color: '#2563eb' },
+        { key: 'PARTIAL',     label: 'Partial',      count: counts.partial,     color: '#d97706' },
+        { key: 'COMPLETE',    label: 'Complete',     count: counts.complete,    color: '#16a34a' },
+        { key: 'DISCREPANCY', label: 'Discrepancy',  count: counts.discrepancy, color: '#dc2626' },
+    ];
+
+    return (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+            {chips.map(c => {
+                const active = filter === c.key;
+                return (
+                    <button key={c.key} onClick={() => onChange(c.key)}
+                        style={{
+                            padding: '7px 14px',
+                            border: active ? 'none' : '1px solid var(--enterprise-gray-200)',
+                            borderRadius: 999,
+                            background: active ? `linear-gradient(135deg, ${c.color} 0%, ${darken(c.color)} 100%)` : 'white',
+                            color: active ? '#fff' : 'var(--enterprise-gray-700)',
+                            fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                            transition: 'all 0.15s ease',
+                            boxShadow: active ? '0 2px 8px rgba(0,0,0,0.12)' : 'none',
+                            transform: active ? 'translateY(-1px)' : 'translateY(0)',
+                            display: 'flex', alignItems: 'center', gap: 6,
+                        }}
+                        onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = 'var(--enterprise-gray-50)'; }}
+                        onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = 'white'; }}
+                    >
+                        <span>{c.label}</span>
+                        <span style={{ background: active ? 'rgba(255,255,255,0.25)' : 'var(--enterprise-gray-100)', color: active ? '#fff' : 'var(--enterprise-gray-600)', padding: '1px 7px', borderRadius: 10, fontSize: 11, fontWeight: 700, minWidth: 18, textAlign: 'center' }}>{c.count}</span>
+                    </button>
+                );
+            })}
+        </div>
+    );
+}
+
+function darken(hex: string): string {
+    const map: Record<string, string> = {
+        '#2563eb': '#1e3a8a', '#d97706': '#78350f', '#16a34a': '#166534',
+        '#dc2626': '#991b1b', '#111827': '#000000',
+    };
+    return map[hex] ?? '#000';
+}
+
+// ============================================================================
+// Shipment Card
+// ============================================================================
+
+interface ShipmentDetail {
+    shipment: { id: string; proforma_number: string; shipment_number: string | null; customer_name: string; stock_moved_at: string | null; status: string };
+    mpls: Array<{
+        mpl_id:         string;
+        mpl_number:     string;
+        invoice_number: string | null;
+        bpa_number:     string | null;
+        status:         string;
+        dispatched_at:  string | null;
+        pallet_count:   number;
+        qty_total:      number;
+        gr: {
+            id: string; gr_number: string; status: string;
+            total_pallets_expected: number; total_pallets_received: number;
+            total_pallets_missing: number; total_pallets_damaged: number;
+            placement_completed_at: string | null; created_at: string;
+        } | null;
+        pallets: Array<{
+            pallet_id: string; pallet_number: string | null;
+            part_number: string | null; msn_code: string | null; item_name: string | null;
+            quantity: number;
+            gr_line_status: string | null;
+            rack_location_code: string | null; rack_placed_at: string | null;
+            discrepancy_note: string | null;
+        }>;
+    }>;
+}
+
+async function fetchShipmentDetail(proformaId: string): Promise<ShipmentDetail> {
+    const res = await fetchWithAuth(getEdgeFunctionUrl('shipment_detail_get'), {
+        method: 'POST', body: JSON.stringify({ proforma_invoice_id: proformaId }),
+    });
+    const json = await res.json();
+    if (!res.ok || json?.error) throw new Error(json?.error?.message || json?.error || 'Failed to load detail');
+    return json;
+}
+
+function ShipmentCard({ shipment, onOpen }: { shipment: Shipment; onOpen: () => void }) {
+    const accent = STATUS_COLOR[shipment.status];
+    const total = shipment.pallets_expected;
+    const received = shipment.pallets_received;
+    const pct = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0;
+
+    return (
+        <div
+            onClick={onOpen}
+            style={{
+                background: 'white',
+                border: '1px solid var(--enterprise-gray-200)',
+                borderRadius: 12,
+                overflow: 'hidden',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
+                transition: 'all 0.2s cubic-bezier(0.4,0,0.2,1)',
+                display: 'flex',
+                cursor: 'pointer',
+            }}
+            onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = accent;
+                e.currentTarget.style.boxShadow = `0 4px 14px rgba(0,0,0,0.08)`;
+            }}
+            onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'var(--enterprise-gray-200)';
+                e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.03)';
+            }}
+        >
+            <div style={{ width: 4, background: accent, flexShrink: 0 }} />
+
+            <div style={{ flex: 1, minWidth: 0, padding: '16px 20px' }}>
+                {/* Row 1: id + status + GR # · chevron */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, minWidth: 0 }}>
+                        <span style={{ fontFamily: 'monospace', fontSize: 17, fontWeight: 800, color: 'var(--enterprise-gray-900)' }}>
+                            {shipment.shipment_number ?? shipment.proforma_number}
+                        </span>
+                        {shipment.shipment_number && shipment.proforma_number && (
+                            <span style={{ fontSize: 11, color: 'var(--enterprise-gray-500)' }}>PI {shipment.proforma_number}</span>
+                        )}
+                        <StatusBadge status={shipment.status} />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        {shipment.gr_numbers.length > 0 && (
+                            <span style={{ fontSize: 11, color: 'var(--enterprise-gray-500)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <FileText size={11} />
+                                <span style={{ fontFamily: 'monospace', fontWeight: 600, color: 'var(--enterprise-gray-800)' }}>
+                                    {shipment.gr_numbers[0]}
+                                </span>
+                                {shipment.gr_numbers.length > 1 && (
+                                    <span style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', fontWeight: 600 }}>
+                                        +{shipment.gr_numbers.length - 1}
+                                    </span>
+                                )}
+                            </span>
+                        )}
+                        <ChevronRight size={16} style={{ color: 'var(--enterprise-gray-400)' }} />
+                    </div>
+                </div>
+
+                {/* Row 2: customer (no description / BPA / INV — those live at MPL level, not shipment level) */}
+                <div style={{ fontSize: 13, color: 'var(--enterprise-gray-700)', marginBottom: 14, fontWeight: 600 }}>
+                    {shipment.customer_name}
+                </div>
+
+                {/* Row 3: KPIs inline */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 16, marginBottom: 12 }}>
+                    <Inline label="MPLs"     value={shipment.mpl_count.toString()}      icon={<Layers size={12} />} />
+                    <Inline label="Expected" value={shipment.pallets_expected.toString()}                                />
+                    <Inline label="Received" value={shipment.pallets_received.toString()} accent={received > 0 ? 'success' : undefined} />
+                    <Inline label="Missing"  value={String(shipment.pallets_missing + shipment.pallets_damaged)} accent={(shipment.pallets_missing + shipment.pallets_damaged) > 0 ? 'warning' : undefined} />
+                    <Inline label="GR"       value={shipment.gr_count === 0 ? 'Not issued' : `${shipment.gr_count} issued`} accent={shipment.gr_count > 0 ? 'success' : undefined} />
+                </div>
+
+                {/* Row 4: progress */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: pct === 100 ? 'var(--enterprise-success)' : 'var(--enterprise-gray-700)', minWidth: 40 }}>
+                        {pct}%
+                    </span>
+                    <div style={{ flex: 1, height: 5, background: 'var(--enterprise-gray-200)', borderRadius: 3, overflow: 'hidden' }}>
+                        <div style={{ width: `${pct}%`, height: '100%', background: pct === 100 ? 'var(--enterprise-success)' : accent, transition: 'width 0.3s ease' }} />
+                    </div>
+                    <span style={{ fontSize: 11, color: 'var(--enterprise-gray-500)', whiteSpace: 'nowrap' }}>verified</span>
+                    <span style={{ color: 'var(--enterprise-gray-300)' }}>·</span>
+                    <Calendar size={12} style={{ color: 'var(--enterprise-gray-400)' }} />
+                    <span style={{ fontSize: 11, color: 'var(--enterprise-gray-600)', whiteSpace: 'nowrap' }}>
+                        {shipment.dispatched_at
+                            ? `Dispatched ${new Date(shipment.dispatched_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}`
+                            : 'Not yet dispatched'}
+                    </span>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function Inline({ label, value, icon, accent }: { label: string; value: string; icon?: React.ReactNode; accent?: 'success' | 'warning' }) {
+    const color =
+        accent === 'success' ? 'var(--enterprise-success)' :
+        accent === 'warning' ? '#d97706' :
+        'var(--enterprise-gray-900)';
+    return (
+        <div>
+            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
+                {icon}{label}
+            </div>
+            <div style={{ fontSize: 14, fontWeight: 700, color }}>{value}</div>
+        </div>
+    );
+}
+
+function ShipmentDetailPage({ shipment, onBack }: { shipment: Shipment; onBack: () => void }) {
+    const [detail, setDetail] = useState<ShipmentDetail | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [err, setErr] = useState<string | null>(null);
+    const [query, setQuery] = useState('');
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            setLoading(true); setErr(null);
+            try {
+                const d = await fetchShipmentDetail(shipment.id);
+                if (!cancelled) setDetail(d);
+            } catch (e: any) {
+                if (!cancelled) setErr(e?.message ?? 'Failed to load detail');
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [shipment.id]);
+
+    const accent = STATUS_COLOR[shipment.status];
+
+    // Filter MPLs / pallets by query
+    const filteredMpls = useMemo(() => {
+        if (!detail) return [];
+        const q = query.trim().toLowerCase();
+        if (!q) return detail.mpls;
+        return detail.mpls
+            .map(m => ({ ...m, pallets: m.pallets.filter(p =>
+                (p.part_number ?? '').toLowerCase().includes(q) ||
+                (p.msn_code ?? '').toLowerCase().includes(q) ||
+                (p.pallet_number ?? '').toLowerCase().includes(q) ||
+                (p.rack_location_code ?? '').toLowerCase().includes(q)
+            ) }))
+            .filter(m =>
+                m.pallets.length > 0 ||
+                m.mpl_number.toLowerCase().includes(q) ||
+                (m.invoice_number ?? '').toLowerCase().includes(q) ||
+                (m.bpa_number ?? '').toLowerCase().includes(q)
+            );
+    }, [detail, query]);
+
+    return (
+        <div style={{ padding: '20px 24px', maxWidth: 1400, margin: '0 auto' }}>
+            {/* Back + title */}
+            <button onClick={onBack} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--enterprise-gray-600)', fontSize: 12, fontWeight: 600, padding: '4px 8px 4px 0', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+                ← Back to Shipments
+            </button>
+
+            {/* Header card */}
+            <div style={{ background: 'white', border: '1px solid var(--enterprise-gray-200)', borderRadius: 12, overflow: 'hidden', marginBottom: 18, boxShadow: '0 1px 2px rgba(0,0,0,0.03)', display: 'flex' }}>
+                <div style={{ width: 4, background: accent }} />
+                <div style={{ flex: 1, padding: '18px 22px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+                            <span style={{ fontFamily: 'monospace', fontSize: 22, fontWeight: 800, color: 'var(--enterprise-gray-900)' }}>
+                                {shipment.shipment_number ?? shipment.proforma_number}
+                            </span>
+                            {shipment.shipment_number && (
+                                <span style={{ fontSize: 12, color: 'var(--enterprise-gray-500)' }}>PI {shipment.proforma_number}</span>
+                            )}
+                            <StatusBadge status={shipment.status} />
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--enterprise-gray-600)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <Calendar size={12} />
+                            {shipment.dispatched_at ? `Dispatched ${new Date(shipment.dispatched_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}` : 'Not yet dispatched'}
+                        </div>
+                    </div>
+                    <div style={{ fontSize: 14, color: 'var(--enterprise-gray-800)', fontWeight: 600, marginBottom: 14 }}>{shipment.customer_name}</div>
+
+                    {/* Rollup tiles */}
+                    {detail && (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
+                            <MiniTile label="MPLs"        value={`${detail.mpls.filter(m => m.gr).length} / ${detail.mpls.length}`} sub="verified" />
+                            <MiniTile label="Expected"    value={detail.mpls.reduce((s, m) => s + m.pallet_count, 0)} sub="pallets" />
+                            <MiniTile label="Received"    value={detail.mpls.reduce((s, m) => s + (m.gr?.total_pallets_received ?? 0), 0)} sub="pallets" accent="success" />
+                            <MiniTile label="Discrepancy" value={detail.mpls.reduce((s, m) => s + (m.gr?.total_pallets_missing ?? 0) + (m.gr?.total_pallets_damaged ?? 0), 0)} sub="missing / damaged" accent="warning" />
+                            <MiniTile label="Placed"      value={`${detail.mpls.flatMap(m => m.pallets).filter(p => !!p.rack_location_code).length} / ${detail.mpls.reduce((s, m) => s + m.pallet_count, 0)}`} sub="in rack" />
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Search within detail */}
+            <div style={{ position: 'relative', marginBottom: 14 }}>
+                <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--enterprise-gray-400)' }} />
+                <input type="text" value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Filter by part #, MSN, pallet #, MPL, invoice, BPA, or rack…"
+                    style={{ width: '100%', padding: '10px 12px 10px 38px', fontSize: 13, border: '1px solid var(--enterprise-gray-200)', borderRadius: 8, outline: 'none', background: 'white', boxSizing: 'border-box' }}
+                    onFocus={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-primary)'}
+                    onBlur={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-gray-200)'} />
+            </div>
+
+            {loading && (
+                <div style={{ padding: 40, textAlign: 'center', color: 'var(--enterprise-gray-500)' }}>
+                    <LoadingSpinner size={20} /> Loading MPL breakdown…
+                </div>
+            )}
+            {err && (
+                <div style={{ padding: 14, background: '#fef2f2', borderLeft: '3px solid #dc2626', borderRadius: 6, color: '#991b1b', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <AlertCircle size={14} /> {err}
+                </div>
+            )}
+            {!loading && !err && filteredMpls.length === 0 && query && (
+                <div style={{ padding: 32, textAlign: 'center', color: 'var(--enterprise-gray-500)', background: 'var(--enterprise-gray-50)', border: '1px dashed var(--enterprise-gray-300)', borderRadius: 10, fontSize: 13 }}>
+                    No results matching "{query}".
+                </div>
+            )}
+            {!loading && !err && filteredMpls.length === 0 && !query && (
+                <div style={{ padding: 32, textAlign: 'center', color: 'var(--enterprise-gray-500)', background: 'var(--enterprise-gray-50)', border: '1px dashed var(--enterprise-gray-300)', borderRadius: 10, fontSize: 13 }}>
+                    No MPLs linked to this shipment.
+                </div>
+            )}
+
+            {/* MPL blocks */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {filteredMpls.map(m => <MplBlock key={m.mpl_id} mpl={m} defaultOpen={filteredMpls.length === 1} />)}
+            </div>
+        </div>
+    );
+}
+
+// (legacy ExpandedSummary kept below only for safety — not referenced anymore)
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _UnusedExpandedSummary({ shipment }: { shipment: Shipment }) {
+    const [detail, setDetail] = useState<ShipmentDetail | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [err, setErr] = useState<string | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            setLoading(true); setErr(null);
+            try {
+                const d = await fetchShipmentDetail(shipment.id);
+                if (!cancelled) setDetail(d);
+            } catch (e: any) {
+                if (!cancelled) setErr(e?.message ?? 'Failed to load detail');
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [shipment.id]);
+
+    if (loading) {
+        return (
+            <div style={{ borderTop: '1px solid var(--enterprise-gray-100)', padding: '20px', textAlign: 'center', fontSize: 12, color: 'var(--enterprise-gray-500)' }}>
+                <LoadingSpinner size={18} /> Loading shipment details…
+            </div>
+        );
+    }
+    if (err) {
+        return (
+            <div style={{ borderTop: '1px solid var(--enterprise-gray-100)', padding: '14px 20px', background: '#fef2f2', color: '#991b1b', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <AlertCircle size={13} /> {err}
+            </div>
+        );
+    }
+    if (!detail || detail.mpls.length === 0) {
+        return (
+            <div style={{ borderTop: '1px solid var(--enterprise-gray-100)', padding: 20, fontSize: 13, color: 'var(--enterprise-gray-500)', fontStyle: 'italic' }}>
+                No MPLs linked to this shipment.
+            </div>
+        );
+    }
+
+    // Shipment-level rollup
+    const palletsPlaced = detail.mpls.flatMap(m => m.pallets).filter(p => !!p.rack_location_code).length;
+
+    return (
+        <div style={{ borderTop: '1px solid var(--enterprise-gray-100)', background: 'linear-gradient(180deg, rgba(30,58,138,0.015) 0%, rgba(30,58,138,0) 100%)', padding: '16px 20px' }}>
+            {/* Rollup strip */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
+                <MiniTile label="MPLs"        value={`${detail.mpls.filter(m => m.gr).length} / ${detail.mpls.length}`} sub="verified" />
+                <MiniTile label="Received"    value={detail.mpls.reduce((s, m) => s + (m.gr?.total_pallets_received ?? 0), 0)} sub="pallets" accent="success" />
+                <MiniTile label="Discrepancy" value={detail.mpls.reduce((s, m) => s + (m.gr?.total_pallets_missing ?? 0) + (m.gr?.total_pallets_damaged ?? 0), 0)} sub="missing / damaged" accent="warning" />
+                <MiniTile label="Placed"      value={`${palletsPlaced} / ${detail.mpls.reduce((s, m) => s + m.pallet_count, 0)}`} sub="in rack" />
+            </div>
+
+            {/* MPL blocks */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, color: 'var(--enterprise-gray-500)', letterSpacing: '0.6px', textTransform: 'uppercase', marginBottom: 10 }}>
+                <Layers size={12} /> Master Packing Lists
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {detail.mpls.map(m => <MplBlock key={m.mpl_id} mpl={m} />)}
+            </div>
+        </div>
+    );
+}
+
+function MplBlock({ mpl, defaultOpen = false }: { mpl: ShipmentDetail['mpls'][number]; defaultOpen?: boolean }) {
+    const verified = !!mpl.gr;
+    const placed = mpl.pallets.filter(p => !!p.rack_location_code).length;
+    const hasDiscrepancy = verified && ((mpl.gr!.total_pallets_missing + mpl.gr!.total_pallets_damaged) > 0);
+    const accent = hasDiscrepancy ? '#dc2626' : verified ? '#16a34a' : '#2563eb';
+    const [open, setOpen] = useState(defaultOpen);
+
+    return (
+        <div style={{ border: '1px solid var(--enterprise-gray-200)', borderRadius: 10, background: 'white', overflow: 'hidden' }}>
+            <div onClick={() => setOpen(v => !v)} style={{ display: 'grid', gridTemplateColumns: '4px 1fr 90px 90px 90px 90px 24px', alignItems: 'center', cursor: 'pointer' }}>
+                <div style={{ height: '100%', background: accent, minHeight: 48 }} />
+                <div style={{ padding: '10px 16px', minWidth: 0 }}>
+                    <div style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 12, color: 'var(--enterprise-gray-900)' }}>{mpl.mpl_number}</div>
+                    <div style={{ fontSize: 11, color: 'var(--enterprise-gray-600)', marginTop: 2, display: 'flex', gap: 8 }}>
+                        {mpl.invoice_number && <span>INV <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{mpl.invoice_number}</span></span>}
+                        {mpl.bpa_number && <span>· BPA <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{mpl.bpa_number}</span></span>}
+                    </div>
+                </div>
+                <TileInline label="Expected"    value={String(mpl.pallet_count)} />
+                <TileInline label="Received"    value={verified ? String(mpl.gr!.total_pallets_received) : '—'} accent={verified ? 'success' : undefined} />
+                <TileInline label="Issues"      value={verified ? String(mpl.gr!.total_pallets_missing + mpl.gr!.total_pallets_damaged) : '—'} accent={hasDiscrepancy ? 'warning' : undefined} />
+                <TileInline label="Placed"      value={verified ? `${placed} / ${mpl.pallet_count}` : '—'} />
+                <ChevronRight size={14} style={{ color: 'var(--enterprise-gray-400)', transform: open ? 'rotate(90deg)' : 'rotate(0)', transition: 'transform 0.2s ease', marginRight: 12 }} />
+            </div>
+
+            {open && (
+                <div style={{ borderTop: '1px solid var(--enterprise-gray-100)', background: 'rgba(15,23,42,0.02)' }}>
+                    {/* GR meta */}
+                    {verified && (
+                        <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--enterprise-gray-100)', fontSize: 12, color: 'var(--enterprise-gray-700)', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                            <CheckCircle2 size={13} style={{ color: '#16a34a' }} />
+                            <span>Sub-GRN</span>
+                            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--enterprise-gray-900)' }}>{mpl.gr!.gr_number}</span>
+                            <span>· issued {new Date(mpl.gr!.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+                            {mpl.gr!.placement_completed_at && <span>· placed {new Date(mpl.gr!.placement_completed_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>}
+                        </div>
+                    )}
+
+                    {/* Pallet rows */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 0.6fr 0.7fr 0.8fr 0.8fr 1.4fr', gap: 8, padding: '8px 16px', background: 'rgba(15,23,42,0.03)', fontSize: 10, fontWeight: 700, color: 'var(--enterprise-gray-500)', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
+                        <div>Part / Pallet</div>
+                        <div style={{ textAlign: 'right' }}>Qty</div>
+                        <div>Status</div>
+                        <div>Rack</div>
+                        <div>Placed</div>
+                        <div>Notes</div>
+                    </div>
+                    {mpl.pallets.map(p => <PalletDetailRow key={p.pallet_id} pallet={p} />)}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function PalletDetailRow({ pallet }: { pallet: ShipmentDetail['mpls'][number]['pallets'][number] }) {
+    const st = pallet.gr_line_status;
+    const color =
+        st === 'RECEIVED'     ? '#16a34a' :
+        st === 'MISSING'      ? '#dc2626' :
+        st === 'DAMAGED'      ? '#d97706' :
+        st === 'SHORT'        ? '#d97706' :
+        st === 'QUALITY_HOLD' ? '#7c3aed' :
+        'var(--enterprise-gray-400)';
+    const bg =
+        st === 'RECEIVED'     ? '#dcfce7' :
+        st === 'MISSING'      ? '#fee2e2' :
+        st === 'DAMAGED'      ? '#fef3c7' :
+        st === 'SHORT'        ? '#fef3c7' :
+        st === 'QUALITY_HOLD' ? '#ede9fe' :
+        'var(--enterprise-gray-100)';
+    return (
+        <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 0.6fr 0.7fr 0.8fr 0.8fr 1.4fr', gap: 8, padding: '10px 16px', borderTop: '1px solid var(--enterprise-gray-100)', alignItems: 'center', fontSize: 12, background: 'white' }}>
+            <div style={{ minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--enterprise-info, #3b82f6)', fontSize: 11, background: 'rgba(59,130,246,0.1)', padding: '1px 6px', borderRadius: 4 }}>{pallet.part_number ?? '—'}</span>
+                    <span style={{ fontSize: 11, color: 'var(--enterprise-gray-600)' }}>{pallet.msn_code ?? ''}</span>
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', marginTop: 2, fontFamily: 'monospace' }}>{pallet.pallet_number ?? '—'}</div>
+            </div>
+            <div style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>{Number(pallet.quantity).toLocaleString()}</div>
+            <div>
+                {st ? (
+                    <span style={{ fontSize: 10, fontWeight: 700, color, background: bg, padding: '2px 6px', borderRadius: 4, letterSpacing: '0.3px' }}>{st.replace('_', ' ')}</span>
+                ) : (
+                    <span style={{ fontSize: 10, color: 'var(--enterprise-gray-400)', fontWeight: 600 }}>AWAITING</span>
+                )}
+            </div>
+            <div style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 600, color: pallet.rack_location_code ? 'var(--enterprise-primary)' : 'var(--enterprise-gray-400)' }}>
+                {pallet.rack_location_code ?? '—'}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--enterprise-gray-600)' }}>
+                {pallet.rack_placed_at ? new Date(pallet.rack_placed_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--enterprise-gray-600)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {pallet.discrepancy_note ?? ''}
+            </div>
+        </div>
+    );
+}
+
+function MiniTile({ label, value, sub, accent }: { label: string; value: string | number; sub?: string; accent?: 'success' | 'warning' }) {
+    const color =
+        accent === 'success' ? 'var(--enterprise-success)' :
+        accent === 'warning' ? '#d97706' :
+        'var(--enterprise-gray-900)';
+    return (
+        <div style={{ background: 'white', border: '1px solid var(--enterprise-gray-200)', borderRadius: 8, padding: '10px 12px' }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>{label}</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color, fontFamily: 'monospace', marginTop: 2 }}>{value}</div>
+            {sub && <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', marginTop: 2 }}>{sub}</div>}
+        </div>
+    );
+}
+
+function TileInline({ label, value, accent }: { label: string; value: string; accent?: 'success' | 'warning' }) {
+    const color =
+        accent === 'success' ? 'var(--enterprise-success)' :
+        accent === 'warning' ? '#d97706' :
+        'var(--enterprise-gray-800)';
+    return (
+        <div style={{ textAlign: 'right', paddingRight: 12 }}>
+            <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>{label}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color, fontFamily: 'monospace', marginTop: 1 }}>{value}</div>
+        </div>
+    );
+}
+
+// ============================================================================
+// Status badge
+// ============================================================================
+
+const STATUS_COLOR: Record<ShipmentStatus, string> = {
+    IN_TRANSIT:  '#2563eb',
+    PARTIAL:     '#d97706',
+    COMPLETE:    '#16a34a',
+    DISCREPANCY: '#dc2626',
+};
+const STATUS_BG: Record<ShipmentStatus, string> = {
+    IN_TRANSIT:  '#dbeafe',
+    PARTIAL:     '#fef3c7',
+    COMPLETE:    '#dcfce7',
+    DISCREPANCY: '#fee2e2',
+};
+
+function StatusBadge({ status }: { status: ShipmentStatus }) {
+    return (
+        <span style={{
+            fontSize: 10, fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase',
+            padding: '3px 8px', borderRadius: 10,
+            color: STATUS_COLOR[status], background: STATUS_BG[status],
+        }}>{status.replace('_', ' ')}</span>
+    );
+}
+
+// ============================================================================
+// Empty state
+// ============================================================================
+
+function EmptyState({ search, filter }: { search: string; filter: Filter }) {
+    return (
+        <div style={{ background: 'white', border: '1px dashed var(--enterprise-gray-300)', borderRadius: 12, padding: '60px 24px', textAlign: 'center' }}>
+            <div style={{ width: 64, height: 64, borderRadius: 16, background: 'var(--enterprise-gray-100)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+                <Truck size={28} style={{ color: 'var(--enterprise-gray-400)' }} />
+            </div>
+            <p style={{ color: 'var(--enterprise-gray-700)', fontSize: 15, fontWeight: 600, margin: 0 }}>
+                {search ? 'No shipments match your search'
+                       : filter === 'IN_TRANSIT' ? 'No shipments awaiting verification'
+                       : filter === 'COMPLETE'   ? 'No completed shipments yet'
+                       : 'No shipments yet'}
+            </p>
+            <p style={{ color: 'var(--enterprise-gray-500)', fontSize: 13, marginTop: 6 }}>
+                {search ? 'Try a different search or clear the filter chips.'
+                       : 'When the factory dispatches a proforma invoice, the shipment shows up here for verification.'}
+            </p>
+        </div>
+    );
+}
+
+// ============================================================================
+// Pending Placement section (top of dashboard)
+// ============================================================================
+
+function PendingPlacementSection({ onPlaced }: { onPlaced: () => void }) {
+    const [lines, setLines] = useState<PendingLine[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [err, setErr] = useState<string | null>(null);
+    const [open, setOpen] = useState(true);
+    const [placingFor, setPlacingFor] = useState<PendingLine | null>(null);
+
+    const load = useCallback(async () => {
+        setLoading(true); setErr(null);
+        try {
+            const r = await fetchPendingPlacement();
+            setLines(r.lines);
+        } catch (e: any) {
+            setErr(e?.message ?? 'Failed');
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+    useEffect(() => { load(); }, [load]);
+
+    if (loading && lines.length === 0) return null;
+    if (!loading && lines.length === 0 && !err) return null;
+
+    return (
+        <div style={{ marginBottom: 16, border: '1px solid #fcd34d', background: 'linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)', borderRadius: 12, overflow: 'hidden' }}>
+            <div onClick={() => setOpen(v => !v)} style={{ padding: '12px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: '#fef3c7', color: '#92400e', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <Package size={16} />
+                    </div>
+                    <div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: '#78350f' }}>Pending Placement</div>
+                        <div style={{ fontSize: 11, color: '#92400e', marginTop: 1 }}>
+                            {lines.length} pallet{lines.length !== 1 ? 's' : ''} verified but not yet in rack
+                        </div>
+                    </div>
+                </div>
+                <ChevronRight size={16} style={{ color: '#92400e', transform: open ? 'rotate(90deg)' : 'rotate(0)', transition: 'transform 0.2s ease' }} />
+            </div>
+
+            {open && (
+                <div style={{ borderTop: '1px solid #fcd34d', background: 'white' }}>
+                    {err && (
+                        <div style={{ padding: '10px 18px', color: '#991b1b', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <AlertCircle size={12} /> {err}
+                        </div>
+                    )}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 0.8fr 0.9fr 1.1fr 0.9fr 110px', gap: 10, padding: '8px 18px', background: 'rgba(15,23,42,0.03)', fontSize: 10, fontWeight: 700, color: 'var(--enterprise-gray-500)', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
+                        <div>Part / Pallet</div>
+                        <div>GR / MPL</div>
+                        <div style={{ textAlign: 'right' }}>Qty</div>
+                        <div>Status</div>
+                        <div>Shipment</div>
+                        <div>Received</div>
+                        <div />
+                    </div>
+                    {lines.map(l => (
+                        <PendingRow key={l.line_id} line={l} onPlace={() => setPlacingFor(l)} />
+                    ))}
+                </div>
+            )}
+
+            {placingFor && (
+                <RackPickerModal
+                    line={placingFor}
+                    onClose={() => setPlacingFor(null)}
+                    onPlaced={async () => {
+                        setPlacingFor(null);
+                        await load();
+                        onPlaced();
+                    }}
+                />
+            )}
+        </div>
+    );
+}
+
+function PendingRow({ line, onPlace }: { line: PendingLine; onPlace: () => void }) {
+    const statusColor =
+        line.line_status === 'RECEIVED'     ? '#16a34a' :
+        line.line_status === 'DAMAGED'      ? '#d97706' :
+        line.line_status === 'SHORT'        ? '#d97706' :
+        line.line_status === 'QUALITY_HOLD' ? '#7c3aed' :
+        '#6b7280';
+    const statusBg =
+        line.line_status === 'RECEIVED'     ? '#dcfce7' :
+        line.line_status === 'DAMAGED'      ? '#fef3c7' :
+        line.line_status === 'SHORT'        ? '#fef3c7' :
+        line.line_status === 'QUALITY_HOLD' ? '#ede9fe' :
+        '#f3f4f6';
+    return (
+        <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 0.8fr 0.9fr 1.1fr 0.9fr 110px', gap: 10, padding: '10px 18px', borderTop: '1px solid var(--enterprise-gray-100)', alignItems: 'center', fontSize: 12, background: 'white' }}>
+            <div style={{ minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 700, color: 'var(--enterprise-info, #3b82f6)', padding: '1px 6px', background: 'rgba(59,130,246,0.1)', borderRadius: 4 }}>{line.part_number ?? '—'}</span>
+                    <span style={{ fontSize: 11, color: 'var(--enterprise-gray-600)' }}>{line.msn_code ?? ''}</span>
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', marginTop: 2, fontFamily: 'monospace' }}>{line.pallet_number ?? '—'}</div>
+            </div>
+            <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: 'monospace', fontSize: 11, fontWeight: 600, color: 'var(--enterprise-gray-800)' }}>{line.gr_number ?? '—'}</div>
+                <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', marginTop: 2, fontFamily: 'monospace' }}>{line.mpl_number ?? '—'}</div>
+            </div>
+            <div style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 700 }}>{Number(line.received_qty).toLocaleString()}</div>
+            <div>
+                <span style={{ fontSize: 10, fontWeight: 700, color: statusColor, background: statusBg, padding: '2px 6px', borderRadius: 4, letterSpacing: '0.3px' }}>{line.line_status.replace('_', ' ')}</span>
+            </div>
+            <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--enterprise-gray-800)' }}>{line.shipment_number ?? line.proforma_number ?? '—'}</div>
+                <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', marginTop: 2 }}>{line.customer_name ?? ''}</div>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--enterprise-gray-600)' }}>
+                {line.received_at ? new Date(line.received_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—'}
+            </div>
+            <button onClick={onPlace}
+                style={{ background: 'var(--enterprise-primary)', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'center' }}>
+                Place <ChevronRight size={12} />
+            </button>
+        </div>
+    );
+}
+
+// ============================================================================
+// Rack picker (simple code-entry modal)
+// ============================================================================
+
+function RackPickerModal({ line, onClose, onPlaced }: {
+    line: PendingLine;
+    onClose: () => void;
+    onPlaced: () => void;
+}) {
+    const [code, setCode] = useState('');
+    const [submitting, setSubmitting] = useState(false);
+    const [err, setErr] = useState<string | null>(null);
+    const normalized = code.trim().toUpperCase();
+    const valid = /^[A-Z][0-9]{1,3}$/.test(normalized);
+
+    const submit = async () => {
+        if (!valid) return;
+        setSubmitting(true); setErr(null);
+        try {
+            await markPlaced({ gr_id: line.gr_id, pallet_id: line.pallet_id, rack_location_code: normalized });
+            onPlaced();
+        } catch (e: any) {
+            setErr(e?.message ?? 'Placement failed');
+            setSubmitting(false);
+        }
+    };
+
+    return (
+        <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+            <div onClick={(e) => e.stopPropagation()} style={{ background: 'white', borderRadius: 12, width: '100%', maxWidth: 460, boxShadow: '0 24px 70px rgba(0,0,0,0.3)' }}>
+                <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--enterprise-gray-200)' }}>
+                    <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--enterprise-gray-900)' }}>Place Pallet</h3>
+                    <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--enterprise-gray-600)' }}>
+                        Enter the rack cell code where this pallet has been placed
+                    </p>
+                </div>
+
+                <div style={{ padding: 20 }}>
+                    <div style={{ background: 'var(--enterprise-gray-50)', border: '1px solid var(--enterprise-gray-200)', borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--enterprise-info, #3b82f6)', padding: '1px 6px', background: 'rgba(59,130,246,0.1)', borderRadius: 4 }}>{line.part_number}</span>
+                            <span style={{ color: 'var(--enterprise-gray-600)' }}>{line.msn_code}</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--enterprise-gray-500)', fontFamily: 'monospace' }}>{line.pallet_number} · {Number(line.received_qty).toLocaleString()} pcs</div>
+                    </div>
+
+                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--enterprise-gray-700)', textTransform: 'uppercase', letterSpacing: '0.4px', display: 'block', marginBottom: 6 }}>
+                        Rack Cell Code <span style={{ color: '#dc2626' }}>*</span>
+                    </label>
+                    <input autoFocus type="text" value={code}
+                        onChange={(e) => setCode(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && valid) submit(); }}
+                        placeholder="e.g., A1, B12, C5"
+                        style={{ width: '100%', padding: '12px 14px', fontSize: 18, border: `1.5px solid ${valid || code === '' ? 'var(--enterprise-gray-300)' : '#dc2626'}`, borderRadius: 8, outline: 'none', fontFamily: 'monospace', letterSpacing: '1px', textTransform: 'uppercase', boxSizing: 'border-box' }}
+                        onFocus={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-primary)'}
+                        onBlur={(e) => e.currentTarget.style.borderColor = valid || code === '' ? 'var(--enterprise-gray-300)' : '#dc2626'} />
+                    <div style={{ fontSize: 11, color: 'var(--enterprise-gray-500)', marginTop: 6 }}>
+                        Format: letter + number (e.g., A1, B12). This writes <code>rack_location_code</code> on the GR line.
+                    </div>
+
+                    {err && (
+                        <div style={{ marginTop: 12, padding: 10, background: '#fef2f2', borderLeft: '3px solid #dc2626', borderRadius: 6, color: '#991b1b', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <AlertCircle size={13} /> {err}
+                        </div>
+                    )}
+                </div>
+
+                <div style={{ padding: '12px 20px', borderTop: '1px solid var(--enterprise-gray-200)', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                    <button onClick={onClose} disabled={submitting} style={{ background: 'transparent', border: 'none', color: 'var(--enterprise-gray-600)', padding: '9px 14px', fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+                    <button onClick={submit} disabled={!valid || submitting} style={{ background: 'var(--enterprise-primary)', color: 'white', border: 'none', padding: '9px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: valid && !submitting ? 'pointer' : 'not-allowed', opacity: valid && !submitting ? 1 : 0.5, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        {submitting ? <><Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> Placing…</> : <>Place in {normalized || '—'}</>}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ============================================================================
+// Styles
+// ============================================================================
+
+const primaryBtnStyle: React.CSSProperties = {
+    background: 'var(--enterprise-primary)', color: 'white', border: 'none',
+    padding: '9px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+    cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+};
+const ghostBtnStyle: React.CSSProperties = {
+    background: 'white', color: 'var(--enterprise-gray-700)',
+    border: '1px solid var(--enterprise-gray-200)',
+    padding: '9px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+    cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+};

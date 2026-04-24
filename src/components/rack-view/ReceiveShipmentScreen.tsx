@@ -1,72 +1,66 @@
 /**
- * ReceiveShipmentScreen — Milano 3PL receive + Goods Receipt (GR) issue.
+ * ReceiveShipmentScreen — Phase B verification wizard.
  *
- * Industry pattern: ASN → GR → Putaway (SAP EWM / Oracle Fusion / GE / CAT).
+ * Flow:
+ *   1. SEARCH     — Autocomplete proforma / shipment number
+ *   2. SHIPMENT   — Show shipment header + MPL cards. Each MPL is
+ *                   independently verifiable. Shows verified status per MPL.
+ *   3. VERIFY_MPL — For one MPL, pallet checklist with search-by-part,
+ *                   per-pallet status, submit creates a sub-GRN for that MPL.
  *
- *  Step 1 · SELECT     — Autocomplete search for Proforma Invoice.
- *                        Shows PI card with customer, # MPLs, # pallets,
- *                        existing-GR flag.
- *  Step 2 · VERIFY     — Hierarchical tree grouped by item:
- *                          item (part# · MSN · invoice · BPA · expected qty)
- *                            └─ pallets with RECEIVED / MISSING / SHORT /
- *                               DAMAGED / QUALITY_HOLD toggles + discrepancy
- *                               note + optional received_qty for SHORT.
- *                        Sticky summary panel shows running counts + variance.
- *                        Confirm disabled until every pallet has a status and
- *                        every non-RECEIVED line has a note.
- *  Step 3 · GR ISSUED  — Shows GR number, counts, auto-navigates to Legacy
- *                        Rack View after 2-second hold (primary CTA) for
- *                        physical placement.
+ * Sub-GRN principle: one MPL = one GR. When every MPL has a GR, the
+ * shipment is "complete".
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { X, Search, CheckCircle, Grid3X3, AlertTriangle, Package, Truck } from 'lucide-react';
+import {
+    X, Search, ChevronRight, ChevronLeft, CheckCircle2, AlertCircle, Package,
+    Layers, Loader2, Truck, ArrowRight, Check,
+} from 'lucide-react';
 import { fetchWithAuth } from '../../utils/supabase/auth';
 import { getEdgeFunctionUrl } from '../../utils/supabase/info';
-import { Card, LoadingSpinner } from '../ui/EnterpriseUI';
-import { Button } from '../ui/button';
-import { Input } from '../ui/input';
-import { Label } from '../ui/label';
-import { Badge } from '../ui/badge';
 
+// ============================================================================
+// Types
+// ============================================================================
+
+type Step = 'SEARCH' | 'SHIPMENT' | 'VERIFY_MPL' | 'DONE';
 type LineStatus = 'RECEIVED' | 'MISSING' | 'DAMAGED' | 'SHORT' | 'QUALITY_HOLD';
 
 interface ProformaMatch {
-    id:              string;
-    proforma_number: string;
-    shipment_number: string | null;
-    customer_name:   string | null;
-    buyer_name:      string | null;
-    dispatched_at:   string | null;
-    status:          string;
-    total_mpls:      number;
-    total_pallets:   number;
-    has_existing_gr: boolean;
-    gr_number:       string | null;
-    gr_status:       string | null;
+    id: string; proforma_number: string; shipment_number: string | null;
+    customer_name: string | null; dispatched_at: string | null;
+    total_mpls: number; total_pallets: number;
+    has_existing_gr: boolean; gr_number: string | null;
 }
-interface PalletExpected {
-    pallet_id:     string;
-    pallet_number: string | null;
-    current_qty:   number;
-    state:         string | null;
-    expected_qty:  number;
-    mpl_id:        string;
+interface Pallet {
+    pallet_id: string; pallet_number: string | null;
+    part_number: string | null; msn_code: string | null; item_name: string | null;
+    quantity: number; container_count: number;
+    state: string | null; shipment_sequence: number | null;
+    gr_line_status: LineStatus | null; gr_received_qty: number | null;
+    rack_location_code: string | null; rack_placed_at: string | null;
+    discrepancy_note: string | null;
 }
-interface ItemGroup {
-    item_code:          string;
-    part_number:        string;
-    msn_code:           string | null;
-    item_name:          string;
-    invoice_number:     string | null;
-    bpa_number:         string | null;
-    total_expected_qty: number;
-    pallet_count:       number;
-    pallets:            PalletExpected[];
+interface MPL {
+    mpl_id: string; mpl_number: string; invoice_number: string | null; bpa_number: string | null;
+    status: string; dispatched_at: string | null; confirmed_at: string | null;
+    pallet_count: number; qty_total: number;
+    gr: {
+        id: string; gr_number: string; status: string;
+        total_pallets_expected: number; total_pallets_received: number;
+        total_pallets_missing: number; total_pallets_damaged: number;
+        placement_completed_at: string | null; created_at: string;
+    } | null;
+    pallets: Pallet[];
+}
+interface ShipmentHeader {
+    id: string; proforma_number: string; shipment_number: string | null;
+    customer_name: string; stock_moved_at: string | null; status: string;
 }
 
 interface Props {
-    onClose:     () => void;
-    onCompleted: (grNumber?: string) => void;   // called with GR# on success
+    onClose: () => void;
+    onCompleted: (grNumber?: string) => void;
 }
 
 async function callEdge<T>(name: string, body: unknown): Promise<T> {
@@ -76,577 +70,619 @@ async function callEdge<T>(name: string, body: unknown): Promise<T> {
     return json as T;
 }
 
-type Step = 'SELECT' | 'VERIFY' | 'DONE';
+async function resolveWarehouseId(): Promise<string> {
+    const { getSupabaseClient } = await import('../../utils/supabase/client');
+    const sb = getSupabaseClient();
+    const { data: wh3pl } = await sb.from('inv_warehouses').select('id').eq('warehouse_type', '3PL').eq('is_active', true).limit(1);
+    if (wh3pl && wh3pl.length > 0) return (wh3pl[0] as any).id;
+    const { data: whUs } = await sb.from('inv_warehouses').select('id').ilike('warehouse_code', 'WH-US-%').eq('is_active', true).limit(1);
+    if (whUs && whUs.length > 0) return (whUs[0] as any).id;
+    const { data: any_wh } = await sb.from('inv_warehouses').select('id').eq('is_active', true).order('created_at', { ascending: true }).limit(1);
+    if (any_wh && any_wh.length > 0) return (any_wh[0] as any).id;
+    throw new Error('No active warehouse found');
+}
+
+// ============================================================================
+// Main
+// ============================================================================
 
 export function ReceiveShipmentScreen({ onClose, onCompleted }: Props) {
-    const [step, setStep]       = useState<Step>('SELECT');
-    const [loading, setLoading] = useState(false);
-    const [error, setError]     = useState<string | null>(null);
+    const [step, setStep] = useState<Step>('SEARCH');
+    const [error, setError] = useState<string | null>(null);
 
-    // Step 1
-    const [query, setQuery]               = useState('');
-    const [matches, setMatches]           = useState<ProformaMatch[]>([]);
-    const [searching, setSearching]       = useState(false);
-    const [selectedPi, setSelectedPi]     = useState<ProformaMatch | null>(null);
+    // SEARCH state
+    const [query, setQuery] = useState('');
+    const [matches, setMatches] = useState<ProformaMatch[]>([]);
+    const [searching, setSearching] = useState(false);
 
-    // Step 2
-    const [items, setItems]               = useState<ItemGroup[]>([]);
-    const [tick, setTick]                 = useState<Record<string, LineStatus>>({});
-    const [rxQty, setRxQty]               = useState<Record<string, number>>({});
-    const [notes, setNotes]               = useState<Record<string, string>>({});
-    const [receiveNotes, setReceiveNotes] = useState('');
+    // SHIPMENT state
+    const [shipment, setShipment] = useState<ShipmentHeader | null>(null);
+    const [mpls, setMpls] = useState<MPL[]>([]);
+    const [loadingDetail, setLoadingDetail] = useState(false);
 
-    // Step 3
-    const [result, setResult]             = useState<{ gr_number: string; pallets_received: number; pallets_missing: number; pending_placement: number } | null>(null);
-    const [autoNavigateIn, setAutoNavigateIn] = useState<number>(0);
+    // VERIFY_MPL state
+    const [activeMplId, setActiveMplId] = useState<string | null>(null);
+    const activeMpl = useMemo(() => mpls.find(m => m.mpl_id === activeMplId) ?? null, [mpls, activeMplId]);
 
-    // ── Step 1: debounced search ─────────────────────────────────────
+    // Verification inputs
+    const [tick, setTick]   = useState<Record<string, LineStatus>>({});
+    const [rxQty, setRxQty] = useState<Record<string, number>>({});
+    const [notes, setNotes] = useState<Record<string, string>>({});
+    const [mplNote, setMplNote] = useState('');
+    const [submitting, setSubmitting] = useState(false);
+    const [verifyFilter, setVerifyFilter] = useState('');
+
+    // DONE
+    const [lastGrNumber, setLastGrNumber] = useState<string | null>(null);
+
+    // Debounced search
     useEffect(() => {
-        if (step !== 'SELECT') return;
+        if (step !== 'SEARCH') return;
         if (query.trim().length < 2) { setMatches([]); return; }
         setSearching(true);
         const t = setTimeout(async () => {
             try {
-                const r: any = await callEdge('gr_search_proformas', { query: query.trim(), limit: 10 });
+                const r = await callEdge<{ matches: ProformaMatch[] }>('gr_search_proformas', { query: query.trim(), limit: 10 });
                 setMatches(r.matches ?? []);
             } catch (e: any) {
                 setError(e?.message ?? 'Search failed');
             } finally {
                 setSearching(false);
             }
-        }, 300);
+        }, 220);
         return () => clearTimeout(t);
     }, [query, step]);
 
-    const pickProforma = async (pi: ProformaMatch) => {
-        if (pi.has_existing_gr && pi.gr_status === 'COMPLETED') {
-            setError(`${pi.proforma_number} already received as ${pi.gr_number} (COMPLETED).`);
-            return;
-        }
-        setError(null); setLoading(true);
+    const loadShipmentDetail = useCallback(async (piId: string) => {
+        setLoadingDetail(true); setError(null);
         try {
-            const r: any = await callEdge('gr_get_proforma_breakdown', { proforma_invoice_id: pi.id });
-            if (!r.items || r.items.length === 0) {
-                setError('No pallets found for this proforma. Cannot receive an empty shipment.');
-                return;
-            }
-            setSelectedPi(pi);
-            setItems(r.items);
-            // Default all pallets to RECEIVED
-            const initTick: Record<string, LineStatus> = {};
-            const initRx:   Record<string, number>    = {};
-            for (const it of r.items as ItemGroup[]) {
-                for (const p of it.pallets) {
-                    initTick[p.pallet_id] = 'RECEIVED';
-                    initRx[p.pallet_id]   = p.expected_qty;
-                }
-            }
-            setTick(initTick);
-            setRxQty(initRx);
-            setStep('VERIFY');
+            const r = await callEdge<{ shipment: ShipmentHeader; mpls: MPL[] }>('shipment_detail_get', { proforma_invoice_id: piId });
+            setShipment(r.shipment);
+            setMpls(r.mpls ?? []);
+            setStep('SHIPMENT');
         } catch (e: any) {
             setError(e?.message ?? 'Failed to load shipment details');
         } finally {
-            setLoading(false);
+            setLoadingDetail(false);
         }
+    }, []);
+
+    const startVerifyMpl = (mpl: MPL) => {
+        if (mpl.gr) return; // already verified
+        setActiveMplId(mpl.mpl_id);
+        // Default every pallet to RECEIVED with full expected qty
+        const initTick: Record<string, LineStatus> = {};
+        const initQty:  Record<string, number> = {};
+        for (const p of mpl.pallets) {
+            initTick[p.pallet_id] = 'RECEIVED';
+            initQty[p.pallet_id]  = p.quantity;
+        }
+        setTick(initTick);
+        setRxQty(initQty);
+        setNotes({});
+        setMplNote('');
+        setVerifyFilter('');
+        setStep('VERIFY_MPL');
     };
 
-    // ── Step 2: derived counters ─────────────────────────────────────
-    const totals = useMemo(() => {
-        let expected = 0, received = 0, missing = 0, damaged = 0, short = 0, hold = 0;
-        let qtyExp = 0, qtyRx = 0;
-        for (const it of items) {
-            for (const p of it.pallets) {
-                expected++;
-                qtyExp += p.expected_qty;
-                const s = tick[p.pallet_id];
-                const rx = rxQty[p.pallet_id] ?? 0;
-                switch (s) {
-                    case 'RECEIVED':    received++; qtyRx += rx; break;
-                    case 'MISSING':     missing++;                break;
-                    case 'DAMAGED':     damaged++;  qtyRx += rx;  break;
-                    case 'SHORT':       short++;    qtyRx += rx;  break;
-                    case 'QUALITY_HOLD': hold++;    qtyRx += rx;  break;
-                }
-            }
-        }
-        return { expected, received, missing, damaged, short, hold, qtyExp, qtyRx, variance: qtyRx - qtyExp };
-    }, [items, tick, rxQty]);
-
-    const needsNoteForNonRecv = useMemo(() => {
-        for (const it of items) {
-            for (const p of it.pallets) {
-                const s = tick[p.pallet_id];
-                if (!s) return true;
-                if (s !== 'RECEIVED' && !(notes[p.pallet_id] ?? '').trim()) return true;
-            }
-        }
-        return false;
-    }, [items, tick, notes]);
-
-    const setStatus = (palletId: string, status: LineStatus, expectedQty: number) => {
-        setTick(t => ({ ...t, [palletId]: status }));
-        // When flipping to RECEIVED, auto-reset received_qty to expected
-        if (status === 'RECEIVED') setRxQty(q => ({ ...q, [palletId]: expectedQty }));
-        // When flipping to MISSING, zero the qty
-        if (status === 'MISSING')  setRxQty(q => ({ ...q, [palletId]: 0 }));
-    };
-
-    // ── Step 2: submit ───────────────────────────────────────────────
-    const confirm = async () => {
-        if (!selectedPi) return;
-        setError(null); setLoading(true);
+    const submitMplVerification = async (placeLater: boolean) => {
+        if (!shipment || !activeMpl) return;
+        setSubmitting(true); setError(null);
         try {
-            const lines: any[] = [];
-            for (const it of items) {
-                for (const p of it.pallets) {
-                    const s = tick[p.pallet_id] ?? 'RECEIVED';
-                    // Auto-derive SHORT if RECEIVED but qty < expected
-                    const actualStatus = (s === 'RECEIVED' && (rxQty[p.pallet_id] ?? 0) < p.expected_qty) ? 'SHORT' : s;
-                    lines.push({
-                        pallet_id:        p.pallet_id,
-                        pallet_number:    p.pallet_number,
-                        part_number:      it.part_number,
-                        msn_code:         it.msn_code,
-                        invoice_number:   it.invoice_number,
-                        bpa_number:       it.bpa_number,
-                        expected_qty:     p.expected_qty,
-                        received_qty:     s === 'MISSING' ? 0 : (rxQty[p.pallet_id] ?? p.expected_qty),
-                        line_status:      actualStatus,
-                        discrepancy_note: notes[p.pallet_id] ?? null,
-                    });
-                }
-            }
+            const lines: any[] = activeMpl.pallets.map(p => {
+                const s = tick[p.pallet_id] ?? 'RECEIVED';
+                const qty = rxQty[p.pallet_id] ?? p.quantity;
+                const actualStatus: LineStatus = (s === 'RECEIVED' && qty < p.quantity) ? 'SHORT' : s;
+                return {
+                    pallet_id:        p.pallet_id,
+                    pallet_number:    p.pallet_number,
+                    part_number:      p.part_number,
+                    msn_code:         p.msn_code,
+                    invoice_number:   activeMpl.invoice_number,
+                    bpa_number:       activeMpl.bpa_number,
+                    expected_qty:     p.quantity,
+                    received_qty:     s === 'MISSING' ? 0 : qty,
+                    line_status:      actualStatus,
+                    discrepancy_note: notes[p.pallet_id] ?? null,
+                };
+            });
 
             const warehouseId = await resolveWarehouseId();
             const r: any = await callEdge('gr_confirm_receipt', {
-                proforma_invoice_id: selectedPi.id,
+                proforma_invoice_id: shipment.id,
                 warehouse_id:        warehouseId,
+                mpl_id:              activeMpl.mpl_id,
                 lines,
-                notes:               receiveNotes || null,
+                notes:               mplNote || null,
                 idempotency_key:     crypto.randomUUID(),
             });
 
-            setResult({
-                gr_number:          r.gr_number,
-                pallets_received:   r.pallets_received,
-                pallets_missing:    r.pallets_missing,
-                pending_placement:  r.pending_placement,
-            });
-            setStep('DONE');
-            // Start auto-navigate countdown
-            setAutoNavigateIn(3);
+            setLastGrNumber(r.gr_number);
+
+            if (placeLater) {
+                // Stay in wizard; refresh detail so the MPL shows verified
+                await loadShipmentDetail(shipment.id);
+                setActiveMplId(null);
+                setStep('SHIPMENT');
+            } else {
+                // Place Now → close wizard and hand GR # to parent
+                setStep('DONE');
+                onCompleted(r.gr_number);
+            }
         } catch (e: any) {
-            setError(e?.message ?? 'Confirm failed');
+            setError(e?.message ?? 'GR submission failed');
         } finally {
-            setLoading(false);
+            setSubmitting(false);
         }
     };
 
-    // Resolve the destination warehouse (Milano 3PL). Priority:
-    //   1. Any inv_warehouses row with warehouse_type = '3PL'
-    //   2. Warehouse whose code looks like US-transit (WH-US-*)
-    //   3. Any active warehouse (fallback — better to proceed than block)
-    const resolveWarehouseId = useCallback(async (): Promise<string> => {
-        const { getSupabaseClient } = await import('../../utils/supabase/client');
-        const sb = getSupabaseClient();
-
-        // Priority 1: 3PL type
-        const { data: wh3pl } = await sb
-            .from('inv_warehouses')
-            .select('id')
-            .eq('warehouse_type', '3PL')
-            .eq('is_active', true)
-            .limit(1);
-        if (wh3pl && wh3pl.length > 0) return (wh3pl[0] as any).id;
-
-        // Priority 2: US transit
-        const { data: whUs } = await sb
-            .from('inv_warehouses')
-            .select('id')
-            .ilike('warehouse_code', 'WH-US-%')
-            .eq('is_active', true)
-            .limit(1);
-        if (whUs && whUs.length > 0) return (whUs[0] as any).id;
-
-        // Priority 3: any active warehouse
-        const { data: any_wh } = await sb
-            .from('inv_warehouses')
-            .select('id')
-            .eq('is_active', true)
-            .order('created_at', { ascending: true })
-            .limit(1);
-        if (any_wh && any_wh.length > 0) return (any_wh[0] as any).id;
-
-        throw new Error('No active warehouse found. Ask admin to configure one.');
-    }, []);
-
-    // ── Step 3: auto-navigate countdown ──────────────────────────────
-    useEffect(() => {
-        if (step !== 'DONE' || !autoNavigateIn || !result) return;
-        if (autoNavigateIn <= 0) {
-            onCompleted(result.gr_number);
-            return;
-        }
-        const t = setTimeout(() => setAutoNavigateIn(n => n - 1), 1000);
-        return () => clearTimeout(t);
-    }, [autoNavigateIn, step, result, onCompleted]);
-
-    const stepIndex = step === 'SELECT' ? 1 : step === 'VERIFY' ? 2 : 3;
-
     return (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Card style={{ width: '96%', maxWidth: 1280, maxHeight: '92vh', overflow: 'hidden', padding: 0, display: 'flex', flexDirection: 'column' }}>
-                <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--enterprise-gray-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <Truck size={18} color="#1e3a8a" />
-                        <h2 style={{ fontSize: '1.15rem', fontWeight: 700, margin: 0 }}>
-                            Receive Shipment · Step {stepIndex} of 3
-                        </h2>
-                        {selectedPi && step !== 'SELECT' && (
-                            <Badge variant="neutral">{selectedPi.proforma_number}</Badge>
-                        )}
-                    </div>
-                    <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={20} /></button>
-                </div>
+        <div style={backdropStyle} onClick={onClose}>
+            <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
+                <Header step={step} shipment={shipment} activeMpl={activeMpl} onClose={onClose} onBack={
+                    step === 'SHIPMENT' ? () => { setShipment(null); setMpls([]); setStep('SEARCH'); }
+                    : step === 'VERIFY_MPL' ? () => { setActiveMplId(null); setStep('SHIPMENT'); }
+                    : null
+                } />
 
-                {/* Content */}
-                <div style={{ flex: 1, overflow: 'auto' }}>
-                    {step === 'SELECT' && (
-                        <SelectStep
+                <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+                    {error && (
+                        <div style={{ margin: 20, padding: 12, background: '#fef2f2', borderLeft: '3px solid #dc2626', borderRadius: 6, color: '#991b1b', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <AlertCircle size={16} /> {error}
+                        </div>
+                    )}
+
+                    {step === 'SEARCH' && (
+                        <SearchStep
                             query={query} onQueryChange={setQuery}
                             matches={matches} searching={searching}
-                            onPick={pickProforma} loading={loading}
+                            onPick={(pi) => loadShipmentDetail(pi.id)}
+                            loading={loadingDetail}
                         />
                     )}
-                    {step === 'VERIFY' && selectedPi && (
-                        <VerifyStep
-                            pi={selectedPi} items={items}
-                            tick={tick} rxQty={rxQty} notes={notes}
-                            setStatus={setStatus}
-                            setRxQty={(pid, v) => setRxQty(q => ({ ...q, [pid]: v }))}
-                            setNote={(pid, v)  => setNotes(n => ({ ...n, [pid]: v }))}
-                            receiveNotes={receiveNotes} onReceiveNotesChange={setReceiveNotes}
-                            totals={totals}
+
+                    {step === 'SHIPMENT' && shipment && (
+                        <ShipmentStep
+                            shipment={shipment} mpls={mpls}
+                            onVerifyMpl={startVerifyMpl}
                         />
                     )}
-                    {step === 'DONE' && result && (
-                        <DoneStep result={result} autoIn={autoNavigateIn} />
+
+                    {step === 'VERIFY_MPL' && activeMpl && (
+                        <VerifyMplStep
+                            mpl={activeMpl}
+                            tick={tick} onTickChange={(pid, s) => setTick(prev => ({ ...prev, [pid]: s }))}
+                            rxQty={rxQty} onRxQtyChange={(pid, q) => setRxQty(prev => ({ ...prev, [pid]: q }))}
+                            notes={notes} onNotesChange={(pid, n) => setNotes(prev => ({ ...prev, [pid]: n }))}
+                            mplNote={mplNote} onMplNoteChange={setMplNote}
+                            filter={verifyFilter} onFilterChange={setVerifyFilter}
+                        />
                     )}
                 </div>
 
-                {error && <div style={{ padding: '10px 20px', background: '#fef2f2', color: '#991b1b', borderTop: '1px solid #fecaca' }}>⚠ {error}</div>}
-
-                {/* Footer */}
-                <div style={{ padding: '12px 20px', borderTop: '1px solid var(--enterprise-gray-200)', display: 'flex', justifyContent: 'space-between', background: '#f8fafc' }}>
-                    <Button variant="outline" onClick={onClose} disabled={loading}>
-                        {step === 'DONE' ? 'Close' : 'Cancel'}
-                    </Button>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        {step === 'VERIFY' && <Button variant="outline" onClick={() => { setStep('SELECT'); setSelectedPi(null); }} disabled={loading}>Back</Button>}
-                        {step === 'VERIFY' && (
-                            <Button onClick={confirm} disabled={loading || needsNoteForNonRecv}>
-                                {loading ? 'Issuing GR…' : 'Confirm & Issue GR'}
-                            </Button>
-                        )}
-                        {step === 'DONE' && result && (
-                            <Button onClick={() => onCompleted(result.gr_number)}>
-                                <Grid3X3 size={14} style={{ marginRight: 6 }} />
-                                Place Now {autoNavigateIn > 0 && `(${autoNavigateIn})`}
-                            </Button>
-                        )}
-                    </div>
-                </div>
-            </Card>
+                <Footer
+                    step={step}
+                    shipmentHasMpls={mpls.length > 0}
+                    submitting={submitting}
+                    onCancel={onClose}
+                    onSubmitVerify={submitMplVerification}
+                    onCloseSuccess={() => onCompleted(lastGrNumber ?? undefined)}
+                />
+            </div>
         </div>
     );
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// SelectStep
-// ──────────────────────────────────────────────────────────────────────────
-function SelectStep({ query, onQueryChange, matches, searching, onPick, loading }: {
-    query: string; onQueryChange: (v: string) => void;
+// ============================================================================
+// Chrome
+// ============================================================================
+
+function Header({ step, shipment, activeMpl, onClose, onBack }: {
+    step: Step; shipment: ShipmentHeader | null; activeMpl: MPL | null;
+    onClose: () => void; onBack: (() => void) | null;
+}) {
+    const title =
+        step === 'SEARCH'      ? 'Receive Shipment'
+      : step === 'SHIPMENT'    ? `Shipment · ${shipment?.shipment_number ?? shipment?.proforma_number ?? ''}`
+      : step === 'VERIFY_MPL' ? `Verify MPL · ${activeMpl?.mpl_number ?? ''}`
+      : 'Goods Receipt Issued';
+    const subtitle =
+        step === 'SEARCH'      ? 'Search by proforma number or shipment number'
+      : step === 'SHIPMENT'    ? `${shipment?.customer_name ?? ''}`
+      : step === 'VERIFY_MPL' ? `${activeMpl?.pallet_count ?? 0} pallets to verify`
+      : '';
+
+    return (
+        <div style={{ padding: '18px 24px', borderBottom: '1px solid var(--enterprise-gray-200)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'linear-gradient(135deg, #fafbfc 0%, #f1f5f9 100%)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                {onBack && (
+                    <button onClick={onBack} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--enterprise-gray-600)', padding: 6, borderRadius: 6 }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--enterprise-gray-100)'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
+                        <ChevronLeft size={18} />
+                    </button>
+                )}
+                <div>
+                    <h2 style={{ fontSize: 17, fontWeight: 700, color: 'var(--enterprise-gray-900)', margin: 0 }}>{title}</h2>
+                    {subtitle && <p style={{ fontSize: 12, color: 'var(--enterprise-gray-600)', margin: '2px 0 0' }}>{subtitle}</p>}
+                </div>
+            </div>
+            <button onClick={onClose} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--enterprise-gray-500)', padding: 6, borderRadius: 6 }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--enterprise-gray-100)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
+                <X size={20} />
+            </button>
+        </div>
+    );
+}
+
+function Footer({ step, submitting, onCancel, onSubmitVerify, onCloseSuccess }: {
+    step: Step; shipmentHasMpls: boolean; submitting: boolean;
+    onCancel: () => void;
+    onSubmitVerify: (placeLater: boolean) => void;
+    onCloseSuccess: () => void;
+}) {
+    return (
+        <div style={{ padding: '12px 24px', borderTop: '1px solid var(--enterprise-gray-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'white' }}>
+            <button onClick={onCancel} style={ghostBtn}>Cancel</button>
+            <div style={{ display: 'flex', gap: 8 }}>
+                {step === 'VERIFY_MPL' && (
+                    <>
+                        <button onClick={() => onSubmitVerify(true)} disabled={submitting} style={{ ...secondaryBtn, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {submitting ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Check size={14} />}
+                            Verify · Place Later
+                        </button>
+                        <button onClick={() => onSubmitVerify(false)} disabled={submitting} style={{ ...primaryBtn, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {submitting ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <ArrowRight size={14} />}
+                            Verify · Place Now
+                        </button>
+                    </>
+                )}
+                {step === 'DONE' && (
+                    <button onClick={onCloseSuccess} style={primaryBtn}>Done</button>
+                )}
+            </div>
+        </div>
+    );
+}
+
+// ============================================================================
+// Step 1 — Search
+// ============================================================================
+
+function SearchStep({ query, onQueryChange, matches, searching, onPick, loading }: {
+    query: string; onQueryChange: (s: string) => void;
     matches: ProformaMatch[]; searching: boolean;
     onPick: (pi: ProformaMatch) => void; loading: boolean;
 }) {
     return (
-        <div style={{ padding: 20 }}>
-            <p style={{ fontSize: 13, color: 'var(--enterprise-gray-600)', marginBottom: 12 }}>
-                Search for a proforma invoice. Only shipments that have been dispatched (<strong>STOCK_MOVED</strong>) appear.
-            </p>
-            <div style={{ position: 'relative', marginBottom: 16 }}>
-                <Search size={16} color="#6b7280" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
-                <Input
-                    value={query}
+        <div style={{ padding: 28, maxWidth: 760, margin: '0 auto' }}>
+            <div style={{ position: 'relative', marginBottom: 20 }}>
+                <Search size={18} style={{ position: 'absolute', left: 14, top: 18, color: 'var(--enterprise-gray-400)' }} />
+                <input autoFocus type="text" value={query}
                     onChange={(e) => onQueryChange(e.target.value)}
-                    placeholder="Type proforma #, shipment #, customer or buyer name…"
-                    style={{ paddingLeft: 38, fontSize: 14 }}
-                    autoFocus
-                />
+                    placeholder="e.g., PI-20260315-045 or shipment number…"
+                    style={{ width: '100%', padding: '16px 16px 16px 44px', fontSize: 15, border: '1.5px solid var(--enterprise-gray-300)', borderRadius: 10, outline: 'none', fontFamily: 'monospace', boxSizing: 'border-box' }}
+                    onFocus={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-primary)'}
+                    onBlur={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-gray-300)'} />
+                {searching && <Loader2 size={16} style={{ position: 'absolute', right: 14, top: 19, color: 'var(--enterprise-gray-400)', animation: 'spin 1s linear infinite' }} />}
             </div>
 
-            {searching && <div style={{ textAlign: 'center', padding: 20 }}><LoadingSpinner size={24} /></div>}
-
-            {!searching && query.trim().length >= 2 && matches.length === 0 && (
-                <p style={{ textAlign: 'center', color: 'var(--enterprise-gray-500)', padding: 20 }}>No matching shipments.</p>
+            {loading && (
+                <div style={{ textAlign: 'center', padding: 40, color: 'var(--enterprise-gray-500)' }}>
+                    <Loader2 size={18} style={{ animation: 'spin 1s linear infinite', verticalAlign: 'middle' }} /> Loading shipment…
+                </div>
             )}
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {matches.map(pi => {
-                    const blocked = pi.has_existing_gr && pi.gr_status === 'COMPLETED';
-                    return (
-                        <Card
-                            key={pi.id}
-                            onClick={() => !blocked && !loading && onPick(pi)}
-                            style={{
-                                padding: 14, cursor: blocked || loading ? 'not-allowed' : 'pointer',
-                                borderLeft: blocked ? '3px solid #9ca3af' : '3px solid #2563eb',
-                                opacity: blocked ? 0.6 : 1,
-                                transition: 'all 0.12s',
-                            }}
-                        >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                <div>
-                                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 6 }}>
-                                        <strong style={{ fontFamily: 'monospace', color: '#1e3a8a', fontSize: 15 }}>{pi.proforma_number}</strong>
-                                        {pi.shipment_number && <span style={{ fontSize: 11, color: '#6b7280' }}>· {pi.shipment_number}</span>}
-                                        <Badge variant="neutral">{pi.status}</Badge>
-                                        {pi.has_existing_gr && (
-                                            <Badge variant={(pi.gr_status === 'COMPLETED' ? 'success' : 'warning') as any}>
-                                                {pi.gr_status === 'COMPLETED' ? `Received (${pi.gr_number})` : `GR in progress (${pi.gr_number})`}
-                                            </Badge>
-                                        )}
-                                    </div>
-                                    <div style={{ fontSize: 12, color: '#4b5563', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                                        <span>Customer: <strong>{pi.customer_name ?? '—'}</strong></span>
-                                        <span>Buyer: {pi.buyer_name ?? '—'}</span>
-                                        <span>Dispatched: {pi.dispatched_at ? new Date(pi.dispatched_at).toLocaleDateString() : '—'}</span>
-                                    </div>
+            {!loading && matches.length === 0 && query.length >= 2 && !searching && (
+                <div style={{ textAlign: 'center', padding: 40, color: 'var(--enterprise-gray-500)', fontSize: 13 }}>
+                    No dispatched shipments match "{query}".
+                </div>
+            )}
+
+            {!loading && matches.length === 0 && query.length < 2 && (
+                <div style={{ padding: 32, textAlign: 'center', background: 'rgba(30,58,138,0.03)', border: '1px dashed rgba(30,58,138,0.15)', borderRadius: 10 }}>
+                    <Truck size={28} style={{ color: 'var(--enterprise-primary)', opacity: 0.5 }} />
+                    <p style={{ color: 'var(--enterprise-gray-700)', fontWeight: 600, fontSize: 14, marginTop: 10, marginBottom: 4 }}>Start by searching</p>
+                    <p style={{ color: 'var(--enterprise-gray-500)', fontSize: 12, margin: 0 }}>Type a proforma number, shipment number, or customer name.</p>
+                </div>
+            )}
+
+            {!loading && matches.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {matches.map(m => (
+                        <button key={m.id} onClick={() => onPick(m)}
+                            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '14px 16px', background: 'white', border: '1px solid var(--enterprise-gray-200)', borderRadius: 10, cursor: 'pointer', transition: 'all 0.15s ease', font: 'inherit' }}
+                            onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--enterprise-primary)'; e.currentTarget.style.background = 'rgba(30,58,138,0.02)'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--enterprise-gray-200)'; e.currentTarget.style.background = 'white'; }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+                                    <span style={{ fontFamily: 'monospace', fontSize: 14, fontWeight: 700, color: 'var(--enterprise-primary)' }}>
+                                        {m.shipment_number ?? m.proforma_number}
+                                    </span>
+                                    {m.shipment_number && <span style={{ fontSize: 11, color: 'var(--enterprise-gray-500)' }}>PI {m.proforma_number}</span>}
                                 </div>
-                                <div style={{ textAlign: 'right', fontSize: 12, color: '#6b7280' }}>
-                                    <div><strong style={{ color: '#111827', fontSize: 16 }}>{pi.total_pallets}</strong> pallets</div>
-                                    <div>{pi.total_mpls} MPL{pi.total_mpls !== 1 ? 's' : ''}</div>
-                                </div>
+                                {m.has_existing_gr && <span style={{ fontSize: 10, fontWeight: 700, color: '#16a34a', background: '#dcfce7', padding: '3px 8px', borderRadius: 10 }}>GR ISSUED</span>}
                             </div>
-                        </Card>
-                    );
-                })}
+                            <div style={{ fontSize: 12, color: 'var(--enterprise-gray-700)', marginBottom: 4 }}>{m.customer_name ?? '—'}</div>
+                            <div style={{ fontSize: 11, color: 'var(--enterprise-gray-500)', display: 'flex', gap: 10 }}>
+                                <span>{m.total_mpls} MPL{m.total_mpls !== 1 ? 's' : ''}</span>
+                                <span>·</span>
+                                <span>{m.total_pallets} pallet{m.total_pallets !== 1 ? 's' : ''}</span>
+                                {m.dispatched_at && <><span>·</span><span>Dispatched {new Date(m.dispatched_at).toLocaleDateString()}</span></>}
+                            </div>
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ============================================================================
+// Step 2 — Shipment (MPL list)
+// ============================================================================
+
+function ShipmentStep({ shipment, mpls, onVerifyMpl }: { shipment: ShipmentHeader; mpls: MPL[]; onVerifyMpl: (m: MPL) => void }) {
+    const verifiedCount = mpls.filter(m => m.gr).length;
+    return (
+        <div style={{ padding: 24, maxWidth: 960, margin: '0 auto' }}>
+            {/* Shipment summary card */}
+            <div style={{ background: 'white', border: '1px solid var(--enterprise-gray-200)', borderRadius: 12, padding: 18, marginBottom: 18, boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+                    <div>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--enterprise-gray-500)', letterSpacing: '0.5px', textTransform: 'uppercase' }}>Shipment</div>
+                        <div style={{ fontFamily: 'monospace', fontSize: 20, fontWeight: 800, color: 'var(--enterprise-gray-900)', marginTop: 2 }}>
+                            {shipment.shipment_number ?? shipment.proforma_number}
+                        </div>
+                        {shipment.shipment_number && (
+                            <div style={{ fontSize: 11, color: 'var(--enterprise-gray-500)', marginTop: 2 }}>PI {shipment.proforma_number}</div>
+                        )}
+                    </div>
+                    <div style={{ textAlign: 'right', fontSize: 13 }}>
+                        <div style={{ color: 'var(--enterprise-gray-800)', fontWeight: 600 }}>{shipment.customer_name}</div>
+                        {shipment.stock_moved_at && (
+                            <div style={{ color: 'var(--enterprise-gray-500)', fontSize: 11, marginTop: 2 }}>Dispatched {new Date(shipment.stock_moved_at).toLocaleDateString()}</div>
+                        )}
+                    </div>
+                </div>
+
+                {/* Progress */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: verifiedCount === mpls.length ? 'var(--enterprise-success)' : 'var(--enterprise-gray-700)', minWidth: 60 }}>
+                        {verifiedCount} / {mpls.length} MPLs
+                    </span>
+                    <div style={{ flex: 1, height: 5, background: 'var(--enterprise-gray-200)', borderRadius: 3, overflow: 'hidden' }}>
+                        <div style={{ width: `${mpls.length === 0 ? 0 : (verifiedCount / mpls.length) * 100}%`, height: '100%', background: verifiedCount === mpls.length ? 'var(--enterprise-success)' : 'var(--enterprise-primary)', transition: 'width 0.3s ease' }} />
+                    </div>
+                    <span style={{ fontSize: 11, color: 'var(--enterprise-gray-500)' }}>verified</span>
+                </div>
+            </div>
+
+            {/* MPL cards */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {mpls.map(m => <MPLCard key={m.mpl_id} mpl={m} onVerify={() => onVerifyMpl(m)} />)}
             </div>
         </div>
     );
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// VerifyStep
-// ──────────────────────────────────────────────────────────────────────────
-function VerifyStep({ pi, items, tick, rxQty, notes, setStatus, setRxQty, setNote, receiveNotes, onReceiveNotesChange, totals }: {
-    pi: ProformaMatch; items: ItemGroup[];
-    tick: Record<string, LineStatus>; rxQty: Record<string, number>; notes: Record<string, string>;
-    setStatus: (palletId: string, status: LineStatus, expectedQty: number) => void;
-    setRxQty: (palletId: string, v: number) => void;
-    setNote:  (palletId: string, v: string) => void;
-    receiveNotes: string; onReceiveNotesChange: (v: string) => void;
-    totals: ReturnType<typeof Object> & any;
-}) {
+function MPLCard({ mpl, onVerify }: { mpl: MPL; onVerify: () => void }) {
+    const verified = !!mpl.gr;
+    const hasDiscrepancy = verified && ((mpl.gr!.total_pallets_missing + mpl.gr!.total_pallets_damaged) > 0);
+    const accent = hasDiscrepancy ? '#dc2626' : verified ? '#16a34a' : '#2563eb';
+
     return (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 16, padding: 16 }}>
-            {/* LEFT — hierarchical tree */}
-            <div>
-                <Card style={{ padding: 12, background: '#f8fafc', marginBottom: 12 }}>
-                    <div style={{ fontSize: 12, color: '#4b5563', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
-                        <div><strong style={{ color: '#111827' }}>{pi.proforma_number}</strong><div style={{ fontSize: 11 }}>Proforma</div></div>
-                        <div><strong style={{ color: '#111827' }}>{pi.shipment_number ?? '—'}</strong><div style={{ fontSize: 11 }}>Shipment</div></div>
-                        <div><strong style={{ color: '#111827' }}>{pi.customer_name ?? '—'}</strong><div style={{ fontSize: 11 }}>Customer</div></div>
-                        <div><strong style={{ color: '#111827' }}>{pi.buyer_name ?? '—'}</strong><div style={{ fontSize: 11 }}>Buyer</div></div>
+        <div style={{ border: '1px solid var(--enterprise-gray-200)', borderRadius: 10, background: 'white', overflow: 'hidden', display: 'flex', boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}>
+            <div style={{ width: 4, background: accent }} />
+            <div style={{ flex: 1, padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16, flex: 1, minWidth: 0 }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 10, background: `${accent}15`, color: accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <Layers size={16} />
                     </div>
-                </Card>
-
-                {items.map((it, idx) => (
-                    <Card key={idx} style={{ marginBottom: 12, padding: 0, overflow: 'hidden' }}>
-                        <div style={{ padding: '10px 14px', background: '#eff6ff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #dbeafe' }}>
-                            <div>
-                                <div style={{ fontWeight: 700, color: '#1e3a8a', fontSize: 14 }}>
-                                    <Package size={13} style={{ verticalAlign: 'middle', marginRight: 4 }} />
-                                    {it.msn_code ?? '—'} · <span style={{ fontFamily: 'monospace' }}>{it.part_number}</span>
-                                </div>
-                                <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>
-                                    {it.item_name}
-                                </div>
-                            </div>
-                            <div style={{ fontSize: 11, color: '#475569', textAlign: 'right' }}>
-                                <div>Invoice: <strong style={{ fontFamily: 'monospace', color: '#111827' }}>{it.invoice_number ?? '—'}</strong></div>
-                                <div>BPA: <strong style={{ fontFamily: 'monospace', color: '#111827' }}>{it.bpa_number ?? '—'}</strong></div>
-                                <div><strong>{it.total_expected_qty.toLocaleString()}</strong> pcs · {it.pallet_count} pallets</div>
-                            </div>
+                    <div style={{ minWidth: 0 }}>
+                        <div style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 700, color: 'var(--enterprise-gray-900)' }}>{mpl.mpl_number}</div>
+                        <div style={{ fontSize: 11, color: 'var(--enterprise-gray-600)', marginTop: 2, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            {mpl.invoice_number && <span>INV <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{mpl.invoice_number}</span></span>}
+                            {mpl.bpa_number && <span>· BPA <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{mpl.bpa_number}</span></span>}
+                            <span>· {mpl.pallet_count} pallet{mpl.pallet_count !== 1 ? 's' : ''} · {mpl.qty_total.toLocaleString()} pcs</span>
                         </div>
-
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                            <thead>
-                                <tr style={{ background: '#f8fafc' }}>
-                                    <th style={th}>Pallet #</th>
-                                    <th style={th}>Expected</th>
-                                    <th style={th}>Received</th>
-                                    <th style={th}>Status</th>
-                                    <th style={th}>Note</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {it.pallets.map(p => {
-                                    const s = tick[p.pallet_id];
-                                    const rx = rxQty[p.pallet_id] ?? p.expected_qty;
-                                    return (
-                                        <tr key={p.pallet_id} style={{ borderTop: '1px solid #f1f5f9' }}>
-                                            <td style={td}><strong style={{ fontFamily: 'monospace' }}>{p.pallet_number ?? '—'}</strong></td>
-                                            <td style={{ ...td, textAlign: 'right', color: '#6b7280' }}>{p.expected_qty.toLocaleString()}</td>
-                                            <td style={td}>
-                                                <Input
-                                                    type="number"
-                                                    value={s === 'MISSING' ? '' : rx}
-                                                    onChange={(e) => setRxQty(p.pallet_id, Number(e.target.value || 0))}
-                                                    disabled={s === 'MISSING'}
-                                                    style={{ width: 100, padding: '4px 6px', fontSize: 12 }}
-                                                />
-                                            </td>
-                                            <td style={td}>
-                                                <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                                                    {(['RECEIVED','SHORT','DAMAGED','QUALITY_HOLD','MISSING'] as LineStatus[]).map(opt => (
-                                                        <button key={opt}
-                                                            onClick={() => setStatus(p.pallet_id, opt, p.expected_qty)}
-                                                            style={statusBtn(s === opt, opt)}>
-                                                            {statusLabel(opt)}
-                                                        </button>
-                                                    ))}
-                                                </div>
-                                            </td>
-                                            <td style={td}>
-                                                {s && s !== 'RECEIVED' && (
-                                                    <Input
-                                                        value={notes[p.pallet_id] ?? ''}
-                                                        onChange={(e) => setNote(p.pallet_id, e.target.value)}
-                                                        placeholder={s === 'MISSING' ? 'Why missing?' : s === 'DAMAGED' ? 'Damage details' : s === 'SHORT' ? 'Short by X' : 'QC reason'}
-                                                        style={{ fontSize: 12, padding: '4px 8px' }}
-                                                    />
-                                                )}
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </Card>
-                ))}
-
-                <div style={{ marginTop: 12 }}>
-                    <Label>GR Notes (optional)</Label>
-                    <Input value={receiveNotes} onChange={(e) => onReceiveNotesChange(e.target.value)} placeholder="e.g. Seal intact, truck late 2 hrs" />
+                    </div>
                 </div>
-            </div>
 
-            {/* RIGHT — sticky summary */}
-            <div style={{ position: 'sticky', top: 0, alignSelf: 'flex-start' }}>
-                <Card style={{ padding: 14, background: '#f8fafc' }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#475569', marginBottom: 8, letterSpacing: 0.5 }}>Summary</div>
-                    <div style={{ display: 'grid', gap: 8, fontSize: 13 }}>
-                        <SummaryRow label="Expected"   value={`${totals.expected} pallets / ${totals.qtyExp.toLocaleString()} pcs`} />
-                        <SummaryRow label="Received"   value={`${totals.received}`} color="#059669" />
-                        {totals.short    > 0 && <SummaryRow label="Short"      value={`${totals.short}`}    color="#d97706" />}
-                        {totals.damaged  > 0 && <SummaryRow label="Damaged"    value={`${totals.damaged}`}  color="#dc2626" />}
-                        {totals.hold     > 0 && <SummaryRow label="Qual. Hold" value={`${totals.hold}`}     color="#7c3aed" />}
-                        {totals.missing  > 0 && <SummaryRow label="Missing"    value={`${totals.missing}`}  color="#dc2626" />}
-                        <div style={{ borderTop: '1px solid #e2e8f0', margin: '6px 0' }} />
-                        <SummaryRow
-                            label="Qty variance"
-                            value={`${totals.variance >= 0 ? '+' : ''}${totals.variance.toLocaleString()} pcs`}
-                            color={totals.variance === 0 ? '#059669' : '#dc2626'}
-                        />
-                    </div>
-                    {totals.variance !== 0 && (
-                        <div style={{ marginTop: 10, padding: 8, background: '#fef3c7', borderRadius: 6, fontSize: 11, color: '#92400e', display: 'flex', gap: 6 }}>
-                            <AlertTriangle size={12} style={{ flexShrink: 0, marginTop: 1 }} />
-                            Variance will be logged on the GR for reconciliation.
-                        </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+                    {verified ? (
+                        <>
+                            <div style={{ textAlign: 'right', fontSize: 11 }}>
+                                <div style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{mpl.gr!.gr_number}</div>
+                                <div style={{ color: 'var(--enterprise-gray-500)', marginTop: 2 }}>
+                                    {mpl.gr!.total_pallets_received} received
+                                    {(mpl.gr!.total_pallets_missing + mpl.gr!.total_pallets_damaged) > 0 &&
+                                        <span style={{ color: '#dc2626', fontWeight: 600 }}>
+                                            {' '}· {mpl.gr!.total_pallets_missing + mpl.gr!.total_pallets_damaged} issue{mpl.gr!.total_pallets_missing + mpl.gr!.total_pallets_damaged !== 1 ? 's' : ''}
+                                        </span>}
+                                </div>
+                            </div>
+                            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', padding: '5px 10px', borderRadius: 10, color: hasDiscrepancy ? '#991b1b' : '#166534', background: hasDiscrepancy ? '#fee2e2' : '#dcfce7', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                <CheckCircle2 size={11} /> Verified
+                            </span>
+                        </>
+                    ) : (
+                        <button onClick={onVerify} style={{ ...primaryBtn, display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px' }}>
+                            Verify <ChevronRight size={14} />
+                        </button>
                     )}
-                </Card>
+                </div>
             </div>
         </div>
     );
 }
 
-function SummaryRow({ label, value, color }: { label: string; value: React.ReactNode; color?: string }) {
-    return (
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ color: '#6b7280' }}>{label}</span>
-            <strong style={{ color: color ?? '#111827' }}>{value}</strong>
-        </div>
-    );
-}
+// ============================================================================
+// Step 3 — Verify MPL
+// ============================================================================
 
-const statusLabel = (s: LineStatus): string =>
-    s === 'RECEIVED' ? '✓ Received'
-    : s === 'SHORT'     ? 'Short'
-    : s === 'DAMAGED'   ? 'Damaged'
-    : s === 'QUALITY_HOLD' ? 'QC Hold'
-    : '✗ Missing';
-
-const statusBtn = (active: boolean, s: LineStatus): React.CSSProperties => {
-    const colors: Record<LineStatus, string> = {
-        RECEIVED:     '#16a34a',
-        SHORT:        '#d97706',
-        DAMAGED:      '#dc2626',
-        QUALITY_HOLD: '#7c3aed',
-        MISSING:      '#dc2626',
-    };
-    const c = colors[s];
-    return {
-        padding: '3px 8px', fontSize: 10, fontWeight: 600, borderRadius: 4, cursor: 'pointer',
-        border: `1px solid ${active ? c : '#d1d5db'}`,
-        background: active ? c : 'white',
-        color: active ? 'white' : '#374151',
-        whiteSpace: 'nowrap',
-    };
-};
-
-const th: React.CSSProperties = { padding: '8px 10px', textAlign: 'left', fontSize: 11, textTransform: 'uppercase', color: '#475569', fontWeight: 700, letterSpacing: 0.3 };
-const td: React.CSSProperties = { padding: '8px 10px', verticalAlign: 'top' };
-
-// ──────────────────────────────────────────────────────────────────────────
-// DoneStep
-// ──────────────────────────────────────────────────────────────────────────
-function DoneStep({ result, autoIn }: {
-    result: { gr_number: string; pallets_received: number; pallets_missing: number; pending_placement: number };
-    autoIn: number;
+function VerifyMplStep({ mpl, tick, onTickChange, rxQty, onRxQtyChange, notes, onNotesChange, mplNote, onMplNoteChange, filter, onFilterChange }: {
+    mpl: MPL;
+    tick: Record<string, LineStatus>; onTickChange: (pid: string, s: LineStatus) => void;
+    rxQty: Record<string, number>; onRxQtyChange: (pid: string, q: number) => void;
+    notes: Record<string, string>; onNotesChange: (pid: string, n: string) => void;
+    mplNote: string; onMplNoteChange: (s: string) => void;
+    filter: string; onFilterChange: (s: string) => void;
 }) {
+    // Running counts
+    const rxCount = Object.entries(tick).filter(([, s]) => s === 'RECEIVED').length;
+    const missCount = Object.entries(tick).filter(([, s]) => s === 'MISSING').length;
+    const damCount = Object.entries(tick).filter(([, s]) => s === 'DAMAGED' || s === 'SHORT' || s === 'QUALITY_HOLD').length;
+
+    const f = filter.trim().toLowerCase();
+    const visible = f
+        ? mpl.pallets.filter(p => (p.part_number ?? '').toLowerCase().includes(f) || (p.msn_code ?? '').toLowerCase().includes(f) || (p.pallet_number ?? '').toLowerCase().includes(f))
+        : mpl.pallets;
+
     return (
-        <div style={{ padding: 28, maxWidth: 560, margin: '0 auto' }}>
-            <div style={{ textAlign: 'center', marginBottom: 16 }}>
-                <CheckCircle size={40} color="#16a34a" />
-                <h3 style={{ fontSize: 20, fontWeight: 700, margin: '10px 0 4px', color: '#065f46' }}>Goods Receipt Issued</h3>
-                <p style={{ fontSize: 13, color: '#475569' }}>
-                    Immutable legal receipt for finance + customs.
-                </p>
+        <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
+            {/* MPL summary + counts strip */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 14 }}>
+                <MiniCount label="Total"     value={mpl.pallets.length} />
+                <MiniCount label="Received"  value={rxCount}  color="#16a34a" />
+                <MiniCount label="Missing"   value={missCount} color="#dc2626" />
+                <MiniCount label="Discrepancy" value={damCount} color="#d97706" />
+                <MiniCount label="Qty"       value={mpl.qty_total.toLocaleString()} />
             </div>
-            <Card style={{ background: '#f0fdf4', borderLeft: '3px solid #16a34a', marginBottom: 14 }}>
-                <div style={{ fontSize: 11, color: '#065f46', marginBottom: 4, textTransform: 'uppercase', fontWeight: 700, letterSpacing: 0.5 }}>GR Number</div>
-                <div style={{ fontSize: 20, fontFamily: 'monospace', fontWeight: 800, color: '#064e3b', marginBottom: 10 }}>{result.gr_number}</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, fontSize: 13 }}>
-                    <div><strong>{result.pallets_received}</strong><div style={{ fontSize: 11, color: '#475569' }}>Received</div></div>
-                    <div><strong>{result.pallets_missing}</strong><div style={{ fontSize: 11, color: '#475569' }}>Missing</div></div>
-                    <div><strong>{result.pending_placement}</strong><div style={{ fontSize: 11, color: '#475569' }}>To place</div></div>
-                </div>
-            </Card>
-            <Card style={{ background: '#eff6ff', borderLeft: '3px solid #2563eb' }}>
-                <div style={{ display: 'flex', gap: 10 }}>
-                    <Grid3X3 size={20} color="#2563eb" style={{ flexShrink: 0, marginTop: 2 }} />
-                    <div style={{ fontSize: 13 }}>
-                        <p style={{ fontWeight: 600, margin: '0 0 4px', color: '#1e3a8a' }}>Next — place pallets on racks</p>
-                        <p style={{ margin: 0, color: '#1e40af' }}>
-                            Auto-navigating to <strong>Rack View</strong> with this GR pre-loaded in{' '}
-                            <strong>{autoIn}s</strong>… or click <em>Place Now</em>.
-                        </p>
-                    </div>
-                </div>
-            </Card>
+
+            {/* Search */}
+            <div style={{ position: 'relative', marginBottom: 14 }}>
+                <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--enterprise-gray-400)' }} />
+                <input type="text" value={filter}
+                    onChange={(e) => onFilterChange(e.target.value)}
+                    placeholder="Filter by part #, MSN, or pallet #…"
+                    style={{ width: '100%', padding: '10px 12px 10px 36px', fontSize: 13, border: '1px solid var(--enterprise-gray-200)', borderRadius: 8, outline: 'none', boxSizing: 'border-box' }}
+                    onFocus={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-primary)'}
+                    onBlur={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-gray-200)'} />
+            </div>
+
+            {/* Pallet list */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {visible.map(p => (
+                    <PalletRow key={p.pallet_id} pallet={p}
+                        status={tick[p.pallet_id] ?? 'RECEIVED'}
+                        rxQty={rxQty[p.pallet_id] ?? p.quantity}
+                        note={notes[p.pallet_id] ?? ''}
+                        onStatusChange={(s) => onTickChange(p.pallet_id, s)}
+                        onQtyChange={(q) => onRxQtyChange(p.pallet_id, q)}
+                        onNoteChange={(n) => onNotesChange(p.pallet_id, n)}
+                    />
+                ))}
+            </div>
+
+            {/* Overall MPL note */}
+            <div style={{ marginTop: 18 }}>
+                <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--enterprise-gray-700)', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 6, display: 'block' }}>
+                    MPL Note (optional)
+                </label>
+                <textarea value={mplNote} onChange={(e) => onMplNoteChange(e.target.value)}
+                    placeholder="Overall notes for this MPL's Goods Receipt…"
+                    rows={2}
+                    style={{ width: '100%', padding: '10px 12px', fontSize: 13, border: '1px solid var(--enterprise-gray-200)', borderRadius: 8, outline: 'none', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }}
+                    onFocus={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-primary)'}
+                    onBlur={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-gray-200)'} />
+            </div>
         </div>
     );
 }
+
+function PalletRow({ pallet, status, rxQty, note, onStatusChange, onQtyChange, onNoteChange }: {
+    pallet: Pallet; status: LineStatus; rxQty: number; note: string;
+    onStatusChange: (s: LineStatus) => void; onQtyChange: (q: number) => void; onNoteChange: (n: string) => void;
+}) {
+    const accent = status === 'RECEIVED' ? '#16a34a' : status === 'MISSING' ? '#dc2626' : '#d97706';
+    const showNote = status !== 'RECEIVED';
+    return (
+        <div style={{ border: '1px solid var(--enterprise-gray-200)', borderRadius: 8, padding: '10px 12px', background: 'white' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 1.3fr', gap: 12, alignItems: 'center' }}>
+                <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 700, color: 'var(--enterprise-info, #3b82f6)', background: 'rgba(59,130,246,0.1)', padding: '1px 7px', borderRadius: 4 }}>{pallet.part_number}</span>
+                        <span style={{ fontSize: 11, color: 'var(--enterprise-gray-600)' }}>{pallet.msn_code}</span>
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', marginTop: 2, fontFamily: 'monospace' }}>{pallet.pallet_number}</div>
+                </div>
+                <div>
+                    <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Expected</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, fontFamily: 'monospace', marginTop: 2 }}>{pallet.quantity.toLocaleString()}</div>
+                </div>
+                <div>
+                    <label style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'block', marginBottom: 2 }}>Received Qty</label>
+                    <input type="number" min={0} max={pallet.quantity}
+                        value={status === 'MISSING' ? 0 : rxQty}
+                        disabled={status === 'MISSING'}
+                        onChange={(e) => onQtyChange(Math.max(0, Number(e.target.value) || 0))}
+                        style={{ width: '100%', padding: '6px 8px', fontSize: 13, border: '1px solid var(--enterprise-gray-200)', borderRadius: 6, outline: 'none', fontFamily: 'monospace', boxSizing: 'border-box' }} />
+                </div>
+                <div style={{ display: 'flex', gap: 4 }}>
+                    {(['RECEIVED','MISSING','DAMAGED','SHORT','QUALITY_HOLD'] as LineStatus[]).map(s => {
+                        const active = status === s;
+                        const label = s === 'QUALITY_HOLD' ? 'Q. HOLD' : s;
+                        return (
+                            <button key={s} onClick={() => onStatusChange(s)}
+                                style={{
+                                    flex: 1, padding: '6px 4px', fontSize: 10, fontWeight: 700, letterSpacing: '0.3px',
+                                    border: active ? `1.5px solid ${accent}` : '1px solid var(--enterprise-gray-200)',
+                                    background: active ? `${accent}15` : 'white',
+                                    color: active ? accent : 'var(--enterprise-gray-600)',
+                                    borderRadius: 6, cursor: 'pointer',
+                                }}>
+                                {label}
+                            </button>
+                        );
+                    })}
+                </div>
+            </div>
+            {showNote && (
+                <div style={{ marginTop: 8 }}>
+                    <input type="text" value={note} onChange={(e) => onNoteChange(e.target.value)}
+                        placeholder="Discrepancy note (required for non-RECEIVED status)…"
+                        style={{ width: '100%', padding: '6px 10px', fontSize: 12, border: '1px solid var(--enterprise-gray-300)', borderRadius: 6, outline: 'none', boxSizing: 'border-box' }} />
+                </div>
+            )}
+        </div>
+    );
+}
+
+function MiniCount({ label, value, color }: { label: string; value: number | string; color?: string }) {
+    return (
+        <div style={{ background: 'white', border: '1px solid var(--enterprise-gray-200)', borderRadius: 8, padding: '10px 12px' }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>{label}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: color ?? 'var(--enterprise-gray-900)', marginTop: 2 }}>{value}</div>
+        </div>
+    );
+}
+
+// ============================================================================
+// Styles
+// ============================================================================
+
+const backdropStyle: React.CSSProperties = {
+    position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', zIndex: 1000,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+};
+const modalStyle: React.CSSProperties = {
+    background: 'white', borderRadius: 14,
+    width: '100%', maxWidth: 1200,
+    minHeight: 520, maxHeight: '88vh',
+    display: 'flex', flexDirection: 'column', overflow: 'hidden',
+    boxShadow: '0 24px 70px rgba(0,0,0,0.3)',
+};
+const primaryBtn: React.CSSProperties = {
+    background: 'var(--enterprise-primary)', color: 'white', border: 'none',
+    padding: '9px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+};
+const secondaryBtn: React.CSSProperties = {
+    background: 'white', color: 'var(--enterprise-gray-700)', border: '1px solid var(--enterprise-gray-300)',
+    padding: '9px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+};
+const ghostBtn: React.CSSProperties = {
+    background: 'transparent', color: 'var(--enterprise-gray-600)', border: 'none',
+    padding: '9px 14px', fontSize: 13, cursor: 'pointer',
+};
