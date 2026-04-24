@@ -741,13 +741,21 @@ function ItemViewModal({ isOpen, onClose, item }: {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px', fontSize: '13px', fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>
                   <Package size={16} style={{ color: '#ef4444' }} /> US Warehouse
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px', marginBottom: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px', marginBottom: '6px' }}>
                   <span style={{ color: 'var(--enterprise-gray-500)' }}>On Hand</span>
                   <span style={{ fontWeight: 600, color: '#6366f1' }}>{(distribution as any)?.usTransitOnHand ?? 0}</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px', marginBottom: '6px' }}>
+                  <span style={{ color: 'var(--enterprise-gray-500)' }}>Allocated</span>
+                  <span style={{ fontWeight: 600, color: 'var(--enterprise-error)' }}>{(distribution as any)?.usTransitAllocated ?? 0}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px', marginBottom: '6px' }}>
                   <span style={{ color: 'var(--enterprise-gray-500)' }}>Reserved</span>
-                  <span style={{ fontWeight: 600, color: 'var(--enterprise-warning)' }}>0</span>
+                  <span style={{ fontWeight: 600, color: 'var(--enterprise-warning)' }}>{(distribution as any)?.usTransitReserved ?? 0}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
+                  <span style={{ color: 'var(--enterprise-gray-500)' }}>Available</span>
+                  <span style={{ fontWeight: 700, color: 'var(--enterprise-success)' }}>{(distribution as any)?.usTransitAvailable ?? 0}</span>
                 </div>
               </div>
             </div>

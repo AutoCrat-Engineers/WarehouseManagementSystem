@@ -51,13 +51,14 @@ export const handler = withErrorHandler(async (req) => {
         .eq('pallet_id', body.pallet_id)
         .order('position_sequence');
 
-    // Master packing list row (has invoice_number, po_number [=BPA], proforma_invoice_id)
+    // Master packing list rows. A pallet can have multiple MPL history
+    // (e.g. original MPL cancelled, a new one created). Fetch all active
+    // MPP rows and pick the one whose MPL is NOT cancelled, preferring the
+    // most recent dispatched / created.
     const mppP = ctx.db
         .from('master_packing_list_pallets')
-        .select('mpl_id, master_packing_lists!inner (id, mpl_number, invoice_number, po_number, proforma_invoice_id, dispatched_at, status)')
-        .eq('pallet_id', body.pallet_id)
-        .eq('status', 'ACTIVE')
-        .limit(1);
+        .select('mpl_id, status, master_packing_lists!inner (id, mpl_number, invoice_number, po_number, proforma_invoice_id, dispatched_at, created_at, status)')
+        .eq('pallet_id', body.pallet_id);
 
     // Most recent GR line referencing this pallet
     const grP = ctx.db
@@ -69,9 +70,25 @@ export const handler = withErrorHandler(async (req) => {
 
     const [itemR, plR, cartonsR, mppR, grR] = await Promise.all([itemP, plP, cartonsP, mppP, grP]);
 
-    // Normalize MPL / shipment
-    const mpp   = (mppR.data as any[])?.[0] ?? null;
-    const mpl   = mpp?.master_packing_lists ?? null;
+    // Normalize MPL / shipment — pick the BEST MPL for this pallet:
+    // 1. Prefer rows where the parent MPL is NOT CANCELLED
+    // 2. Prefer MPP rows still flagged ACTIVE
+    // 3. Then most recent dispatched / created
+    const mppRows = ((mppR.data as any[]) ?? [])
+        .map(r => ({ ...r, _mpl: r.master_packing_lists }))
+        .sort((a, b) => {
+            const aCancelled = a._mpl?.status === 'CANCELLED' ? 1 : 0;
+            const bCancelled = b._mpl?.status === 'CANCELLED' ? 1 : 0;
+            if (aCancelled !== bCancelled) return aCancelled - bCancelled;
+            const aActive = a.status === 'ACTIVE' ? 0 : 1;
+            const bActive = b.status === 'ACTIVE' ? 0 : 1;
+            if (aActive !== bActive) return aActive - bActive;
+            const aDt = a._mpl?.dispatched_at ?? a._mpl?.created_at ?? '';
+            const bDt = b._mpl?.dispatched_at ?? b._mpl?.created_at ?? '';
+            return bDt.localeCompare(aDt);
+        });
+    const mpp = mppRows[0] ?? null;
+    const mpl = mpp?._mpl ?? null;
 
     // Proforma / shipment lookup
     const piId = mpl?.proforma_invoice_id;

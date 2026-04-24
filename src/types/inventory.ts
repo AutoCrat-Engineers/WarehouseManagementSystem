@@ -95,6 +95,12 @@ export interface ItemStockDashboard {
     warehouseAvailable: number;
     warehouseReserved: number;
 
+    // US 3PL warehouse (primary view for releases)
+    usTransitOnHand?: number;
+    usTransitAllocated?: number;
+    usTransitReserved?: number;
+    usTransitAvailable?: number;
+
     // In Transit Card
     inTransitQuantity: number;
 
@@ -155,6 +161,10 @@ export interface ItemStockDistribution {
     usTransitOnHand: number;
     usTransitAvailable: number;
     usTransitReserved: number;
+    usTransitAllocated: number;
+
+    // FG allocation / reservation (from release_pallet_holds)
+    productionAllocated: number;
 
     // Distribution
     distributionOnHand: number;

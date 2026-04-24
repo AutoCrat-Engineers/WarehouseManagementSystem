@@ -96,6 +96,36 @@ export const handler = withErrorHandler(async (req) => {
         if (!mplByPallet.has(m.pallet_id)) mplByPallet.set(m.pallet_id, m.master_packing_lists);
     }
 
+    // ── 4a. Lazy-backfill pack_invoice_line_items so every returned pallet
+    //       has a guaranteed parent_invoice_line_id. Without this, pallets
+    //       whose parent invoice never received line-item detail come back
+    //       with parent_invoice_line_id=null and the release wizard fails
+    //       at submit time ("missing parent invoice binding").
+    const availablePalletIds = palletIds.filter(pid => palletMap.has(pid) && !releasedSet.has(pid));
+    if (availablePalletIds.length > 0) {
+        const { error: bfErr } = await ctx.db.rpc('ensure_invoice_line_items_for_pallets', {
+            p_pallet_ids: availablePalletIds,
+        });
+        if (bfErr) {
+            console.error('[release_list_available_pallets] backfill error:', bfErr.message);
+            // Non-fatal — continue; some pallets may still be missing binding
+        }
+    }
+
+    // ── 4a. Lazy-backfill pack_invoice_line_items for these pallets ─────
+    // Older invoices may lack pack_invoice_line_items rows. Without this,
+    // parent_invoice_line_id comes back null and sub_invoice_create fails
+    // with "missing parent invoice binding" at submit time. Mirrors the
+    // same backfill release_fifo_suggest performs (see mig 037).
+    {
+        const { error: bfErr } = await ctx.db.rpc('ensure_invoice_line_items_for_pallets', {
+            p_pallet_ids: palletIds,
+        });
+        if (bfErr) {
+            console.warn('ensure_invoice_line_items_for_pallets:', bfErr.message);
+        }
+    }
+
     // ── 4b. Parent invoice line_items for knock-off binding ─────────────
     // Group-by UI needs: which invoice this pallet's qty should knock off
     // against. Map (invoice_number, part_number) → pack_invoice_line_item.
@@ -178,6 +208,15 @@ export const handler = withErrorHandler(async (req) => {
     if (body.agreement_id) {
         enriched = enriched.filter(p => p.agreement_id === body.agreement_id);
     }
+
+    // Filter out pallets missing parent_invoice_line_id — they cannot be used
+    // in a release because sub_invoice_create requires a parent line for
+    // knock-off. Log a warning so we can trace orphan pallets later.
+    const orphanCount = enriched.filter(p => !p.parent_invoice_line_id).length;
+    if (orphanCount > 0) {
+        console.warn(`[release_list_available_pallets] ${orphanCount} pallet(s) excluded — missing parent_invoice_line_id after backfill. Part: ${body.part_number}`);
+    }
+    enriched = enriched.filter(p => !!p.parent_invoice_line_id);
 
     // FIFO sort: shipment_sequence asc (nulls last) then placed_at asc
     enriched.sort((a, b) => {

@@ -67,6 +67,21 @@ export function fifoSuggest(input: {
     return callEdge('release_fifo_suggest', input);
 }
 
+// ── Draft-time pallet holds (allocated / reserved) ────────────────────
+export interface PalletHoldInput {
+    pallet_id:     string;
+    part_number:   string;
+    quantity:      number;
+    warehouse_id?: string;
+}
+
+export function allocateReleasePallets(input: {
+    release_id: string;
+    pallets:    PalletHoldInput[];
+}): Promise<{ success: boolean; release_id: string; allocated: number; reserved: number }> {
+    return callEdge('release_allocate_pallets', input);
+}
+
 // ── Sub-invoice creation (v2: multi-invoice allocations) ──────────────
 export interface Allocation {
     parent_invoice_line_id: string;

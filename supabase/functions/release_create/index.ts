@@ -59,13 +59,33 @@ export const handler = withErrorHandler(async (req) => {
         const prev = existing?.[0]?.release_sequence ?? 0;
         releaseSeq = Number(prev) + 1;
     } else {
-        // Explicit sequence — duplicate guard
-        const { count } = await ctx.db
+        // Explicit sequence — duplicate guard. If a release with this number
+        // already exists but is an orphan from a prior failed submit
+        // (OPEN status, no sub-invoice knocked off against it), reuse it
+        // instead of erroring so the wizard retry path works.
+        const { data: dupes } = await ctx.db
             .from('blanket_releases')
-            .select('id', { count: 'exact', head: true })
+            .select('id, release_number, release_sequence, customer_po_base, status, agreement_id, requested_quantity, need_by_date, buyer_name, notes')
             .eq('customer_po_base', poBase)
-            .eq('release_sequence', releaseSeq);
-        if ((count ?? 0) > 0) {
+            .eq('release_sequence', releaseSeq)
+            .limit(1);
+        const dupe = dupes?.[0];
+        if (dupe) {
+            // Only reuse if orphan: status OPEN and no sub_invoice linked
+            const { count: subCount } = await ctx.db
+                .from('pack_sub_invoices')
+                .select('id', { count: 'exact', head: true })
+                .eq('blanket_release_id', dupe.id);
+            if (dupe.status === 'OPEN' && (subCount ?? 0) === 0) {
+                return jsonResponse({
+                    success:          true,
+                    release_id:       dupe.id,
+                    release_number:   dupe.release_number,
+                    release_sequence: dupe.release_sequence,
+                    po_base:          dupe.customer_po_base,
+                    reused:           true,
+                }, { origin });
+            }
             return errorResponse('CONFLICT',
                 `Release ${poBase}-${releaseSeq} already exists`, { origin });
         }

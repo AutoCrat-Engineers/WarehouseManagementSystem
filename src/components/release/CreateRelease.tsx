@@ -20,7 +20,7 @@ import {
 import { listBPAs, getBPA } from '../bpa/bpaService';
 import type { CustomerAgreement, CustomerAgreementPart } from '../bpa/types';
 import {
-    listAvailablePallets, createRelease, createSubInvoice,
+    listAvailablePallets, createRelease, createSubInvoice, allocateReleasePallets,
 } from './releaseService';
 import type { Allocation } from './releaseService';
 import type { AvailablePallet } from './types';
@@ -124,6 +124,22 @@ export function CreateRelease({ onClose, onCreated }: Props) {
                     quantity: qty,
                 });
             }
+
+            // 2b. Allocate pallet holds on the drafted release. Pallets on
+            // this release become ALLOCATED; if another release already holds
+            // them, they queue as RESERVED (priority = need_by_date).
+            await allocateReleasePallets({
+                release_id: release.release_id,
+                pallets: Array.from(state.selectedPallets.entries()).map(([palletId, qty]) => {
+                    const p = pallets.find(pp => pp.pallet_id === palletId);
+                    return {
+                        pallet_id:    palletId,
+                        part_number:  state.partNumber,
+                        quantity:     qty,
+                        warehouse_id: (p as any)?.warehouse_id,
+                    };
+                }),
+            });
 
             // 3. Create sub-invoice with multi-invoice allocations
             const sub = await createSubInvoice({
