@@ -36,7 +36,7 @@ export function ReleaseList({ userRole, userPerms = {} }: Props) {
     const [page, setPage]       = useState(0);
     const pageSize              = 25;
     const [totalCount, setTotalCount] = useState(0);
-    const [filter, setFilter]   = useState<CardFilter>('OPEN');
+    const [filter, setFilter]   = useState<CardFilter>('ALL');
     const [search, setSearch]   = useState('');
 
     const [showCreate, setShowCreate] = useState(false);

@@ -27,19 +27,19 @@ export const handler = withErrorHandler(async (req) => {
 
     const body = await parseBody(req);
     const v = validate(body, {
-        pallet_id:       'uuid',
-        warehouse_id:    'uuid',
-        rack:            'string',
+        pallet_id: 'uuid',
+        warehouse_id: 'uuid',
+        rack: 'string',
         location_number: 'positive_int',
     });
     if (!v.ok) return errorResponse('VALIDATION_FAILED', v.error, { origin });
 
     const { data, error } = await ctx.db.rpc('place_pallet_on_rack', {
-        p_pallet_id:       body.pallet_id,
-        p_warehouse_id:    body.warehouse_id,
-        p_rack:            body.rack,
+        p_pallet_id: body.pallet_id,
+        p_warehouse_id: body.warehouse_id,
+        p_rack: body.rack,
         p_location_number: body.location_number,
-        p_user_id:         ctx.userId,
+        p_user_id: ctx.userId,
         p_idempotency_key: body.idempotency_key ?? null,
     });
 

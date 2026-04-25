@@ -34,7 +34,7 @@ export function TariffInvoiceQueue({ userRole, userPerms = {} }: Props) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    const [filter, setFilter] = useState<CardFilter>('DRAFT');
+    const [filter, setFilter] = useState<CardFilter>('ALL');
     const [search, setSearch] = useState('');
     const [page, setPage] = useState(0);
     const pageSize = 25;

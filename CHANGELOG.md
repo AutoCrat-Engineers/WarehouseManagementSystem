@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.5] — 2026-04-25
+
+### Release Type: Minor — Release Allocation Holds + Historical Data Import
+
+### Added
+
+- **Release Allocation Holds system** (migrations 044–048) — `release_pallet_holds` table tracks ALLOCATED vs RESERVED per (part × warehouse) at release-level priority (earliest `need_by_date` wins). Inventory views now expose 4 buckets per warehouse: On-Hand / Allocated / Reserved / Available
+- **`release_allocate_pallets` edge function** — thin wrapper over the new RPC; resolves `warehouse_id` from pallet rack placement
+- **`recompute_release_holds(part, warehouse_id)` RPC** — scope-wide priority recompute, called from any hold-changing path
+- **Historical data import — Phases M1 → M4** (migrations 049–058) — first production import of legacy artefacts: 4 customer BPAs, 197 pallets across racks A–G, 30 FULFILLED releases, 31 sub-invoices, 31 CLAIMED tariff invoices. Four procurement scenarios modelled (Standard PO, Real BPA, Informal Borrow, Synthesized BPA)
+- **Release notes** — [`docs/releases/CHANGES_0.5.5.md`](docs/releases/CHANGES_0.5.5.md)
+- **Release report** — [`docs/releases/RELEASE_0.5.5.md`](docs/releases/RELEASE_0.5.5.md) (executive summary)
+- **Implementation report** — [`docs/releases/IMPLEMENTATION_0.5.4_TO_0.5.5.md`](docs/releases/IMPLEMENTATION_0.5.4_TO_0.5.5.md) (full technical change log)
+
+### Changed
+
+- **Stock-deduction timing** — `On-Hand` is decremented only when a release flips to `DELIVERED`, not on sub-invoice creation. The premature `trg_rpa_drain_hold` trigger was replaced by `trg_br_delivered_drain_holds`
+- **MPL cancellation cascade** — `master_packing_lists.status = 'CANCELLED'` now propagates to `master_packing_list_pallets.status` via `trg_mpl_cancel_sync_mpp`. The MPP `status` CHECK now permits `CANCELLED`. Rack drawer no longer surfaces cancelled paperwork
+- **`pallet_get_back_chain` edge function** — sorts non-cancelled MPLs first and active MPP rows ahead of stale ones
+- **`vw_item_stock_distribution` view** — rebuilt to expose four buckets per warehouse; `ItemStockDistribution` and `ItemStockDashboard` TS types updated to match
+- **`ReleaseList.tsx` / `TariffInvoiceQueue.tsx` default filters** — switched from `OPEN`/`DRAFT` to `ALL` so migrated FULFILLED/CLAIMED rows are visible on first load
+- **`StockDistributionCard.tsx`** — new `BucketStat` component; US 3PL panel renders 4-bucket breakdown
+- **`UnifiedItemMaster.tsx`** — US Warehouse card surfaces Allocated, Reserved, Available alongside On-Hand
+- **`CreateRelease.tsx` wizard** — calls `allocateReleasePallets` between `createRelease` and `createSubInvoice` so holds exist before stock drains
+
+### Fixed
+
+- **On-Hand inflated by 10k** after fulfilling two releases — root cause was migration 046 reversing by assignment qty (30k) instead of actual ledger deductions (20k). Fixed in 047 by debiting the over-credit from `inv_stock_ledger.RELEASE_OUT`
+- **Both releases showing ALLOCATED instead of one ALLOCATED + one RESERVED** — per-pallet unique partial index forced both releases to win. Index dropped; `recompute_release_holds` now sets exactly one winner per `(part × warehouse)` scope
+- **Inbound Receiving dashboard counters at 0** for migrated proformas — `proforma_invoice_mpls` junction was not seeded by M2. Migration 055 backfills it and links `goods_receipts.mpl_id` / `proforma_invoice_id`
+- **Rack Storage UI showing empty grid** for migrated pallets — M2 wrote codes as `A-01` but the RackView generator keys cells as `A1`. Migration 056 strips the dash and leading zeros
+- **BPA dashboard "Released $0 / 0% fulfillment"** for migrated BPAs — `mv_bpa_fulfillment_dashboard` joins through `blanket_order_line_configs.released_quantity` which M3 never updated. Migrations 053 + 054 roll up from `blanket_releases`; 058 backfills `warehouse_rack_locations.agreement_id` so the lateral rack-stats join returns rows. Both materialized views are now refreshed at the end of each migration
+- **Item Master "No Releases Yet"** on parts with M3 history — M3 seeded `pack_sub_invoices` headers but no line rows. Migration 057 seeds one line per sub-invoice and back-links `line_config_id`
+
+### Deferred
+
+- **`inv_stock_ledger` back-fill for M2** — historical pallet inserts credit `inv_warehouse_stock` directly; explicit ledger rows are not written. A future M5 can synthesize `RECEIPT_IN` rows if a full audit trail is required
+- **`260099999` synthetic catch-all BPA** — schema reserves the `MIGRATION_PLACEHOLDER` source value but no rows are seeded yet; held until the next batch of back-fill data arrives
+- **Cross-BPA shared parts** — schema supports it; demo dataset does not yet exercise the path
+
+### Security
+
+- No new attack surface. `release_allocate_pallets` is a `SECURITY DEFINER` RPC behind a JWT-auth edge function; migration SQL runs only under `service_role` via `supabase db push`
+
+### Docs
+
+- New release notes, three new architecture files, this CHANGELOG entry, `00_INDEX.md` migration count refreshed (018–058) and edge-function count bumped (58 → 59)
+
+---
+
 ## [0.5.4] — 2026-04-21
 
 ### Release Type: Minor — Item Master Edge Functions, Soft Delete & Schema Migration Groundwork

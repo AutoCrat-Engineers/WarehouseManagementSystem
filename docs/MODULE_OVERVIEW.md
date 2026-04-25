@@ -1,6 +1,6 @@
 # Module Overview
 
-> **Version:** 0.5.0 | **Last Updated:** 2026-03-31
+> **Version:** 0.5.5 | **Last Updated:** 2026-04-25
 
 ## Module Dependency Map
 
@@ -70,14 +70,28 @@ flowchart TD
 | MPL Service | `mplService.ts` | MPL CRUD + dispatch |
 | Packing List Manager | `PackingListManager.tsx` | Packing list CRUD + workflow |
 
+### Customer-Facing Workflow Modules (added in 0.5.5)
+
+| Module | File | Purpose |
+|--------|------|---------|
+| BPA List | `bpa/BPAList.tsx` | Customer agreement portfolio with fulfillment dashboard, cancel, expiry alerts |
+| BPA Detail / Create / Amend | `bpa/BPADetail.tsx`, `BPACreate.tsx`, `BPAAmend.tsx` | Per-BPA detail with revisions, line-level edits, document upload |
+| Release List | `release/ReleaseList.tsx` | Drafted / Completed / Cancelled releases with sub-invoice progress |
+| Create Release | `release/CreateRelease.tsx` | Wizard: BPA pick → pallet selection → allocate-holds → sub-invoice |
+| Tariff Invoice Queue | `release/TariffInvoiceQueue.tsx` | Finance queue: DRAFT → SUBMITTED → CLAIMED → PAID |
+| Inbound Receiving | `rack-view/RackViewGrid.tsx`, `ReceiveShipmentScreen.tsx` | Per-MPL goods-receipt with discrepancy tracking |
+| Rack Storage | `RackView.tsx`, `rack-view/RackCellDrawer.tsx` | Visual rack-cell view with pallet back-chain |
+| Pack Engine — Pallet | `packing-engine/PalletDashboard.tsx` | Pallet state machine across packing → dispatch → 3PL → release |
+
 ### Support Modules
 
 | Module | File | Purpose |
 |--------|------|---------|
-| Blanket Orders | `BlanketOrders.tsx` | Long-term supply agreements |
-| Blanket Releases | `BlanketReleases.tsx` | Order releases |
+| Blanket Orders | `BlanketOrders.tsx` | Legacy view (mirror of customer_agreements) |
+| Blanket Releases | `BlanketReleases.tsx` | Legacy view of releases |
 | Forecasting | `ForecastingModule.tsx` | Demand prediction |
 | MRP Planning | `PlanningModule.tsx` | Replenishment planning |
+| Stock Distribution Card | `StockDistributionCard.tsx` | 4-bucket inventory (`On-Hand / Allocated / Reserved / Available`) — added in 0.5.5 |
 | Rack View | `RackView.tsx` | Visual warehouse layout |
 | Notifications | `NotificationBell.tsx` | Notification system |
 
