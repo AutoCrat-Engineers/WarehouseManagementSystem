@@ -63,17 +63,19 @@ export async function handler(req: Request): Promise<Response> {
     const safeSearch = searchTerm.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
     // ── SEARCH: resolve matching item_codes ONCE (client did this twice) ─
+    // items.item_code dropped in migration 018 — part_number is canonical
+    // and carries the values that the child tables (packing_requests etc.)
+    // store in their `item_code` columns.
     let matchedCodes: string[] = [];
     if (safeSearch) {
       const { data: matchedItems } = await db
         .from('items')
-        .select('item_code')
+        .select('part_number')
         .or(
-          `item_code.ilike."%${safeSearch}%",item_name.ilike."%${safeSearch}%",` +
-            `master_serial_no.ilike."%${safeSearch}%",part_number.ilike."%${safeSearch}%"`,
+          `item_name.ilike."%${safeSearch}%",master_serial_no.ilike."%${safeSearch}%",part_number.ilike."%${safeSearch}%"`,
         )
         .limit(500);
-      matchedCodes = ((matchedItems || []) as any[]).map((i: any) => i.item_code);
+      matchedCodes = ((matchedItems || []) as any[]).map((i: any) => i.part_number);
     }
 
     // Helper: apply the current status+search filters to a query builder
@@ -147,10 +149,14 @@ export async function handler(req: Request): Promise<Response> {
       // some requests' boxes_count to display as "—" on pages where several
       // requests had hundreds of boxes between them.  HEAD + count=exact
       // returns only a count (no rows), so the row cap doesn't apply.
+      // items.item_code dropped in migration 018 — look up by part_number
+      // (which carries the same values since the FK-ed child tables point at
+      // part_number). Alias part_number AS item_code so downstream code
+      // continues to index by `i.item_code`.
       const itemsPromise = itemCodes.length > 0
         ? db.from('items')
-            .select('item_code, item_name, master_serial_no')
-            .in('item_code', itemCodes)
+            .select('item_name, master_serial_no, item_code:part_number')
+            .in('part_number', itemCodes)
         : Promise.resolve({ data: [] as any[] });
 
       const boxCountPromises = requestIds.map((rid: string) =>

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/Version-0.5.4-blue?style=for-the-badge" alt="Version" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Version-0.5.5-blue?style=for-the-badge" alt="Version" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Status-Active_Development-brightgreen?style=for-the-badge" alt="Status" /></a>
   <a href="#"><img src="https://img.shields.io/badge/License-Proprietary-red?style=for-the-badge" alt="License" /></a>
   <a href="#"><img src="https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=white" alt="React" /></a>
@@ -72,8 +72,13 @@ The **Warehouse Management System (WMS)** is a type-safe, real-time application 
 | **Master Packing List** | MPL generation, print, and export for completed dispatches. |
 | **Performa Invoice** | Shipment batching and stock dispatch management. |
 | **Traceability** | Full backward trace for any container — from dispatch back to production receipt. |
-| **Blanket Orders** | Comprehensive handling of long-term customer contracts with order line items. |
-| **Blanket Releases** | Delivery scheduling against blanket orders with automatic inventory deduction upon delivery. |
+| **Customer Agreements (BPA)** | Long-term blanket purchase agreements with multi-part lines, fulfillment dashboard, and amendment history. Supports SPOT, BPA, Informal-Borrow, and Synthesized scenarios. |
+| **Blanket Orders** | Operational mirror of customer agreements with running totals (released / delivered / in-rack quantity per line). |
+| **Blanket Releases** | Customer-PO release scheduling against an agreement with FIFO pallet selection and need-by-date prioritisation. |
+| **Release Allocation Holds** | Per-release pallet locks with `ALLOCATED` (earliest need-by wins) vs `RESERVED` (queued) buckets. Stock decrements only on delivery. |
+| **Inbound Receiving / Goods Receipt** | Per-MPL goods receipt with discrepancy tracking (missing / damaged / short / quality hold) and rack placement. |
+| **Rack Storage** | Visual rack-cell view at the 3PL warehouse with pallet back-chain (release → sub-invoice → MPL → invoice → BPA). |
+| **Sub-Invoices & Tariff Invoices** | Customer billing per release with tariff-claim queue (DRAFT → SUBMITTED → CLAIMED → PAID). |
 | **Demand Forecasting** | Advanced demand prediction using Holt-Winters algorithm with trend and seasonality analysis. |
 | **MRP Planning** | Automated replenishment recommendations based on lead times, safety stock levels, and forecast data. |
 | **User Management** | Granular Role-Based Access Control (GRBAC) with L1 Operator, L2 Supervisor, L3 Manager tiers. |
@@ -542,8 +547,15 @@ The system uses a relational PostgreSQL schema with the following core tables:
 | `items` | Finished goods master catalogue |
 | `inventory` | Multi-warehouse stock levels |
 | `stock_movements` | Complete transaction audit trail |
-| `blanket_orders` | Long-term customer order contracts |
-| `blanket_releases` | Scheduled deliveries against orders |
+| `customer_agreements` / `customer_agreement_parts` | BPA headers + per-part lines (with revisions) |
+| `blanket_orders` / `blanket_order_line_configs` | Operational mirror with running totals (released, delivered, in-rack) |
+| `blanket_releases` | Customer-PO releases against an agreement |
+| `release_pallet_holds` | Per-release pallet locks (`ALLOCATED` / `RESERVED`) |
+| `release_pallet_assignments` | Resolved pallet → release mapping |
+| `pack_sub_invoices` / `pack_sub_invoice_lines` | Customer billing per release |
+| `tariff_invoices` | Tariff-claim queue (`DRAFT → SUBMITTED → CLAIMED → PAID`) |
+| `goods_receipts` / `goods_receipt_lines` | Per-MPL inbound receiving with rack placement |
+| `warehouse_rack_locations` | Physical rack-cell occupancy at the 3PL |
 | `profiles` | User profiles with roles and status |
 | `packing_requests` | FG packing workflow requests |
 | `packing_boxes` | Individual box records with PKG IDs |
@@ -669,13 +681,14 @@ MAJOR.MINOR.PATCH
 | **MINOR** | New features, backwards-compatible |
 | **PATCH** | Bug fixes and minor improvements |
 
-**Current Version:** `v0.5.4`
+**Current Version:** `v0.5.5`
 
 ### Version History
 
 | Version | Date | Type | Highlights |
 | :--- | :--- | :--- | :--- |
-| **0.5.4** | 2026-04-21 | Minor | Item Master edge functions (`im_*`), hard-cascade → soft delete, `item_code → part_number` schema migration groundwork (Phases 1–3a) |
+| **0.5.5** | 2026-04-25 | Minor | Release allocation holds (`On-Hand / Allocated / Reserved / Available` per warehouse, delivery-gated stock-out, MPL-cancel cascade); historical data import (4 BPAs, 197 pallets, 30 releases, 31 tariff invoices); 3 new architecture docs |
+| 0.5.4 | 2026-04-21 | Minor | Item Master edge functions (`im_*`), hard-cascade → soft delete, `item_code → part_number` schema migration groundwork (Phases 1–3a) |
 | 0.5.3 | 2026-04-18 | Patch | Edge function reorganization (`sm_*` prefix), JWT auth stabilization, per-function READMEs, ADR process, CODEOWNERS |
 | 0.5.2 | 2026-04-11 | Patch | Branch alignment, security hardening, deploy artifact isolation |
 | 0.5.1 | 2026-03-31 | Patch | Deep cleanup, dead code removal, DB consolidation, documentation sync |
@@ -693,6 +706,31 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
 ---
 
 ## Recent Changes
+
+### v0.5.5 — Release Allocation Holds & Historical Data Import (2026-04-25)
+
+This minor release ships two large work streams plus a documentation refresh:
+
+#### Release Allocation Holds (DB migrations 044–048)
+- New `release_pallet_holds` table tracks pallets a release has locked, split into `ALLOCATED` (earliest need-by-date wins) vs `RESERVED` (queued) buckets per `(part × warehouse)` scope
+- New RPCs: `release_allocate_pallets()` (called from a wrapper edge function of the same name) and `recompute_release_holds()` (scope-wide priority recompute)
+- **Stock decrements on delivery, not on sub-invoice creation.** The over-eager `trg_rpa_drain_hold` was replaced by `trg_br_delivered_drain_holds` (fires when a release flips to `DELIVERED`)
+- MPL cancellation now cascades to dependent pallets (`trg_mpl_cancel_sync_mpp`) so rack drawers stop pointing at cancelled paperwork; `pallet_get_back_chain` re-sorts to put non-cancelled MPLs first
+- Inventory views now expose four buckets per warehouse (`On-Hand / Allocated / Reserved / Available`); `StockDistributionCard` and `UnifiedItemMaster` render the breakdown for the US 3PL warehouse
+
+#### Historical Data Import — Phases M1 → M4 (DB migrations 049–058)
+- First production import of legacy xlsx + PDF artefacts: **4 customer BPAs, 197 pallets across racks A–G, 30 FULFILLED releases, 31 sub-invoices, 31 CLAIMED tariff invoices**
+- Four procurement scenarios modelled in production data: Standard PO (260067031), Real BPA (260067252), Informal Borrow (260067251 hosting OPW-69 + OPW-70), Synthesized BPA (260067299)
+- Every imported row carries a `source = 'MIGRATION*'` tag for clean rollback; live RPCs continue to write `source = 'MANUAL'`
+- UI defaults corrected: `ReleaseList` and `TariffInvoiceQueue` now default to `ALL` (M3 data is `FULFILLED` / `CLAIMED` and was invisible behind the previous `OPEN` / `DRAFT` defaults)
+
+#### New Edge Function
+- `release_allocate_pallets` — wrapper over the new RPC; resolves `warehouse_id` from the pallet's rack placement and forwards the hold list
+
+#### Documentation
+- [`docs/releases/CHANGES_0.5.5.md`](docs/releases/CHANGES_0.5.5.md) — release notes
+- [`docs/releases/RELEASE_0.5.5.md`](docs/releases/RELEASE_0.5.5.md) — executive release report
+- [`docs/releases/IMPLEMENTATION_0.5.4_TO_0.5.5.md`](docs/releases/IMPLEMENTATION_0.5.4_TO_0.5.5.md) — full technical change log (frontend / DB / edge functions / scripts)
 
 ### v0.5.4 — Item Master Edge Functions, Soft Delete & Schema Migration Groundwork (2026-04-21)
 

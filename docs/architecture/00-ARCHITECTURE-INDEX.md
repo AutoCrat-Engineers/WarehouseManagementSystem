@@ -1,9 +1,11 @@
 # 🏗️ WMS — Enterprise Architecture Documentation
 
-> **Project**: AutoCrat Engineers — Warehouse Management System (WMS)  
-> **Version**: 0.5.0  
-> **Last Updated**: March 2026  
+> **Project**: AutoCrat Engineers — Warehouse Management System (WMS)
+> **Version**: 0.5.5
+> **Last Updated**: April 2026 (post-historical-migration)
 > **Document Owner**: Team Optimus
+>
+> **For the BPA / Release / Rack-Storage / Goods-Receipt subsystem (added in 0.5.4–0.5.5)**, see [`docs/releases/IMPLEMENTATION_0.5.4_TO_0.5.5.md`](../releases/IMPLEMENTATION_0.5.4_TO_0.5.5.md) for the full technical change log.
 
 ---
 

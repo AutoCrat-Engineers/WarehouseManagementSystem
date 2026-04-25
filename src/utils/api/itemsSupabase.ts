@@ -21,7 +21,7 @@ import { getEdgeFunctionUrl } from '../supabase/info';
  */
 export interface Item {
   id: string;
-  item_code: string;
+  // item_code: REMOVED in migration 018. part_number is now canonical.
   item_name: string;
   uom: string;
   unit_price: number | null;
@@ -31,18 +31,18 @@ export interface Item {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  deleted_at: string | null;
   master_serial_no: string | null;
   revision: string | null;
-  part_number: string | null;
+  part_number: string;            // now required + unique (items_part_number_unique)
   deleted_by: string | null;
 }
 
 /** Form state type — uses same DB schema fields (minus system-managed columns). */
-export type ItemFormData = Omit<Item, 'id' | 'created_at' | 'updated_at' | 'deleted_by'>;
+export type ItemFormData = Omit<Item, 'id' | 'created_at' | 'updated_at' | 'deleted_at' | 'deleted_by'>;
 
 /** Default form values. */
 export const itemFormDefault: ItemFormData = {
-  item_code: '',
   item_name: '',
   uom: 'NOS',
   unit_price: null,

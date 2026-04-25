@@ -55,11 +55,14 @@ export async function handler(req: Request): Promise<Response> {
     }
 
     // ── QUERY — mirrors handleSearch() ───────────────────────────────────────
+    // item_code column dropped from items in migration 018. Alias part_number
+    // AS item_code so callers that still destructure `item_code` keep working.
     const { data, error } = await db
       .from('items')
-      .select('id, item_code, item_name, part_number, master_serial_no, uom')
-      .or(`item_code.ilike.%${query}%,part_number.ilike.%${query}%,master_serial_no.ilike.%${query}%`)
+      .select('id, item_name, part_number, master_serial_no, uom, item_code:part_number')
+      .or(`part_number.ilike.%${query}%,master_serial_no.ilike.%${query}%`)
       .eq('is_active', true)
+      .is('deleted_at', null)
       .limit(10);
 
     if (error) throw error;

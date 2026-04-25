@@ -349,7 +349,7 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
             const itemCodes = [...new Set(data.map((p: any) => p.item_code).filter(Boolean))];
 
             const [{ data: items }, { data: plPalletDetails }] = await Promise.all([
-                supabase.from('items').select('item_code, item_name, part_number, master_serial_no, revision').in('item_code', itemCodes),
+                supabase.from('items').select('item_code:part_number, item_name, part_number, master_serial_no, revision').in('part_number', itemCodes),
                 supabase.from('pack_packing_list_pallet_details').select('*').in('pallet_id', palletIds)
             ]);
 
@@ -394,7 +394,7 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
                 const palletMap = new Map((pallets || []).map((p: any) => [p.id, p]));
 
                 const itemCodes = [...new Set(mplPallets.map((p: any) => p.item_code).filter(Boolean))];
-                const { data: items } = await supabase.from('items').select('item_code, item_name, part_number, master_serial_no, revision, weight').in('item_code', itemCodes);
+                const { data: items } = await supabase.from('items').select('item_code:part_number, item_name, part_number, master_serial_no, revision, weight').in('part_number', itemCodes);
                 const itemMap = new Map((items || []).map((i: any) => [i.item_code, i]));
 
                 const { data: plPalletDetails } = await supabase.from('pack_packing_list_pallet_details').select('*').in('pallet_id', palletIds);
@@ -543,7 +543,7 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
 
                     // Fetch item details (part_number, master_serial_no, revision)
                     const itemCodes = [...new Set(mplPallets.map((p: any) => p.item_code).filter(Boolean))];
-                    const { data: items } = await supabase.from('items').select('item_code, item_name, part_number, master_serial_no, revision, weight').in('item_code', itemCodes);
+                    const { data: items } = await supabase.from('items').select('item_code:part_number, item_name, part_number, master_serial_no, revision, weight').in('part_number', itemCodes);
                     const itemMap = new Map((items || []).map((i: any) => [i.item_code, i]));
 
                     // Fetch packing list pallet details (for extra info like hts_code, dimensions)
@@ -622,7 +622,7 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
                     const itemCodes = [...new Set((mplData || []).map((m: any) => m.item_code).filter(Boolean))];
                     let itemMap: Record<string, any> = {};
                     if (itemCodes.length > 0) {
-                        const { data: items } = await supabase.from('items').select('item_code, part_number, master_serial_no').in('item_code', itemCodes);
+                        const { data: items } = await supabase.from('items').select('item_code:part_number, part_number, master_serial_no').in('part_number', itemCodes);
                         if (items) itemMap = Object.fromEntries(items.map((i: any) => [i.item_code, i]));
                     }
 
@@ -718,7 +718,7 @@ export function PerformaInvoice({ userRole, userPerms = {}, onNavigate }: Props)
             const uniqueItemCodes = [...new Set((mplPallets || []).map((p: any) => p.item_code))];
             let itemsLookup: Record<string, { part_number: string; standard_cost: number; master_serial_no: string }> = {};
             if (uniqueItemCodes.length > 0) {
-                const { data: itemsData } = await supabase.from('items').select('item_code, part_number, standard_cost, master_serial_no').in('item_code', uniqueItemCodes);
+                const { data: itemsData } = await supabase.from('items').select('item_code:part_number, part_number, standard_cost, master_serial_no').in('part_number', uniqueItemCodes);
                 for (const itm of (itemsData || [])) { itemsLookup[itm.item_code] = { part_number: itm.part_number || itm.item_code, standard_cost: itm.standard_cost || 0, master_serial_no: itm.master_serial_no || '' }; }
             }
             const itemMapGroup = new Map<string, { po: string; partNo: string; desc: string; msn: string; qty: number; rate: number; amount: number }>();
@@ -1060,7 +1060,7 @@ ${rowsHtml}
                 const { data: itemsData } = await supabase
                     .from('items')
                     .select('item_code, part_number, standard_cost, master_serial_no')
-                    .in('item_code', uniqueItemCodes);
+                    .in('part_number', uniqueItemCodes);
                 for (const itm of (itemsData || [])) {
                     itemsLookup[itm.item_code] = {
                         part_number: itm.part_number || itm.item_code,

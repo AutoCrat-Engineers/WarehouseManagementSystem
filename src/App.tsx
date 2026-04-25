@@ -12,6 +12,12 @@ import { ForecastingModule } from './components/ForecastingModule';
 import { PlanningModule } from './components/PlanningModule';
 import { StockMovement } from './components/StockMovement';
 import { RackView } from './components/RackView';
+// New DB-backed rack view (Phase 3 rewrite; legacy RackView kept as fallback).
+import { RackViewGrid } from './components/rack-view';
+// BPA (Customer Agreement) management module.
+import { BPAList } from './components/bpa';
+// Release / Sub-Invoice / Tariff module (Phase 3 rewrite).
+import { ReleaseList, TariffInvoiceQueue } from './components/release';
 import { PackingModule, PackingDetails, PackingListInvoice, PackingListSubInvoice } from './components/packing';
 import { PalletDashboard, ContractConfigManager, DispatchSelection, TraceabilityViewer, MasterPackingListHome, PerformaInvoice } from './components/packing-engine';
 import { LoadingPage } from './components/LoadingPage';
@@ -45,6 +51,7 @@ import {
   Layers,
   Forklift,
   Stamp,
+  Truck,
 } from 'lucide-react';
 import './styles/sidebar-animations.css';
 
@@ -168,7 +175,7 @@ function clearAuthOwnerIfOwnedBy(tabId: string): void {
 // User role type for RBAC
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
-type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'rack-view' | 'packing' | 'packing-sticker' | 'packing-details' | 'packing-list-invoice' | 'packing-list-sub-invoice' | 'pe-pallet-dashboard' | 'pe-contract-configs' | 'pe-dispatch' | 'pe-mpl-home' | 'pe-performa-invoice' | 'pe-traceability' | 'dispatch' | 'users';
+type View = 'dashboard' | 'items' | 'inventory' | 'orders' | 'releases' | 'forecast' | 'planning' | 'stock-movements' | 'rack-view' | 'packing' | 'packing-sticker' | 'packing-details' | 'packing-list-invoice' | 'packing-list-sub-invoice' | 'pe-pallet-dashboard' | 'pe-contract-configs' | 'pe-dispatch' | 'pe-mpl-home' | 'pe-performa-invoice' | 'pe-traceability' | 'dispatch' | 'users' | 'bpa' | 'rack-view-v2' | 'releases-v2' | 'tariff-queue';
 
 interface MenuItem {
   id: View;
@@ -210,9 +217,10 @@ const menuItems: MenuItem[] = [
   { id: 'stock-movements', label: 'Stock Movements', icon: ArrowRightLeft, description: 'Audit Trail' },
   { id: 'packing', label: 'Packing', icon: PackageOpen, description: 'FG Packing Workflow', hasSubmenu: true },
   { id: 'dispatch' as View, label: 'Dispatch', icon: CargoShip as any, description: 'Dispatch & Shipping', hasSubmenu: true },
-  { id: 'orders', label: 'Blanket Orders', icon: FileText, description: 'Customer Orders' },
-  { id: 'rack-view', label: 'Rack View', icon: Grid3X3, description: 'US Warehouse Racks' },
-  { id: 'releases', label: 'Blanket Releases', icon: Calendar, description: 'Delivery Schedule' },
+  { id: 'bpa', label: 'Blanket Purchase Agreement', icon: FileText, description: 'Customer BPAs' },
+  { id: 'rack-view-v2', label: 'Inbound Receiving', icon: Truck, description: 'Shipment verify & Goods Receipt' },
+  { id: 'rack-view', label: 'Rack Storage', icon: Grid3X3, description: 'Physical rack placement & movement' },
+  { id: 'releases-v2', label: 'Blanket Release', icon: Calendar, description: 'Customer PO Releases' },
   { id: 'forecast', label: 'Forecasting', icon: TrendingUp, description: 'Demand Prediction' },
 
 ];
@@ -223,6 +231,9 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [userRole, setUserRole] = useState<UserRole>(null);
   const [currentView, setCurrentView] = useState<View>('dashboard');
+  // GR putaway context — when set, legacy RackView enters putaway mode.
+  // Set by ReceiveShipmentScreen's auto-navigate on GR confirmation.
+  const [activeGrNumber, setActiveGrNumber] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true); // mobile only
   const [isSidebarHovered, setIsSidebarHovered] = useState(false);
   const [isSidebarLocked, setIsSidebarLocked] = useState(() => {
@@ -761,7 +772,41 @@ export default function App() {
         return <StockMovement accessToken={accessToken} userRole={userRole} userPerms={userPerms} />;
       case 'rack-view':
         if (!canAccessViewLocal('rack-view')) return renderAccessDenied('Rack View');
-        return <RackView userRole={userRole} userPerms={userPerms} />;
+        return (
+          <RackView
+            userRole={userRole}
+            userPerms={userPerms}
+            grNumber={activeGrNumber ?? undefined}
+            onGrPlacementDone={() => setActiveGrNumber(null)}
+          />
+        );
+      case 'rack-view-v2':
+        // New DB-backed rack view — hydrates from mv_rack_view, shows back-chain,
+        // and hosts the Receive Shipment / GR wizard. On GR confirm, auto-jumps
+        // to the legacy rack view (which handles physical placement).
+        if (!canAccessViewLocal('rack-view')) return renderAccessDenied('Rack View');
+        return (
+          <RackViewGrid
+            userRole={userRole}
+            userPerms={userPerms}
+            onGrConfirmed={(grNumber) => {
+              setActiveGrNumber(grNumber);
+              setCurrentView('rack-view');
+            }}
+          />
+        );
+      case 'bpa':
+        // Customer Agreement (BPA) management — blanket qty, MIN/MAX, REL MULT,
+        // revision tracking. Feeds into Blanket Orders via "Activate BO".
+        return <BPAList userRole={userRole} userPerms={userPerms} />;
+      case 'releases-v2':
+        // New release flow: paste customer PO → FIFO pallet picker →
+        // atomic sub-invoice + tariff creation via RPC.
+        return <ReleaseList userRole={userRole} userPerms={userPerms} />;
+      case 'tariff-queue':
+        // Finance queue for US tariff invoices: compute rates,
+        // advance status DRAFT → SUBMITTED → CLAIMED → PAID.
+        return <TariffInvoiceQueue userRole={userRole} userPerms={userPerms} />;
       case 'packing':
       case 'packing-sticker':
         if (!canAccessViewLocal('packing-sticker')) return renderAccessDenied('Packing — Sticker Generation');

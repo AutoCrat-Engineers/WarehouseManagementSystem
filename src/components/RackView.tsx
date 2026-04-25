@@ -12,17 +12,45 @@
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Plus, Minus, MapPin, Trash2, AlertTriangle, X, Search, Grid3X3, ChevronDown, Info, Layers, Box, ArrowRightLeft, CheckCircle, Package } from 'lucide-react';
+import { Plus, Minus, MapPin, Trash2, AlertTriangle, X, Search, Grid3X3, ChevronDown, Info, Layers, Box, ArrowRightLeft, CheckCircle, Package, Truck, SkipForward as SkipForwardIcon } from 'lucide-react';
+const SkipForward = SkipForwardIcon;
 import { Card, Modal, Label, EmptyState, LoadingSpinner } from './ui/EnterpriseUI';
 import { SummaryCard, SummaryCardsGrid, SearchBox, ActionButton, ActionBar, FilterBar } from './ui/SharedComponents';
 import { getSupabaseClient } from '../utils/supabase/client';
 import { useAllItemsStockDashboard } from '../hooks/useInventory';
+import { fetchWithAuth } from '../utils/supabase/auth';
+import { getEdgeFunctionUrl } from '../utils/supabase/info';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
 interface RackViewProps {
     userRole?: UserRole;
     userPerms?: Record<string, boolean>;
+    /** When set, enter GR putaway mode — shows banner + click-to-place. */
+    grNumber?: string;
+    /** Called after the final pallet in the GR is placed (or user cancels). */
+    onGrPlacementDone?: () => void;
+}
+
+// ── GR putaway types ────────────────────────────────────────────────────
+interface GrPendingLine {
+    id:                 string;
+    pallet_id:          string;
+    pallet_number:      string | null;
+    part_number:        string | null;
+    msn_code:           string | null;
+    received_qty:       number;
+    line_status:        string;
+    rack_placed_at:     string | null;
+    rack_location_code: string | null;
+}
+interface GrHeader {
+    id:               string;
+    gr_number:        string;
+    proforma_number:  string | null;
+    shipment_number:  string | null;
+    status:           string;
+    total_pallets_received: number;
 }
 
 interface RackEntry { id: string; location: string; rack: string; msn: string; itemName: string; partNumber: string; qty: number; }
@@ -48,7 +76,25 @@ function valLoc(loc: string): { valid: boolean; error?: string; rack?: string } 
     return { valid: true, rack: f };
 }
 
-export function RackView({ userRole, userPerms = {} }: RackViewProps) {
+// ── Pallet back-chain drawer helpers ────────────────────────────────────
+function BackChainSection({ title, color, children }: { title: string; color: string; children: React.ReactNode }) {
+    return (
+        <div style={{ marginBottom: 16, borderLeft: `3px solid ${color}`, paddingLeft: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color, marginBottom: 6, letterSpacing: 0.4 }}>{title}</div>
+            <div>{children}</div>
+        </div>
+    );
+}
+function BackChainRow({ label, value }: { label: string; value: React.ReactNode }) {
+    return (
+        <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 8, fontSize: 13, padding: '3px 0' }}>
+            <span style={{ color: '#6b7280', fontSize: 11 }}>{label}</span>
+            <span style={{ color: '#111827' }}>{value}</span>
+        </div>
+    );
+}
+
+export function RackView({ userRole, userPerms = {}, grNumber, onGrPlacementDone }: RackViewProps) {
     // RBAC helpers — granular permissions with role-based fallback
     const hasPerms = Object.keys(userPerms).length > 0;
     const canCreate = userRole === 'L3' || (hasPerms ? userPerms['rack-view.create'] === true : userRole === 'L2');
@@ -81,11 +127,174 @@ export function RackView({ userRole, userPerms = {} }: RackViewProps) {
     const [msnOpen, setMsnOpen] = useState(false);
     const [globalSearch, setGlobalSearch] = useState('');
 
+    // ── GR putaway state ────────────────────────────────────────────
+    const [grHeader, setGrHeader]       = useState<GrHeader | null>(null);
+    const [grPending, setGrPending]     = useState<GrPendingLine[]>([]);
+    const [grIdx, setGrIdx]             = useState(0);
+    const [grPlacing, setGrPlacing]     = useState(false);
+    const [grErr, setGrErr]             = useState<string | null>(null);
+
+    // ── Pallet back-chain drawer ────────────────────────────────────
+    const [palletDetailId, setPalletDetailId]     = useState<string | null>(null);
+    const [palletDetail, setPalletDetail]         = useState<any>(null);
+    const [palletDetailLoading, setPalletDetailLoading] = useState(false);
+    const [palletDetailErr, setPalletDetailErr]   = useState<string | null>(null);
+
+    useEffect(() => {
+        if (!palletDetailId) { setPalletDetail(null); setPalletDetailErr(null); return; }
+        setPalletDetailLoading(true); setPalletDetailErr(null);
+        (async () => {
+            try {
+                const res = await fetchWithAuth(getEdgeFunctionUrl('pallet_get_back_chain'), {
+                    method: 'POST',
+                    body: JSON.stringify({ pallet_id: palletDetailId }),
+                });
+                const json = await res.json();
+                if (!res.ok || json?.error) throw new Error(json?.error?.message || json?.error);
+                setPalletDetail(json);
+            } catch (e: any) {
+                setPalletDetailErr(e?.message ?? 'Failed to load pallet details');
+            } finally {
+                setPalletDetailLoading(false);
+            }
+        })();
+    }, [palletDetailId]);
+    const grMode = Boolean(grNumber);
+    const currentGrLine: GrPendingLine | null = grMode && grPending.length > 0 && grIdx < grPending.length ? grPending[grIdx] : null;
+
+    // Load GR pending lines when grNumber prop is set
+    useEffect(() => {
+        if (!grNumber) { setGrHeader(null); setGrPending([]); setGrIdx(0); return; }
+        (async () => {
+            try {
+                const res = await fetchWithAuth(getEdgeFunctionUrl('gr_list_pending_placement'), {
+                    method: 'POST',
+                    body: JSON.stringify({ gr_number: grNumber }),
+                });
+                const json = await res.json();
+                if (!res.ok || json?.error) throw new Error(json?.error?.message || json?.error);
+                setGrHeader(json.gr as GrHeader);
+                setGrPending(json.pending_lines ?? []);
+                setGrIdx(0);
+                if ((json.pending_lines ?? []).length === 0) {
+                    setGrErr(`All pallets on ${grNumber} already placed.`);
+                }
+            } catch (e: any) {
+                setGrErr(e?.message ?? 'Failed to load GR');
+            }
+        })();
+    }, [grNumber]);
+
+    // Click on an empty rack cell while in GR mode → place current pallet
+    const placeCurrentGrLineAt = useCallback(async (location: string) => {
+        if (!grHeader || !currentGrLine) return;
+        if (grPlacing) return;
+        setGrPlacing(true); setGrErr(null);
+        try {
+            // 1. Add to local rack grid (keeps existing UX)
+            setRackData(prev => {
+                const rackLetter = location.charAt(0);
+                const existing = (prev[rackLetter] ?? []).filter(e => e.location !== location);
+                return {
+                    ...prev,
+                    [rackLetter]: [...existing, {
+                        id: currentGrLine.pallet_id,
+                        location,
+                        rack: rackLetter,
+                        msn: currentGrLine.msn_code ?? '—',
+                        itemName: currentGrLine.pallet_number ?? '',
+                        partNumber: currentGrLine.part_number ?? '',
+                        qty: currentGrLine.received_qty,
+                    }],
+                };
+            });
+            // 2. Mark placed in DB via edge fn
+            const res = await fetchWithAuth(getEdgeFunctionUrl('gr_mark_placed'), {
+                method: 'POST',
+                body: JSON.stringify({
+                    gr_id:              grHeader.id,
+                    pallet_id:          currentGrLine.pallet_id,
+                    rack_location_code: location,
+                }),
+            });
+            const json = await res.json();
+            if (!res.ok || json?.error) throw new Error(json?.error?.message || json?.error);
+
+            // 3. Advance to next pallet
+            const next = grIdx + 1;
+            if (next >= grPending.length) {
+                // Done — last pallet placed
+                setTimeout(() => onGrPlacementDone?.(), 300);
+            } else {
+                setGrIdx(next);
+            }
+        } catch (e: any) {
+            setGrErr(e?.message ?? 'Placement failed');
+        } finally {
+            setGrPlacing(false);
+        }
+    }, [grHeader, currentGrLine, grPlacing, grIdx, grPending.length, onGrPlacementDone]);
+
+    const skipCurrentGrLine = () => {
+        const next = grIdx + 1;
+        if (next >= grPending.length) onGrPlacementDone?.();
+        else setGrIdx(next);
+    };
+
     const { items: dashItems } = useAllItemsStockDashboard();
     const ohMap = useMemo(() => { const m = new Map<string, number>(); for (const i of dashItems) { if (i.masterSerialNo) m.set(i.masterSerialNo, i.usTransitStock ?? 0); } return m; }, [dashItems]);
     const allocMap = useMemo(() => { const m = new Map<string, number>(); for (const es of Object.values(rackData)) for (const e of es) m.set(e.msn, (m.get(e.msn) || 0) + e.qty); return m; }, [rackData]);
 
-    useEffect(() => { (async () => { setMsnLoading(true); try { const sb = getSupabaseClient(); const { data } = await sb.from('items').select('id, master_serial_no, item_name, item_code, part_number').eq('is_active', true).not('master_serial_no', 'is', null).order('master_serial_no', { ascending: true }); setMsnItems((data || []).filter((i: any) => i.master_serial_no) as MsnItem[]); } catch { } finally { setMsnLoading(false); } })(); }, []);
+    useEffect(() => { (async () => { setMsnLoading(true); try { const sb = getSupabaseClient(); const { data } = await sb.from('items').select('id, master_serial_no, item_name, part_number, item_code:part_number').eq('is_active', true).not('master_serial_no', 'is', null).order('master_serial_no', { ascending: true }); setMsnItems((data || []).filter((i: any) => i.master_serial_no) as MsnItem[]); } catch { } finally { setMsnLoading(false); } })(); }, []);
+
+    // ── Hydrate rack placements from DB on mount ─────────────────────
+    // Rebuilds local rackData from goods_receipt_lines (the persistent
+    // placement ledger). Called once on mount + after GR placements finish
+    // so moving away / coming back preserves the grid.
+    const loadPlacements = useCallback(async () => {
+        try {
+            const res = await fetchWithAuth(getEdgeFunctionUrl('rack_load_storage'), {
+                method: 'POST',
+                body: JSON.stringify({}),
+            });
+            const json = await res.json();
+            if (!res.ok || json?.error) throw new Error(json?.error?.message || json?.error);
+            // Rebuild rackData grouped by rack letter
+            const grouped: RackData = {};
+            const seenRacks = new Set<string>();
+            for (const p of (json.placements ?? []) as any[]) {
+                const loc = p.rack_location_code;
+                if (!loc) continue;
+                const rackLetter = loc.charAt(0);
+                seenRacks.add(rackLetter);
+                if (!grouped[rackLetter]) grouped[rackLetter] = [];
+                grouped[rackLetter].push({
+                    id:         p.pallet_id,
+                    location:   loc,
+                    rack:       rackLetter,
+                    msn:        p.msn_code ?? p.part_number ?? '—',
+                    itemName:   p.item_name ?? p.pallet_number ?? '',
+                    partNumber: p.part_number ?? '',
+                    qty:        Number(p.quantity ?? 0),
+                });
+            }
+            // Preserve default A/B/C even if empty
+            for (const k of ['A','B','C']) if (!grouped[k]) grouped[k] = [];
+            setRackData(grouped);
+        } catch (err) {
+            console.warn('[RackView] failed to hydrate placements:', err);
+        }
+    }, []);
+
+    useEffect(() => { loadPlacements(); }, [loadPlacements]);
+
+    // Refresh after GR placement flow finishes
+    useEffect(() => {
+        if (!grMode && grHeader === null) {
+            // Post-GR handoff: when grNumber cleared, reload to pick up new placements
+            loadPlacements();
+        }
+    }, [grMode, grHeader, loadPlacements]);
 
     const rackKeys = useMemo(() => Object.keys(locCounts).sort(), [locCounts]);
     useEffect(() => { setRackData(prev => { const u = { ...prev }; for (const k of Object.keys(locCounts)) { if (!u[k]) u[k] = []; } return u; }); }, [locCounts]);
@@ -182,6 +391,48 @@ export function RackView({ userRole, userPerms = {} }: RackViewProps) {
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            {/* GR PUTAWAY BANNER */}
+            {grMode && grHeader && (
+                <Card style={{ padding: 0, background: 'linear-gradient(135deg, #eff6ff, #dbeafe)', border: '2px solid #2563eb', overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 20px' }}>
+                        <div style={{ flexShrink: 0, width: 44, height: 44, borderRadius: 12, background: '#2563eb', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <Truck size={22} />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#1e3a8a', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                                Placing pallets from {grHeader.gr_number}
+                            </div>
+                            <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginTop: 2 }}>
+                                {currentGrLine ? (
+                                    <>
+                                        <span style={{ color: '#1e3a8a', fontFamily: 'monospace' }}>{currentGrLine.pallet_number ?? '—'}</span>
+                                        {' · '}{currentGrLine.msn_code ?? '—'}
+                                        {' · '}<strong>{currentGrLine.received_qty.toLocaleString()}</strong> pcs
+                                        <span style={{ marginLeft: 10, color: '#6b7280', fontWeight: 500 }}>
+                                            {grIdx + 1} of {grPending.length}
+                                        </span>
+                                    </>
+                                ) : 'All pallets placed'}
+                            </div>
+                            <div style={{ fontSize: 12, color: '#475569', marginTop: 3 }}>
+                                Click an <strong>empty cell</strong> on the grid below to place. Ref: {grHeader.proforma_number ?? ''}
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                            {currentGrLine && (
+                                <ActionButton label="Skip" icon={<SkipForward size={14} />} onClick={skipCurrentGrLine} disabled={grPlacing} />
+                            )}
+                            <ActionButton label="Exit GR mode" icon={<X size={14} />} onClick={() => onGrPlacementDone?.()} variant="secondary" />
+                        </div>
+                    </div>
+                    {grErr && (
+                        <div style={{ padding: '8px 20px', background: '#fef2f2', color: '#991b1b', fontSize: 13, borderTop: '1px solid #fecaca' }}>
+                            ⚠ {grErr}
+                        </div>
+                    )}
+                </Card>
+            )}
+
             {/* SUMMARY */}
             <SummaryCardsGrid columns={4}>
                 <SummaryCard label="Total Racks" value={stats.totalRacks} icon={<Layers size={22} style={{ color: 'var(--enterprise-primary)' }} />} color="var(--enterprise-primary)" bgColor="rgba(30,58,138,0.1)" />
@@ -259,10 +510,17 @@ export function RackView({ userRole, userPerms = {} }: RackViewProps) {
                                         const occ = entries.length > 0; const multi = entries.length > 1; const tq = entries.reduce((s, e) => s + e.qty, 0);
                                         const sel = selectedLoc === loc; const dim = globalSearch && !match;
                                         return (
-                                            <div key={loc} onClick={() => { if (occ) setSelectedLoc(sel ? null : loc); }}
-                                                style={{ width: '78px', height: '78px', borderRadius: '12px', background: dim ? 'var(--enterprise-gray-50)' : sel ? `${c.border}18` : occ ? c.fill : 'white', border: dim ? '1.5px dashed var(--enterprise-gray-200)' : sel ? `2.5px solid ${c.border}` : occ ? `1.5px solid ${c.fb}` : '1.5px dashed #d1d5db', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: occ ? 'pointer' : 'default', transition: 'all 0.15s', position: 'relative', opacity: dim ? 0.3 : 1, boxShadow: sel ? `0 0 10px ${c.border}30` : 'none' }}
-                                                onMouseEnter={e => { if (occ && !sel) { e.currentTarget.style.transform = 'scale(1.05)'; e.currentTarget.style.boxShadow = `0 3px 10px ${c.fb}`; } }}
-                                                onMouseLeave={e => { if (occ && !sel) { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = 'none'; } }}
+                                            <div key={loc} onClick={() => {
+                                                // GR putaway mode: click an EMPTY cell to place current pallet
+                                                if (grMode && !occ && currentGrLine && !grPlacing) {
+                                                    placeCurrentGrLineAt(loc);
+                                                    return;
+                                                }
+                                                if (occ) setSelectedLoc(sel ? null : loc);
+                                            }}
+                                                style={{ width: '78px', height: '78px', borderRadius: '12px', background: dim ? 'var(--enterprise-gray-50)' : sel ? `${c.border}18` : occ ? c.fill : 'white', border: dim ? '1.5px dashed var(--enterprise-gray-200)' : sel ? `2.5px solid ${c.border}` : occ ? `1.5px solid ${c.fb}` : (grMode && !occ ? `2px solid ${c.border}` : '1.5px dashed #d1d5db'), display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: (occ || (grMode && !occ)) ? 'pointer' : 'default', transition: 'all 0.15s', position: 'relative', opacity: dim ? 0.3 : 1, boxShadow: sel ? `0 0 10px ${c.border}30` : (grMode && !occ ? `0 0 0 2px ${c.border}22` : 'none') }}
+                                                onMouseEnter={e => { if ((occ && !sel) || (grMode && !occ)) { e.currentTarget.style.transform = 'scale(1.05)'; e.currentTarget.style.boxShadow = `0 3px 10px ${c.fb}`; } }}
+                                                onMouseLeave={e => { if ((occ && !sel) || (grMode && !occ)) { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = grMode && !occ ? `0 0 0 2px ${c.border}22` : 'none'; } }}
                                             >
                                                 <span style={{ fontSize: '12px', fontWeight: occ ? 700 : 500, color: occ ? c.text : 'var(--enterprise-gray-400)', fontFamily: 'monospace' }}>{loc}</span>
                                                 {occ && <span style={{ fontSize: '10px', color: 'var(--enterprise-gray-500)', marginTop: '2px' }}>{tq.toLocaleString()}</span>}
@@ -295,14 +553,33 @@ export function RackView({ userRole, userPerms = {} }: RackViewProps) {
                             </div>
                             <div style={{ maxHeight: '500px', overflowY: 'auto' }}>
                                 {selEntries.map((entry, idx) => {
-                                    const oh = ohMap.get(entry.msn); return (
-                                        <div key={entry.id} style={{ padding: '14px 18px', borderBottom: idx < selEntries.length - 1 ? '1px solid var(--enterprise-gray-50)' : 'none' }}>
+                                    const oh = ohMap.get(entry.msn);
+                                    // Heuristic: entry.id is a UUID when placed via GR (real pallet),
+                                    // otherwise a local-generated string. Only UUID entries get back-chain.
+                                    const isPalletUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry.id);
+                                    return (
+                                        <div key={entry.id}
+                                            onClick={() => isPalletUuid && setPalletDetailId(entry.id)}
+                                            style={{
+                                                padding: '14px 18px',
+                                                borderBottom: idx < selEntries.length - 1 ? '1px solid var(--enterprise-gray-50)' : 'none',
+                                                cursor: isPalletUuid ? 'pointer' : 'default',
+                                                transition: 'background 0.1s',
+                                            }}
+                                            onMouseEnter={(e) => { if (isPalletUuid) e.currentTarget.style.background = 'var(--enterprise-gray-50)'; }}
+                                            onMouseLeave={(e) => { if (isPalletUuid) e.currentTarget.style.background = 'transparent'; }}
+                                            title={isPalletUuid ? 'Click for pallet back-chain' : undefined}
+                                        >
                                             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
                                                 <div style={{ width: '40px', height: '40px', borderRadius: '8px', background: c.fill, border: `1px solid ${c.fb}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Package size={18} style={{ color: c.text }} /></div>
                                                 <div style={{ flex: 1, minWidth: 0 }}>
                                                     <p style={{ fontWeight: 600, fontSize: '13px', color: 'var(--enterprise-gray-800)', margin: '0 0 2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={entry.itemName}>{entry.itemName || entry.msn}</p>
                                                     <p style={{ fontSize: '11px', color: 'var(--enterprise-gray-500)', margin: '0 0 4px' }}>{entry.msn}{entry.partNumber ? ` · PN: ${entry.partNumber}` : ''}</p>
-                                                    <p style={{ fontSize: '12px', margin: 0 }}><span style={{ color: c.text, fontWeight: 600 }}>{entry.qty.toLocaleString()} pcs</span>{oh !== undefined && <span style={{ color: 'var(--enterprise-gray-400)', marginLeft: '8px' }}>OH: {oh.toLocaleString()}</span>}</p>
+                                                    <p style={{ fontSize: '12px', margin: 0 }}>
+                                                        <span style={{ color: c.text, fontWeight: 600 }}>{entry.qty.toLocaleString()} pcs</span>
+                                                        {oh !== undefined && <span style={{ color: 'var(--enterprise-gray-400)', marginLeft: '8px' }}>OH: {oh.toLocaleString()}</span>}
+                                                        {isPalletUuid && <span style={{ color: 'var(--enterprise-primary)', marginLeft: '8px', fontSize: '10px' }}>▸ details</span>}
+                                                    </p>
                                                 </div>
                                                 {(canEdit || canDelete) && <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
                                                     {canEdit && <button onClick={e => { e.stopPropagation(); setMoveSrc(entry); setMoveDst(''); setMoveQty(entry.qty); setMoveErr(''); setMoveOk(''); setShowMoveModal(true); }} title="Move" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--enterprise-gray-400)', padding: '4px' }} onMouseEnter={e => { e.currentTarget.style.color = 'var(--enterprise-primary)'; }} onMouseLeave={e => { e.currentTarget.style.color = 'var(--enterprise-gray-400)'; }}><ArrowRightLeft size={14} /></button>}
@@ -321,8 +598,106 @@ export function RackView({ userRole, userPerms = {} }: RackViewProps) {
             {/* INFO */}
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '14px 18px', background: 'rgba(30,58,138,0.04)', border: '1px solid rgba(30,58,138,0.1)', borderRadius: '8px', fontSize: '13px', color: 'var(--enterprise-gray-600)' }}>
                 <Info size={16} style={{ color: 'var(--enterprise-primary)', flexShrink: 0, marginTop: '2px' }} />
-                <div><strong>Rules:</strong> Location = letter + number (A1, B12). Use Add/Reduce to manage rack capacity. Allocation capped by US on-hand. Click occupied cells to view items.</div>
+                <div><strong>Rules:</strong> Multiple pallets per cell allowed. Click a cell → pallet list. Click a pallet → full back-chain (Invoice · BPA · Shipment · GR).</div>
             </div>
+
+            {/* PALLET BACK-CHAIN DRAWER */}
+            {palletDetailId && (
+                <div onClick={() => setPalletDetailId(null)}
+                    style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                    <div onClick={(e) => e.stopPropagation()}
+                        style={{ width: 520, maxWidth: '96vw', height: '100%', background: 'white', boxShadow: '-4px 0 16px rgba(0,0,0,0.12)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                        <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--enterprise-gray-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
+                            <div>
+                                <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: '#111827' }}>Pallet Back-Chain</h3>
+                                <p style={{ fontSize: 11, color: '#6b7280', margin: '2px 0 0' }}>
+                                    Full traceability · Invoice · BPA · Shipment · GR
+                                </p>
+                            </div>
+                            <button onClick={() => setPalletDetailId(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280' }}><X size={20} /></button>
+                        </div>
+
+                        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
+                            {palletDetailLoading && <div style={{ textAlign: 'center', padding: 40 }}><LoadingSpinner size={28} /></div>}
+                            {palletDetailErr && <div style={{ color: '#991b1b', background: '#fef2f2', padding: 10, borderRadius: 6 }}>{palletDetailErr}</div>}
+                            {palletDetail && (
+                                <>
+                                    <BackChainSection title="Pallet" color="#1e3a8a">
+                                        <BackChainRow label="Pallet #"      value={<strong style={{ fontFamily: 'monospace' }}>{palletDetail.pallet?.pallet_number ?? '—'}</strong>} />
+                                        <BackChainRow label="State"         value={palletDetail.pallet?.state ?? '—'} />
+                                        <BackChainRow label="Quantity"      value={`${(palletDetail.pallet?.current_qty ?? 0).toLocaleString()} pcs`} />
+                                        <BackChainRow label="Containers"    value={palletDetail.pallet?.container_count ?? 0} />
+                                        <BackChainRow label="Shipment #"    value={palletDetail.pallet?.shipment_sequence ?? '—'} />
+                                    </BackChainSection>
+
+                                    {palletDetail.item && (
+                                        <BackChainSection title="Item" color="#059669">
+                                            <BackChainRow label="MSN"          value={<strong>{palletDetail.item.master_serial_no ?? '—'}</strong>} />
+                                            <BackChainRow label="Part Number"  value={palletDetail.item.part_number ?? '—'} />
+                                            <BackChainRow label="Description"  value={palletDetail.item.item_name ?? '—'} />
+                                            <BackChainRow label="Revision"     value={palletDetail.item.revision ?? '—'} />
+                                        </BackChainSection>
+                                    )}
+
+                                    {palletDetail.packing_list && (
+                                        <BackChainSection title="Packing List" color="#7c3aed">
+                                            <BackChainRow label="PL Number"   value={<strong style={{ fontFamily: 'monospace' }}>{palletDetail.packing_list.packing_list_number ?? '—'}</strong>} />
+                                            <BackChainRow label="Status"      value={palletDetail.packing_list.status ?? '—'} />
+                                            <BackChainRow label="Confirmed"   value={palletDetail.packing_list.confirmed_at ? new Date(palletDetail.packing_list.confirmed_at).toLocaleString() : '—'} />
+                                        </BackChainSection>
+                                    )}
+
+                                    <BackChainSection title="Invoice & BPA" color="#d97706">
+                                        <BackChainRow label="Invoice #"   value={<strong style={{ fontFamily: 'monospace' }}>{palletDetail.invoice_number ?? '—'}</strong>} />
+                                        <BackChainRow label="BPA #"       value={<strong style={{ fontFamily: 'monospace' }}>{palletDetail.bpa_number ?? '—'}</strong>} />
+                                        <BackChainRow label="MPL #"       value={palletDetail.mpl?.mpl_number ?? '—'} />
+                                        <BackChainRow label="MPL Status"  value={palletDetail.mpl?.status ?? '—'} />
+                                    </BackChainSection>
+
+                                    {palletDetail.shipment && (
+                                        <BackChainSection title="Shipment (Proforma)" color="#0891b2">
+                                            <BackChainRow label="PI Number"     value={<strong style={{ fontFamily: 'monospace' }}>{palletDetail.shipment.proforma_number ?? '—'}</strong>} />
+                                            <BackChainRow label="Shipment #"    value={palletDetail.shipment.shipment_number ?? '—'} />
+                                            <BackChainRow label="Customer"      value={palletDetail.shipment.customer_name ?? '—'} />
+                                            <BackChainRow label="Status"        value={palletDetail.shipment.status ?? '—'} />
+                                            <BackChainRow label="Dispatched"    value={palletDetail.shipment.stock_moved_at ? new Date(palletDetail.shipment.stock_moved_at).toLocaleString() : '—'} />
+                                        </BackChainSection>
+                                    )}
+
+                                    {palletDetail.gr && (
+                                        <BackChainSection title="Goods Receipt" color="#16a34a">
+                                            <BackChainRow label="GR Number"         value={<strong style={{ fontFamily: 'monospace' }}>{palletDetail.gr.gr_number}</strong>} />
+                                            <BackChainRow label="Receipt Date"      value={palletDetail.gr.gr_date ? new Date(palletDetail.gr.gr_date).toLocaleDateString() : '—'} />
+                                            <BackChainRow label="Line Status"       value={palletDetail.gr.line_status} />
+                                            <BackChainRow label="Received Qty"      value={`${(palletDetail.gr.received_qty ?? 0).toLocaleString()} pcs`} />
+                                            {palletDetail.gr.rack_location_code && (
+                                                <BackChainRow label="Placed At"     value={`${palletDetail.gr.rack_location_code} · ${new Date(palletDetail.gr.rack_placed_at).toLocaleString()}`} />
+                                            )}
+                                        </BackChainSection>
+                                    )}
+
+                                    {palletDetail.cartons && palletDetail.cartons.length > 0 && (
+                                        <BackChainSection title={`Inner Boxes (${palletDetail.cartons.length})`} color="#6366f1">
+                                            <details>
+                                                <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--enterprise-primary)' }}>Show all</summary>
+                                                <ul style={{ fontSize: 12, marginTop: 6, paddingLeft: 18 }}>
+                                                    {palletDetail.cartons.map((c: any, i: number) => (
+                                                        <li key={i} style={{ marginBottom: 3 }}>
+                                                            <strong>{c.pack_containers?.container_number ?? '—'}</strong>
+                                                            {' · '}qty {c.pack_containers?.quantity ?? '—'}
+                                                            {c.pack_containers?.is_adjustment && <span style={{ color: '#d97706', marginLeft: 6 }}>(adj)</span>}
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            </details>
+                                        </BackChainSection>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* ADD STOCK MODAL */}
             <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="Add Stock to Location" maxWidth="520px">
