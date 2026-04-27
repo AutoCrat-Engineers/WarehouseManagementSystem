@@ -3,7 +3,7 @@ name: Build, Test, Deploy (deploy/production)
 on:
   push:
     branches:
-      - deploy/production
+      - deploy/pre-prod
 
 jobs:
 
