@@ -1,4 +1,4 @@
-name: Build, Test, Deploy (deploy/production)
+name: Build, Test, Deploy (deploy/pre-prod)
 
 on:
   push:
