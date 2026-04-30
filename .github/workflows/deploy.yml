@@ -106,8 +106,15 @@ jobs:
             --restart unless-stopped \
             warehouseae.azurecr.io/wms-service:latest
 
-            echo "===== CLEANUP STALE NGINX CONFIGS ====="
+            echo "===== CLEANUP STALE HOST NGINX CONFIGS ====="
+            # The Ubuntu default site listens on port 80 with default_server and
+            # would intercept traffic before our wms reverse-proxy site, serving
+            # stale /var/www/html instead of proxying to the container on 8080.
             sudo rm -f /etc/nginx/conf.d/default.conf
+            sudo rm -f /etc/nginx/sites-enabled/default
+
+            echo "===== RELOAD HOST NGINX ====="
+            sudo nginx -t && sudo systemctl reload nginx
 
             echo "===== DEPLOYMENT SUCCESS ====="
             docker ps
