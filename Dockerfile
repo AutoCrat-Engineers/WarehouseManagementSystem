@@ -27,8 +27,16 @@ FROM nginx:1.27-alpine
 # Copy built frontend
 COPY --from=build /app/build /usr/share/nginx/html
 
-# Copy nginx config directly
-COPY devops/nginx/nginx.conf /etc/nginx/conf.d/default.conf
+# Copy nginx config as a template — nginx image's docker-entrypoint runs
+# envsubst on /etc/nginx/templates/*.template at container start and writes
+# the result to /etc/nginx/conf.d/. NGINX_ENVSUBST_FILTER_VARIABLES restricts
+# substitution to PDF_API_KEY so nginx's own $remote_addr, $uri, $scheme, etc.
+# are left untouched. PDF_API_KEY itself is supplied at `docker run --env`.
+COPY devops/nginx/nginx.conf /etc/nginx/templates/default.conf.template
+ENV NGINX_ENVSUBST_FILTER_VARIABLES=PDF_API_KEY
+
+# Remove the default nginx server config so it doesn't conflict with ours
+RUN rm -f /etc/nginx/conf.d/default.conf
 
 # Install curl for reliable healthcheck
 RUN apk add --no-cache curl
