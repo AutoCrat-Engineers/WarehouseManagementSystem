@@ -170,10 +170,12 @@ export async function handler(req: Request): Promise<Response> {
         .eq('item_code', req_data.item_code)
         .eq('is_active', true)
         .single(),
+      // items.item_code dropped in migration 018; match on part_number.
       db.from('items')
         .select('id')
-        .eq('item_code', req_data.item_code)
-        .single(),
+        .eq('part_number', req_data.item_code)
+        .is('deleted_at', null)
+        .maybeSingle(),
       db.from('pack_pallets')
         .select('*')
         .eq('item_code', req_data.item_code)

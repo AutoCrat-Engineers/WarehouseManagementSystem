@@ -1,6 +1,8 @@
 # Architecture Overview
 
-> **Version:** 0.5.0 | **Last Updated:** 2026-03-31
+> **Version:** 0.5.5 | **Last Updated:** 2026-04-25
+>
+> **For the BPA / Release / Rack-Storage / Goods-Receipt subsystem (added in 0.5.4–0.5.5),** see [`docs/releases/IMPLEMENTATION_0.5.4_TO_0.5.5.md`](releases/IMPLEMENTATION_0.5.4_TO_0.5.5.md) for the full technical change log.
 
 ## System Architecture
 

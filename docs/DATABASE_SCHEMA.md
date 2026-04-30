@@ -1,6 +1,6 @@
 # Database Schema Reference
 
-> **Version:** 0.5.0 | **Last Updated:** 2026-03-31  
+> **Version:** 0.5.5 | **Last Updated:** 2026-04-25
 > **Full Schema:** See `.db_reference/presentschema.sql` for the complete SQL definition.
 
 ## Table Groups
@@ -9,8 +9,10 @@
 
 | Table | Purpose | Key Columns |
 |-------|---------|-------------|
-| `items` | Master item catalog | `item_code` (unique), `item_name`, `uom`, `unit_price` |
+| `items` | Master item catalog | `part_number` (unique since 0.5.4), `item_code` (legacy), `item_name`, `master_serial_no`, `is_active` |
 | `inventory` | Aggregate stock levels | `item_code`, `current_stock`, `allocated_stock`, `available_stock` |
+
+> **0.5.4 schema migration:** dependent tables now carry a populated `part_number_new` column with FK to `items.part_number`. Legacy `item_code` columns retained until a verified backup exists. See [`SCHEMA_MIGRATION_item_code_to_part_number.md`](SCHEMA_MIGRATION_item_code_to_part_number.md).
 
 ### 2. Warehouse & Stock
 
@@ -57,13 +59,42 @@
 | `master_packing_lists` | MPL headers | `mpl_number`, `status`, `dispatch_date` |
 | `mpl_pallets` | MPL pallet assignments | `mpl_id`, `pallet_id` |
 
-### 7. Orders & Planning
+### 7. Customer Agreements & Releases (added in 0.5.5)
 
 | Table | Purpose | Key Columns |
 |-------|---------|-------------|
-| `blanket_orders` | Long-term agreements | `order_number`, `customer_name`, `total_value` |
-| `blanket_order_lines` | Order line items | `blanket_order_id`, `item_code`, `quantity` |
-| `blanket_releases` | Order releases | `blanket_order_id`, `release_number`, `quantity` |
+| `customer_agreements` | BPA / SPOT / PO headers | `agreement_number`, `agreement_revision`, `agreement_type` (`BPA \| SPOT`), `status`, `customer_code`, `effective_*`, `source` |
+| `customer_agreement_parts` | Per-part lines on a BPA | `agreement_id`, `line_number`, `part_number`, `blanket_quantity`, `unit_price`, `release_multiple`, `min/max_warehouse_stock`, `source` (`MANUAL \| MIGRATION \| MIGRATION_INFORMAL \| MIGRATION_PLACEHOLDER`) |
+| `customer_agreement_revisions` | Append-only amendment snapshots | `agreement_id`, `revision_number`, `change_type`, `change_summary` |
+| `blanket_orders` | Operational mirror (legacy bridge) | `order_number`, `customer_name`, `total_value` |
+| `blanket_order_lines` | Operational mirror line items | `blanket_order_id`, `item_code`, `quantity` |
+| `blanket_order_line_configs` | Running-totals row per line | `agreement_id`, `part_number`, `released_quantity`, `delivered_quantity`, `total_releases`, `total_sub_invoices` |
+| `blanket_releases` | Customer-PO releases | `agreement_id`, `release_number`, `release_sequence`, `customer_po_base`, `requested_quantity`, `need_by_date`, `status` (`OPEN \| FULFILLED \| CANCELLED`), `source` |
+| `release_pallet_assignments` | Resolved pallet → release | `blanket_release_id`, `pallet_id`, `part_number`, `qty` |
+
+### 8. Release Allocation Holds (added in 0.5.5)
+
+| Table | Purpose | Key Columns |
+|-------|---------|-------------|
+| `release_pallet_holds` | Per-release pallet locks | `release_id`, `pallet_id`, `hold_type` (`ALLOCATED \| RESERVED`), `scope_part_number`, `scope_warehouse_id`, `qty` |
+
+Holds drive the four-bucket inventory view (`vw_item_stock_distribution`):
+`On-Hand · Allocated · Reserved · Available`. `ALLOCATED` is exclusive to the
+earliest-need-by release in scope; later competing releases accrue as
+`RESERVED`. Holds drain only when the linked release flips to `DELIVERED`
+(`trg_br_delivered_drain_holds`).
+
+### 9. Sub-Invoices, Tariff & Inbound Receiving (added in 0.5.5)
+
+| Table | Purpose | Key Columns |
+|-------|---------|-------------|
+| `pack_sub_invoices` | Customer billing per release | `sub_invoice_number`, `blanket_release_id`, `agreement_id`, `total_quantity`, `total_pallets`, `status` |
+| `pack_sub_invoice_lines` | Per-part breakdown of a sub-invoice | `sub_invoice_id`, `parent_invoice_line_id`, `part_number`, `quantity`, `unit_price` |
+| `tariff_invoices` | US tariff claim queue | `tariff_invoice_number`, `sub_invoice_id`, `unit_tariff`, `total_tariff`, `status` (`DRAFT → SUBMITTED → CLAIMED → PAID`) |
+| `goods_receipts` | Per-MPL inbound GR | `gr_number`, `proforma_invoice_id`, `mpl_id`, `total_pallets_*`, `status` |
+| `goods_receipt_lines` | Per-pallet GR line | `gr_id`, `pallet_id`, `received_qty`, `line_status` (`RECEIVED \| DAMAGED \| SHORT \| QUALITY_HOLD`), `rack_location_code` |
+| `warehouse_rack_locations` | Physical rack-cell occupancy | `rack`, `location_number`, `pallet_id`, `agreement_id`, `part_number` |
+| `proforma_invoice_mpls` | Proforma ↔ MPL junction | `proforma_id`, `mpl_id`, `total_pallets`, `total_quantity` |
 | `demand_forecasts` | Demand predictions | `item_code`, `forecast_date`, `forecast_quantity` |
 | `demand_history` | Historical demand | `item_code`, `period`, `actual_quantity` |
 | `planning_recommendations` | MRP suggestions | `item_code`, `recommendation_type`, `quantity` |

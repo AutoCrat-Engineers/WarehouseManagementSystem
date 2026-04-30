@@ -24,7 +24,7 @@ import { getCorsHeaders } from '../_shared/cors.ts';
 // Mirrors ItemFormData in utils/api/itemsSupabase.ts.  All fields are
 // forwarded verbatim to the DB without transformation.
 interface ItemFormData {
-  item_code: string;
+  // item_code: REMOVED in migration 018. part_number is canonical + unique.
   item_name: string;
   uom: string;
   unit_price: number | null;
@@ -34,7 +34,7 @@ interface ItemFormData {
   is_active: boolean;
   master_serial_no: string | null;
   revision: string | null;
-  part_number: string | null;
+  part_number: string;  // now required + unique
 }
 
 interface UpsertItemBody {
@@ -73,53 +73,25 @@ export async function handler(req: Request): Promise<Response> {
       return json(corsHeaders, { error: 'form_data is required' }, 400);
     }
 
-    // Coerce empty strings to NULL for nullable-unique text columns.
-    // Rationale: `items.part_number` is UNIQUE and `master_serial_no`
-    // will be next.  Postgres treats '' as a real value, so a second
-    // item saved with a blank field collides.  NULLs don't collide
-    // under a UNIQUE constraint, so blanks become NULL on the way in.
-    const NULLABLE_TEXT_FIELDS = [
-      'part_number',
-      'master_serial_no',
-      'revision',
-      'lead_time_days',
-    ] as const;
-    const cleaned: Record<string, unknown> = { ...formData };
-    for (const f of NULLABLE_TEXT_FIELDS) {
-      const v = cleaned[f];
-      if (typeof v === 'string' && v.trim() === '') cleaned[f] = null;
-    }
-
-    // Map Postgres constraint names to human-readable toasts.
-    const friendlyError = (msg: string): string => {
-      if (/items_item_code_key/i.test(msg))
-        return 'Item code already exists. Please use a different code.';
-      if (/items_part_number_unique/i.test(msg))
-        return 'Part number already exists. Please use a different part number.';
-      if (/items_master_serial_no/i.test(msg))
-        return 'Master serial number already exists. Please use a different value.';
-      return msg;
-    };
-
     // ── UPDATE MODE ──────────────────────────────────────────────────
     if (itemId) {
       const { data, error } = await db
         .from('items')
-        .update({ ...cleaned, updated_at: new Date().toISOString() })
+        .update({ ...formData, updated_at: new Date().toISOString() })
         .eq('id', itemId)
         .select()
         .single();
-      if (error) return json(corsHeaders, { error: friendlyError(error.message) }, 400);
+      if (error) return json(corsHeaders, { error: error.message }, 400);
       return json(corsHeaders, { success: true, mode: 'update', item: data });
     }
 
     // ── CREATE MODE ──────────────────────────────────────────────────
     const { data, error } = await db
       .from('items')
-      .insert(cleaned)
+      .insert(formData)
       .select()
       .single();
-    if (error) return json(corsHeaders, { error: friendlyError(error.message) }, 400);
+    if (error) return json(corsHeaders, { error: error.message }, 400);
 
     return json(corsHeaders, { success: true, mode: 'create', item: data });
   } catch (err: any) {

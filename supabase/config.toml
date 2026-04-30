@@ -78,3 +78,103 @@ verify_jwt = false
 
 [functions.get-movement-review-data]
 verify_jwt = false
+
+# ── Item Master ─────────────────────────────────────────
+[functions.im_list-items]
+verify_jwt = false
+[functions.im_upsert-item]
+verify_jwt = false
+[functions.im_delete-item]
+verify_jwt = false
+[functions.im_get-blanket-orders]
+verify_jwt = false
+[functions.item_get_full_detail]
+verify_jwt = false
+
+# ── BPA Module ───────────────────────────────────────────
+[functions.bpa_create]
+verify_jwt = false
+[functions.bpa_list]
+verify_jwt = false
+[functions.bpa_get]
+verify_jwt = false
+[functions.bpa_amend]
+verify_jwt = false
+[functions.bpa_upload_document]
+verify_jwt = false
+[functions.bpa_cancel]
+verify_jwt = false
+
+# ── BO / Dashboard ───────────────────────────────────────
+[functions.bo_create_from_bpa]
+verify_jwt = false
+[functions.bo_get_dashboard]
+verify_jwt = false
+[functions.bo_recalc_totals]
+verify_jwt = false
+
+# ── Rack View ────────────────────────────────────────────
+[functions.rack_view_get]
+verify_jwt = false
+[functions.rack_get_cell_chain]
+verify_jwt = false
+[functions.shipment_receive]
+verify_jwt = false
+[functions.pallet_place]
+verify_jwt = false
+[functions.pallet_move]
+verify_jwt = false
+[functions.shipment_dashboard_list]
+verify_jwt = false
+[functions.shipment_detail_get]
+verify_jwt = false
+[functions.pending_placement_list]
+verify_jwt = false
+
+# ── Release + Sub-Invoice ────────────────────────────────
+[functions.release_parse_po_number]
+verify_jwt = false
+[functions.release_create]
+verify_jwt = false
+[functions.release_list]
+verify_jwt = false
+[functions.release_list_available_pallets]
+verify_jwt = false
+[functions.release_fifo_suggest]
+verify_jwt = false
+[functions.sub_invoice_create]
+verify_jwt = false
+
+# ── Tariff ───────────────────────────────────────────────
+[functions.tariff_invoice_list]
+verify_jwt = false
+[functions.tariff_invoice_compute]
+verify_jwt = false
+[functions.tariff_submit]
+verify_jwt = false
+[functions.tariff_rates_upsert]
+verify_jwt = false
+
+# ── Goods Receipt (Milano 3PL) ──────────────────────────
+[functions.gr_search_proformas]
+verify_jwt = false
+[functions.gr_get_proforma_breakdown]
+verify_jwt = false
+[functions.gr_confirm_receipt]
+verify_jwt = false
+[functions.gr_list_pending_placement]
+verify_jwt = false
+[functions.gr_mark_placed]
+verify_jwt = false
+[functions.pallet_get_back_chain]
+verify_jwt = false
+[functions.rack_load_storage]
+verify_jwt = false
+
+# ── Shared Services ──────────────────────────────────────
+[functions.audit_log_query]
+verify_jwt = false
+[functions.search_global]
+verify_jwt = false
+[functions.refresh_views_cron]
+verify_jwt = false

@@ -151,6 +151,30 @@ export function StockDistributionCard({
                 <Layers size={18} /> Stock Distribution & Movements
             </p>
 
+            {/* US 3PL Warehouse — 4-bucket panel (on-hand / allocated / reserved / available) */}
+            <div style={{
+                background: 'white',
+                borderRadius: 'var(--border-radius-md)',
+                padding: '16px 18px',
+                marginBottom: '16px',
+                border: '1px solid rgba(220,38,38,0.10)',
+                boxShadow: 'var(--shadow-sm)',
+            }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                    <Box size={18} style={{ color: 'var(--enterprise-primary)' }} />
+                    <span style={stockCardLabelStyle}>US 3PL Warehouse · Milano Millworks</span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
+                    <BucketStat label="On Hand"   value={data.usTransitOnHand ?? 0}   tone="neutral" />
+                    <BucketStat label="Allocated" value={data.usTransitAllocated ?? 0} tone="danger"  />
+                    <BucketStat label="Reserved"  value={data.usTransitReserved ?? 0}  tone="warn"    />
+                    <BucketStat label="Available" value={data.usTransitAvailable ?? 0} tone="success" />
+                </div>
+                <p style={{ fontSize: 11, color: 'var(--enterprise-gray-500)', marginTop: 10, fontStyle: 'italic' }}>
+                    Allocated = locked to a drafted release · Reserved = queued behind an allocated hold · Available = On-Hand − Allocated − Reserved
+                </p>
+            </div>
+
             {/* Stock by Location - 3 Cards */}
             <div style={{
                 display: 'grid',
@@ -292,6 +316,25 @@ export function StockDistributionCard({
 // ============================================================================
 // HELPER COMPONENTS
 // ============================================================================
+
+interface BucketStatProps {
+    label: string;
+    value: number;
+    tone: 'neutral' | 'success' | 'warn' | 'danger';
+}
+function BucketStat({ label, value, tone }: BucketStatProps) {
+    const color = tone === 'success' ? 'var(--enterprise-success)'
+               : tone === 'warn'    ? 'var(--enterprise-warning)'
+               : tone === 'danger'  ? 'var(--enterprise-error)'
+               :                      'var(--enterprise-gray-700)';
+    return (
+        <div style={{ textAlign: 'center', padding: '8px 4px', background: 'var(--enterprise-gray-50)', borderRadius: 8 }}>
+            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--enterprise-gray-500)', fontWeight: 600 }}>{label}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color, marginTop: 2 }}>{value.toLocaleString()}</div>
+        </div>
+    );
+}
+
 
 interface ActionButtonProps {
     children: React.ReactNode;

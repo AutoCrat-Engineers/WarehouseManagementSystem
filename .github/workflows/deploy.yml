@@ -34,30 +34,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ✅ ADDED START
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build app
-        run: npm run build
-      # ✅ ADDED END
-
       - name: Login to Azure Container Registry
         run: |
           echo "${{ secrets.ACR_PASSWORD }}" | docker login warehouseae.azurecr.io \
            -u ${{ secrets.ACR_USERNAME }} \
            --password-stdin
-      
+
       - name: Build Docker image
         run: |
           docker pull node:20-alpine || true
-          docker build --no-cache -t warehouseae.azurecr.io/wms-service:latest -f Dockerfile . 
+          docker build --no-cache \
+            --build-arg VITE_SUPABASE_URL="${{ secrets.VITE_SUPABASE_URL }}" \
+            --build-arg VITE_SUPABASE_ANON_KEY="${{ secrets.VITE_SUPABASE_ANON_KEY }}" \
+            --build-arg VITE_PDF_SERVICE_URL="${{ secrets.VITE_PDF_SERVICE_URL }}" \
+            --build-arg VITE_PDF_SERVICE_API_KEY="${{ secrets.VITE_PDF_SERVICE_API_KEY }}" \
+            -t warehouseae.azurecr.io/wms-service:latest -f Dockerfile .
 
       - name: Push Docker image
         run: docker push warehouseae.azurecr.io/wms-service:latest
