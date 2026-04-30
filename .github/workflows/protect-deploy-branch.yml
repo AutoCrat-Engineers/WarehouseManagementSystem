@@ -1,0 +1,47 @@
+name: Protect deploy/pre-prod branch
+
+# Hard gate against backend / dev-reference files landing on deploy/pre-prod.
+# See docs/DEPLOY_BRANCH_GUIDE.md for the contract and rationale.
+#
+# Runs on:
+#   - direct pushes to deploy/pre-prod
+#   - PRs targeting deploy/pre-prod
+#
+# Fails the workflow if any tracked file matches the forbidden patterns.
+# To unblock a PR, remove the offending files from the PR's branch.
+
+on:
+  push:
+    branches: [deploy/pre-prod]
+  pull_request:
+    branches: [deploy/pre-prod]
+
+jobs:
+  forbid-paths:
+    name: Forbid backend & dev-reference paths
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fail if forbidden paths are present
+        run: |
+          set -e
+          BAD=$(git ls-files | grep -E '^(supabase/|scripts/|azure-pipelines\.yml$|docs/(architecture|adr|reference|releases|workflows)/|docs/CONTRIBUTING\.md$|docs/DATABASE_SCHEMA\.md$|docs/DISPATCH_EMAIL_SYSTEM\.md$|docs/GRBAC_SYSTEM\.md$|docs/MIGRATION_NOTES\.md$|docs/MODULE_OVERVIEW\.md$|docs/SCHEMA_MIGRATION_item_code_to_part_number\.md$|docs/architecture\.md$)' || true)
+          if [ -n "$BAD" ]; then
+            echo "::error::deploy/pre-prod contains paths that belong on develop-test, not on this branch:"
+            echo ""
+            echo "$BAD" | sed 's/^/  - /'
+            echo ""
+            echo "These are dev-reference / backend files. Edge functions are deployed"
+            echo "via the Supabase CLI, not via this Docker pipeline — keeping them on"
+            echo "deploy/pre-prod just bloats the build context and risks drift."
+            echo ""
+            echo "To fix this PR:"
+            echo "  git rm -r <offending paths>"
+            echo "  git commit -m 'chore: remove dev-only paths from deploy branch'"
+            echo ""
+            echo "See docs/DEPLOY_BRANCH_GUIDE.md for the full contract."
+            exit 1
+          fi
+          echo "OK — no forbidden paths."

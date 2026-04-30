@@ -1,0 +1,39 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Deploy-branch hygiene
+#
+# Paths listed below MUST NOT live on deploy/* branches. They are dev-reference
+# only and live on develop-test / develop-stable / main. Hard enforcement is
+# done by .github/workflows/protect-deploy-branch.yml — this file is the soft
+# layer: when a merge from a dev branch tries to bring these paths back, git
+# uses the "ours" merge driver to keep the deploy-branch version (i.e. nothing).
+#
+# To activate locally, run once per machine:
+#   git config --global merge.ours.driver true
+#
+# Why this exists: see docs/DEPLOY_BRANCH_GUIDE.md
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Backend code — deployed via `supabase functions deploy` and `supabase db push`,
+# not via this Docker pipeline. Repo copy lives on develop-test for reference.
+supabase/**                                            merge=ours
+
+# Dev-only tooling
+scripts/**                                             merge=ours
+
+# Unused CI config (we use GitHub Actions, not Azure DevOps)
+azure-pipelines.yml                                    merge=ours
+
+# Dev-reference docs (architecture, ADRs, release notes, etc.)
+docs/architecture/**                                   merge=ours
+docs/adr/**                                            merge=ours
+docs/reference/**                                      merge=ours
+docs/releases/**                                       merge=ours
+docs/workflows/**                                      merge=ours
+docs/CONTRIBUTING.md                                   merge=ours
+docs/DATABASE_SCHEMA.md                                merge=ours
+docs/DISPATCH_EMAIL_SYSTEM.md                          merge=ours
+docs/GRBAC_SYSTEM.md                                   merge=ours
+docs/MIGRATION_NOTES.md                                merge=ours
+docs/MODULE_OVERVIEW.md                                merge=ours
+docs/SCHEMA_MIGRATION_item_code_to_part_number.md      merge=ours
+docs/architecture.md                                   merge=ours

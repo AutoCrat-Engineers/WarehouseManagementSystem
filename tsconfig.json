@@ -34,9 +34,7 @@
         "src"
     ],
     "exclude": [
-        "node_modules",
-        "src/supabase/functions/**/*",
-        "supabase/functions/**/*"
+        "node_modules"
     ],
     "references": [
         {

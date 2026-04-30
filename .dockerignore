@@ -1,0 +1,47 @@
+# Keep the Docker build context small and deterministic.
+#
+# Dockerfile copies the whole repo via `COPY . .` after npm install. Anything
+# listed here is excluded from that context, which:
+#   - speeds up `docker build` (no GB of node_modules transferred)
+#   - prevents accidental leakage of .env / .git / dev tooling into the image
+#   - matches the deploy-branch contract documented in docs/DEPLOY_BRANCH_GUIDE.md
+
+# Dependencies (rebuilt inside the image)
+node_modules
+npm-debug.log*
+
+# VCS
+.git
+.gitignore
+.gitattributes
+.github
+
+# Local env files (build args come from CI secrets, not committed files)
+.env
+.env.*
+!.env.example
+
+# Editor / OS junk
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Build outputs (rebuilt fresh)
+build
+dist
+.vite
+
+# Runtime / debug artifacts
+.db
+*.log
+
+# Defense-in-depth — paths that should not be on deploy branches anyway
+# (enforced by .github/workflows/protect-deploy-branch.yml; duplicated here so
+#  builds remain clean even if enforcement is bypassed)
+supabase
+scripts
+azure-pipelines.yml
+docs
