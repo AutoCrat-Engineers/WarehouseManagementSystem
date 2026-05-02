@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Unified Item Details Module
  *
  * Merges the Item Master (CRUD) and Inventory (stock + warehouse details) into a single view.
@@ -424,10 +424,10 @@ function BlanketOrderRow({ order }: BlanketOrderRowProps) {
               <p style={upperLabelStyle}>Status</p>
               <div style={{ display: 'flex', alignItems: 'center', minHeight: '22px' }}>
                 <Badge variant={
-                  order.agreement_status === 'ACTIVE'    ? 'success' :
-                  order.agreement_status === 'AMENDED'   ? 'warning' :
-                  order.agreement_status === 'DRAFT'     ? 'info'    :
-                  order.agreement_status === 'CANCELLED' ? 'danger'  : 'neutral'
+                  order.agreement_status === 'ACTIVE' ? 'success' :
+                    order.agreement_status === 'AMENDED' ? 'warning' :
+                      order.agreement_status === 'DRAFT' ? 'info' :
+                        order.agreement_status === 'CANCELLED' ? 'danger' : 'neutral'
                 } style={{ fontWeight: 700, fontSize: '11px', letterSpacing: '0.5px' }}>
                   {order.agreement_status === 'UNKNOWN' ? '—' : order.agreement_status}
                 </Badge>
@@ -536,38 +536,38 @@ function ItemViewModal({ isOpen, onClose, item }: {
       // Transform: one BlanketOrder per agreement_part (each part belongs
       // to exactly one agreement). Line-config supplies running totals.
       const agreementParts = (json.agreements || []) as any[];
-      const lineConfigs    = (json.line_configs || []) as any[];
+      const lineConfigs = (json.line_configs || []) as any[];
       const nextReleaseByAgr = (json.next_release_by_agreement || {}) as Record<string, string>;
       const lineByAgr = new Map<string, any>();
       for (const lc of lineConfigs) lineByAgr.set(lc.agreement_id, lc);
 
       const transformed: BlanketOrder[] = agreementParts.map((p: any) => {
         const agr = p.agreement || {};
-        const lc  = lineByAgr.get(p.agreement_id) ?? {};
-        const blanketQty   = Number(p.blanket_quantity ?? 0);
-        const releasedQty  = Number(lc.released_quantity ?? 0);
-        const fulfillPct   = lc.fulfillment_pct != null
-            ? Number(lc.fulfillment_pct)
-            : (blanketQty > 0 ? (releasedQty / blanketQty) * 100 : 0);
+        const lc = lineByAgr.get(p.agreement_id) ?? {};
+        const blanketQty = Number(p.blanket_quantity ?? 0);
+        const releasedQty = Number(lc.released_quantity ?? 0);
+        const fulfillPct = lc.fulfillment_pct != null
+          ? Number(lc.fulfillment_pct)
+          : (blanketQty > 0 ? (releasedQty / blanketQty) * 100 : 0);
         return {
-          id:                  p.id,
-          bpa_number:          agr.agreement_number || '—',
-          master_serial_no:    p.msn_code || '—',
-          part_number:         p.part_number || '—',
-          customer_name:       agr.customer_name || '—',
-          blanket_order_qty:   blanketQty,
+          id: p.id,
+          bpa_number: agr.agreement_number || '—',
+          master_serial_no: p.msn_code || '—',
+          part_number: p.part_number || '—',
+          customer_name: agr.customer_name || '—',
+          blanket_order_qty: blanketQty,
           blanket_order_start: agr.effective_start_date || '',
-          blanket_order_end:   agr.effective_end_date   || '',
-          monthly_usage:       Number(p.avg_monthly_demand ?? 0),
-          next_delivery:       nextReleaseByAgr[p.agreement_id] ?? '',
-          release_multiple:    p.release_multiple ?? 1,
-          min_stock:           p.min_warehouse_stock ?? 0,
-          max_stock:           p.max_warehouse_stock ?? 0,
-          safety_stock:        p.safety_stock ?? 0,
-          agreement_status:    (agr.status || 'UNKNOWN') as BlanketOrder['agreement_status'],
-          agreement_revision:  Number(agr.agreement_revision ?? 0),
-          released_quantity:   releasedQty,
-          fulfillment_pct:     Math.round(fulfillPct * 10) / 10,
+          blanket_order_end: agr.effective_end_date || '',
+          monthly_usage: Number(p.avg_monthly_demand ?? 0),
+          next_delivery: nextReleaseByAgr[p.agreement_id] ?? '',
+          release_multiple: p.release_multiple ?? 1,
+          min_stock: p.min_warehouse_stock ?? 0,
+          max_stock: p.max_warehouse_stock ?? 0,
+          safety_stock: p.safety_stock ?? 0,
+          agreement_status: (agr.status || 'UNKNOWN') as BlanketOrder['agreement_status'],
+          agreement_revision: Number(agr.agreement_revision ?? 0),
+          released_quantity: releasedQty,
+          fulfillment_pct: Math.round(fulfillPct * 10) / 10,
         };
       });
       setBlanketOrders(transformed);
@@ -646,7 +646,7 @@ function ItemViewModal({ isOpen, onClose, item }: {
           </div>
           {/* Row 4: Unit Price | Standard Cost */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-            <DetailField label="Unit Price" value={item.unit_price != null ? `Γé╣${item.unit_price.toLocaleString()}` : '-'} />
+            <DetailField label="Unit Price" value={item.unit_price != null ? `₹${item.unit_price.toLocaleString()}` : '-'} />
             <DetailField label="Standard Cost" value={item.standard_cost != null ? `$${item.standard_cost.toLocaleString()}` : '-'} />
           </div>
           {/* Row 5: Lead Time | Status */}
@@ -836,11 +836,11 @@ function ItemViewModal({ isOpen, onClose, item }: {
 // ItemReleaseSections — two-bucket card layout for the Blanket Release tab
 // ============================================================================
 
-const DRAFT_STATUSES    = ['DRAFT', 'CONFIRMED', 'AWAITING_PICKUP'];
+const DRAFT_STATUSES = ['DRAFT', 'CONFIRMED', 'AWAITING_PICKUP'];
 const DELIVERED_STATUSES = ['PICKED_UP', 'DELIVERED'];
 
 function ItemReleaseSections({ lines }: { lines: any[] }) {
-  const drafted   = lines.filter(l => DRAFT_STATUSES.includes(l.sub_invoice?.status));
+  const drafted = lines.filter(l => DRAFT_STATUSES.includes(l.sub_invoice?.status));
   const delivered = lines.filter(l => DELIVERED_STATUSES.includes(l.sub_invoice?.status));
   const cancelled = lines.filter(l => l.sub_invoice?.status === 'CANCELLED');
 
@@ -931,9 +931,9 @@ function ItemReleaseSection({
 function ItemReleaseCard({ line, emphasis }: { line: any; emphasis: 'open' | 'done' | 'muted' }) {
   const [expanded, setExpanded] = useState(false);
   const si = line.sub_invoice || {};
-  const done      = DELIVERED_STATUSES.includes(si.status);
+  const done = DELIVERED_STATUSES.includes(si.status);
   const cancelled = si.status === 'CANCELLED';
-  const accent    = done ? '#16a34a' : cancelled ? '#6b7280' : 'var(--enterprise-primary)';
+  const accent = done ? '#16a34a' : cancelled ? '#6b7280' : 'var(--enterprise-primary)';
   const releaseNo = si.customer_po_number ?? si.sub_invoice_number ?? '—';
 
   return (
@@ -987,10 +987,10 @@ function ItemReleaseCard({ line, emphasis }: { line: any; emphasis: 'open' | 'do
         <div style={{ background: 'linear-gradient(180deg, rgba(30,58,138,0.03) 0%, rgba(30,58,138,0.01) 100%)', borderTop: '1px solid var(--enterprise-gray-200)', padding: '14px 48px' }}>
           <p style={{ fontSize: 10, fontWeight: 700, color: accent, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '10px' }}>Release Details</p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
-            <MiniDetailCard label="Sub-Invoice #"  value={si.sub_invoice_number ?? '—'} mono />
-            <MiniDetailCard label="Total Pallets"  value={String(si.total_pallets ?? line.pallet_count ?? 0)} />
-            <MiniDetailCard label="Total Qty"      value={Number(si.total_quantity ?? line.quantity ?? 0).toLocaleString()} />
-            <MiniDetailCard label="Currency"       value={si.currency_code ?? 'USD'} />
+            <MiniDetailCard label="Sub-Invoice #" value={si.sub_invoice_number ?? '—'} mono />
+            <MiniDetailCard label="Total Pallets" value={String(si.total_pallets ?? line.pallet_count ?? 0)} />
+            <MiniDetailCard label="Total Qty" value={Number(si.total_quantity ?? line.quantity ?? 0).toLocaleString()} />
+            <MiniDetailCard label="Currency" value={si.currency_code ?? 'USD'} />
           </div>
         </div>
       )}
@@ -1508,7 +1508,7 @@ export function UnifiedItemMaster({ userRole, userPerms = {} }: UnifiedItemMaste
                 </div>
                 {/* Row 4: Unit Price | Standard Cost (equal) */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-                  <div><Label>Unit Price (Γé╣)</Label><Input type="text" value={unitPriceStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setUnitPriceStr(v); }} placeholder="0.00" /></div>
+                  <div><Label>Unit Price (₹)</Label><Input type="text" value={unitPriceStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setUnitPriceStr(v); }} placeholder="0.00" /></div>
                   <div><Label>Standard Cost ($)</Label><Input type="text" value={standardCostStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setStandardCostStr(v); }} placeholder="0.00" /></div>
                 </div>
                 {/* Row 5: Lead Time | Status (equal) */}
@@ -1560,7 +1560,7 @@ export function UnifiedItemMaster({ userRole, userPerms = {} }: UnifiedItemMaste
                 </div>
                 {/* Row 4: Unit Price | Standard Cost (equal) */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                  <div><Label>Unit Price (Γé╣)</Label><Input type="text" value={unitPriceStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setUnitPriceStr(v); }} placeholder="0.00" /></div>
+                  <div><Label>Unit Price (₹)</Label><Input type="text" value={unitPriceStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setUnitPriceStr(v); }} placeholder="0.00" /></div>
                   <div><Label>Standard Cost ($)</Label><Input type="text" value={standardCostStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setStandardCostStr(v); }} placeholder="0.00" /></div>
                 </div>
               </>
@@ -1569,7 +1569,7 @@ export function UnifiedItemMaster({ userRole, userPerms = {} }: UnifiedItemMaste
 
           {/* Action Buttons */}
           <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
-            <Button type="submit" variant="primary" fullWidth disabled={editingItem ? !hasFormChanges() : false} style={{ padding: '12px 24px', fontWeight: 'var(--font-weight-semibold)', opacity: (editingItem && !hasFormChanges()) ? 0.5 : 1 }}>{editingItem ? 'Γ£ô Update Item' : '+ Create Item'}</Button>
+            <Button type="submit" variant="primary" fullWidth disabled={editingItem ? !hasFormChanges() : false} style={{ padding: '12px 24px', fontWeight: 'var(--font-weight-semibold)', opacity: (editingItem && !hasFormChanges()) ? 0.5 : 1 }}>{editingItem ? '✓ Update Item' : '+ Create Item'}</Button>
             <Button type="button" variant="tertiary" fullWidth onClick={handleCloseModal} style={{ padding: '12px 24px' }}>Cancel</Button>
           </div>
         </form>

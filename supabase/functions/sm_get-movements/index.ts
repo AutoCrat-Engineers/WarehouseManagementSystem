@@ -180,8 +180,10 @@ export async function handler(req: Request): Promise<Response> {
       );
 
     // Status filter — DB only has APPROVED (not COMPLETED/PARTIALLY_APPROVED)
+    // For virtual statuses, we need to fetch ALL approved records for post-filtering.
+    const isVirtualStatusFilter = f.status === 'COMPLETED' || f.status === 'PARTIALLY_APPROVED';
     if (f.status !== 'ALL') {
-      if (f.status === 'COMPLETED' || f.status === 'PARTIALLY_APPROVED') {
+      if (isVirtualStatusFilter) {
         // Both map to APPROVED in DB; server will post-filter by corrected status
         query = query.eq('status', 'APPROVED');
       } else {
@@ -221,15 +223,38 @@ export async function handler(req: Request): Promise<Response> {
       }
     }
 
-    // Ordering + Pagination applied AFTER all filters
-    const { data: headers, count, error: headErr } = await query
-      .order('created_at', { ascending: false })
-      .range(offset, offset + pageSize - 1);
-    if (headErr) throw headErr;
+    // ── QUERY EXECUTION ────────────────────────────────────────────────────────
+    // For virtual status filters (COMPLETED / PARTIALLY_APPROVED):
+    //   The DB only stores "APPROVED" — we derive the virtual status by comparing
+    //   approved_quantity vs requested_quantity AFTER fetching line data.
+    //   Therefore we CANNOT paginate at the DB level; we must fetch ALL approved
+    //   records, enrich + correct statuses, post-filter, and then paginate in-memory.
+    //
+    // For all other statuses: normal DB-level pagination works fine.
+    // ──────────────────────────────────────────────────────────────────────────
 
-    const totalCount = count ?? 0;
-    const headerIds = (headers || []).map((h: any) => h.id);
-    const userIds = [...new Set((headers || []).map((h: any) => h.requested_by).filter(Boolean))];
+    let headers: any[] = [];
+    let dbTotalCount = 0;
+
+    if (isVirtualStatusFilter) {
+      // Fetch ALL approved records (no DB pagination) — ordered by created_at desc
+      const { data, count, error: headErr } = await query
+        .order('created_at', { ascending: false });
+      if (headErr) throw headErr;
+      headers = data || [];
+      dbTotalCount = count ?? headers.length;
+    } else {
+      // Normal path: DB-level pagination
+      const { data, count, error: headErr } = await query
+        .order('created_at', { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      if (headErr) throw headErr;
+      headers = data || [];
+      dbTotalCount = count ?? 0;
+    }
+
+    const headerIds = (headers).map((h: any) => h.id);
+    const userIds = [...new Set((headers).map((h: any) => h.requested_by).filter(Boolean))];
 
     // Fetch lines + profiles IN PARALLEL (both depend only on headers)
     const [linesResult, profilesResult] = await Promise.all([
@@ -280,7 +305,7 @@ export async function handler(req: Request): Promise<Response> {
     }
 
     // Map to MovementRecord shape with smart status correction
-    let records = (headers || []).map((h: any) => {
+    let records = (headers).map((h: any) => {
       const line = linesMap[h.id];
       const reqQty = line?.requested_quantity || 0;
       const apprQty = line?.approved_quantity || 0;
@@ -336,10 +361,19 @@ export async function handler(req: Request): Promise<Response> {
       };
     });
 
-    // Post-filter for COMPLETED / PARTIALLY_APPROVED — same logic as original client
-    // (movements.filter(m => m.status === filterStatus))
-    if (f.status === 'COMPLETED' || f.status === 'PARTIALLY_APPROVED') {
+    // ── Post-filter + in-memory pagination for virtual statuses ───────────────
+    let totalCount: number;
+
+    if (isVirtualStatusFilter) {
+      // Post-filter: keep only records matching the requested virtual status
       records = records.filter(r => r.status === f.status);
+      // totalCount reflects the ACTUAL number of matching records
+      totalCount = records.length;
+      // In-memory pagination (records are already sorted by created_at desc from DB)
+      records = records.slice(offset, offset + pageSize);
+    } else {
+      // Normal path: DB already paginated, use DB count
+      totalCount = dbTotalCount;
     }
 
     return new Response(
