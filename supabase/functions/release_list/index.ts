@@ -45,6 +45,7 @@ export const handler = withErrorHandler(async (req) => {
     const countQ = (status?: string) => {
         let base = ctx.db.from('blanket_releases').select('id', { count: 'exact', head: true });
         if (status) base = base.eq('status', status);
+        if (body.agreement_id) base = base.eq('agreement_id', body.agreement_id);
         return base;
     };
 

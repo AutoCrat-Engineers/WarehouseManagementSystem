@@ -20,24 +20,26 @@ import {
 import { Card, ModuleLoader } from '../ui/EnterpriseUI';
 import { Badge } from '../ui/badge';
 import { LoadingSpinner } from '../ui/EnterpriseUI';
-import { listBPAs, cancelBPA } from './bpaService';
-import type { BPAAggregate, PortfolioTotals, FulfillmentRowRich } from './bpaService';
+import { listBPAs, cancelBPA, getBPA } from './bpaService';
+import type { BPAAggregate, PortfolioTotals, FulfillmentRowRich, BPAGetResponse } from './bpaService';
 import type { CustomerAgreement, AgreementStatus } from './types';
 import { BPADetail } from './BPADetail';
 import { BPACreate } from './BPACreate';
+import { CreateRelease } from '../release/CreateRelease';
 
 type CardFilter = 'ALL' | AgreementStatus | 'EXPIRING_SOON' | 'COMPLETED' | 'PENDING_HEAVY';
 
 interface Props {
     userRole?: string;
     userPerms?: Record<string, boolean>;
+    onNavigate?: (view: string) => void;
 }
 
 // ============================================================================
 // Main
 // ============================================================================
 
-export function BPAList({ userRole, userPerms = {} }: Props) {
+export function BPAList({ userRole, userPerms = {}, onNavigate }: Props) {
     const hasPerms = Object.keys(userPerms).length > 0;
     const canCreate = userRole === 'L3' || userRole === 'ADMIN'
         || (hasPerms ? userPerms['bpa.create'] === true : userRole === 'L2');
@@ -58,7 +60,30 @@ export function BPAList({ userRole, userPerms = {} }: Props) {
     const [search, setSearch] = useState('');
 
     const [detailId, setDetailId] = useState<string | null>(null);
+    const [detailInitialTab, setDetailInitialTab] = useState<'overview' | 'releases'>('overview');
     const [showCreate, setShowCreate] = useState(false);
+    const [createReleaseData, setCreateReleaseData] = useState<BPAGetResponse | null>(null);
+    const [showReleaseWizard, setShowReleaseWizard] = useState(false);
+    const [releaseCandidates, setReleaseCandidates] = useState<{ agreement_id: string; agreement_number: string; customer_name: string; blanket_quantity: number; status: string }[]>([]);
+    const [loadingRelease, setLoadingRelease] = useState(false);
+
+    const handleNewRelease = async (agreementId: string | null, candidates?: typeof releaseCandidates) => {
+        if (!agreementId) {
+            // Multiple BPAs — open wizard at Step 1 with candidate cards
+            setReleaseCandidates(candidates ?? []);
+            setShowReleaseWizard(true);
+            return;
+        }
+        setLoadingRelease(true);
+        try {
+            const bpaData = await getBPA({ agreement_id: agreementId });
+            setCreateReleaseData(bpaData);
+        } catch (e: any) {
+            setError(e?.message ?? 'Failed to load BPA for release');
+        } finally {
+            setLoadingRelease(false);
+        }
+    };
 
     const fetchData = useCallback(async () => {
         setLoading(true); setError(null);
@@ -297,8 +322,11 @@ export function BPAList({ userRole, userPerms = {} }: Props) {
                         <PartCard
                             key={g.part_number}
                             group={g}
-                            onOpenBPA={(aid) => setDetailId(aid)}
+                            onOpenBPA={(aid) => { setDetailInitialTab('overview'); setDetailId(aid); }}
+                            onNewRelease={handleNewRelease}
+                            loadingRelease={loadingRelease}
                             onCancelled={fetchData}
+                            onNavigate={onNavigate}
                         />
                     ))}
                 </div>
@@ -324,12 +352,28 @@ export function BPAList({ userRole, userPerms = {} }: Props) {
                     onAmended={() => { setDetailId(null); fetchData(); }}
                     onCancelled={() => { setDetailId(null); fetchData(); }}
                     canAmend={canAmend}
+                    initialTab={detailInitialTab}
                 />
             )}
             {showCreate && (
                 <BPACreate
                     onClose={() => setShowCreate(false)}
                     onCreated={(agreementId) => { setShowCreate(false); setDetailId(agreementId); fetchData(); }}
+                />
+            )}
+            {createReleaseData && (
+                <CreateRelease
+                    prefilledBpa={createReleaseData.agreement}
+                    prefilledParts={createReleaseData.parts}
+                    onClose={() => setCreateReleaseData(null)}
+                    onCreated={() => { setCreateReleaseData(null); fetchData(); }}
+                />
+            )}
+            {showReleaseWizard && (
+                <CreateRelease
+                    candidateBpas={releaseCandidates}
+                    onClose={() => { setShowReleaseWizard(false); setReleaseCandidates([]); }}
+                    onCreated={() => { setShowReleaseWizard(false); setReleaseCandidates([]); fetchData(); }}
                 />
             )}
         </div>
@@ -482,7 +526,7 @@ const STATUS_BG: Record<string, string> = {
     CANCELLED: '#fee2e2',
 };
 
-const ROW_GRID_COLS = 'minmax(0, 1.1fr) minmax(0, 1.5fr) minmax(0, 0.3fr) minmax(0, 0.7fr) minmax(0, 0.6fr) minmax(0, 0.6fr) minmax(0, 0.7fr) minmax(0, 0.6fr) minmax(0, 0.9fr) minmax(0, 0.8fr) 50px';
+const ROW_GRID_COLS = 'minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, 0.3fr) minmax(0, 0.7fr) minmax(0, 0.6fr) minmax(0, 0.6fr) minmax(0, 0.7fr) minmax(0, 0.6fr) minmax(0, 1fr) 50px';
 
 // ============================================================================
 // PartCard — primary entity. Expands to show BPAs covering this part.
@@ -506,9 +550,8 @@ type PartGroup = {
     bpa_rows: FulfillmentRowRich[];
 };
 
-function PartCard({ group, onOpenBPA, onCancelled }: { group: PartGroup; onOpenBPA: (id: string) => void; onCancelled: () => void }) {
+function PartCard({ group, onOpenBPA, onNewRelease, loadingRelease, onCancelled, onNavigate }: { group: PartGroup; onOpenBPA: (id: string) => void; onNewRelease: (id: string | null, candidates?: { agreement_id: string; agreement_number: string; customer_name: string; blanket_quantity: number; status: string }[]) => void; loadingRelease: boolean; onCancelled: () => void; onNavigate?: (view: string) => void }) {
     const [expanded, setExpanded] = useState(false);
-    const [releaseDropdownOpen, setReleaseDropdownOpen] = useState(false);
     // Progress based on Delivered / Blanket
     const pct = group.total_blanket > 0 ? +((group.total_delivered / group.total_blanket) * 100).toFixed(1) : 0;
     const hasInRack = group.pallets_in_rack > 0;
@@ -557,22 +600,55 @@ function PartCard({ group, onOpenBPA, onCancelled }: { group: PartGroup; onOpenB
                             )}
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--enterprise-primary)', background: 'rgba(30,58,138,0.08)', padding: '3px 10px', borderRadius: 12, letterSpacing: '0.3px' }}>
-                                {group.bpa_rows.length} BPA{group.bpa_rows.length !== 1 ? 's' : ''}
-                            </span>
                             <ChevronRight size={16} style={{ color: 'var(--enterprise-gray-400)', transform: expanded ? 'rotate(90deg)' : 'rotate(0)', transition: 'transform 0.2s ease' }} />
                         </div>
                     </div>
 
-                    {/* 6-column KPI grid */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 16, marginBottom: 8 }}>
-                        <KPIInline label="Blanket" value={group.total_blanket.toLocaleString()} align="center" />
-                        <KPIInline label="Delivered" value={group.total_delivered.toLocaleString()} accent="success" align="center" />
-                        <KPIInline label="Released" value={group.total_released.toLocaleString()} align="center" />
-                        <KPIInline label="Pending" value={group.total_pending.toLocaleString()} accent="warning" align="center" />
-                        <KPIInline label="In Rack" value={group.total_in_rack.toLocaleString()} accent={hasInRack ? 'warning' : undefined}
-                            sub={hasInRack ? `${group.pallets_in_rack} pallet${group.pallets_in_rack !== 1 ? 's' : ''}` : undefined} align="center" />
-                        <KPIInline label="Value" value={`${currency} $${Math.round(group.total_value).toLocaleString()}`} mono align="center" />
+                    {/* Evenly spaced KPI row */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr 1fr 160px', alignItems: 'center', marginBottom: 8, gap: 8 }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--enterprise-primary)', background: 'rgba(30,58,138,0.08)', padding: '5px 14px', borderRadius: 12, letterSpacing: '0.3px', whiteSpace: 'nowrap' }}>
+                            {group.bpa_rows.length} BPA{group.bpa_rows.length !== 1 ? 's' : ''}
+                        </span>
+                        <div style={{ display: 'flex', justifyContent: 'center' }}>
+                            <KPIInline label="Total BPA Qty" value={group.total_blanket.toLocaleString()} align="center" />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'center' }}>
+                            <KPIInline label="In Rack" value={group.total_in_rack.toLocaleString()} accent={hasInRack ? 'warning' : undefined}
+                                sub={hasInRack ? `${group.pallets_in_rack} pallet${group.pallets_in_rack !== 1 ? 's' : ''}` : undefined} align="center" />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'center' }}>
+                            <KPIInline label={`Value (${currency})`} value={`$${Math.round(group.total_value).toLocaleString()}`} mono align="center" />
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'center' }}>
+                            {group.bpa_rows.length > 0 && (
+                                <button 
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        const activeBpas = group.bpa_rows.filter(r => r.agreement_status === 'ACTIVE' || r.agreement_status === 'AMENDED');
+                                        if (activeBpas.length === 1) {
+                                            onNewRelease(activeBpas[0].agreement_id);
+                                        } else if (activeBpas.length === 0 && group.bpa_rows.length === 1) {
+                                            onNewRelease(group.bpa_rows[0].agreement_id);
+                                        } else {
+                                            // Multiple BPAs — pass them as candidates for Step 1
+                                            onNewRelease(null, activeBpas.map(r => ({
+                                                agreement_id: r.agreement_id,
+                                                agreement_number: r.agreement_number ?? '',
+                                                customer_name: r.customer_name ?? '',
+                                                blanket_quantity: Number(r.blanket_quantity ?? 0),
+                                                status: r.agreement_status ?? '',
+                                            })));
+                                        }
+                                    }}
+                                    disabled={loadingRelease}
+                                    style={{ padding: '10px 24px', background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: loadingRelease ? 'wait' : 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 8px rgba(30,58,138,0.2)' }}
+                                    onMouseEnter={e => { if (!loadingRelease) e.currentTarget.style.transform = 'translateY(-1px)'; }}
+                                    onMouseLeave={e => e.currentTarget.style.transform = 'none'}
+                                >
+                                    <Plus size={14} /> {loadingRelease ? 'Loading…' : 'New Release'}
+                                </button>
+                            )}
+                        </div>
                     </div>
                 </div>
 
@@ -586,11 +662,10 @@ function PartCard({ group, onOpenBPA, onCancelled }: { group: PartGroup; onOpenB
                             <div style={{ textAlign: 'center' }}>Customer</div>
                             <div style={{ textAlign: 'center' }}>Rev</div>
                             <div style={{ textAlign: 'center' }}>Blanket</div>
-                            <div style={{ textAlign: 'center' }}>Delivered</div>
                             <div style={{ textAlign: 'center' }}>Released</div>
+                            <div style={{ textAlign: 'center' }}>Delivered</div>
                             <div style={{ textAlign: 'center' }}>Pending</div>
                             <div style={{ textAlign: 'center' }}>Status</div>
-                            <div style={{ textAlign: 'center' }}>Date</div>
                             <div style={{ textAlign: 'center' }}>Progress</div>
                             <div />
                         </div>
@@ -598,6 +673,7 @@ function PartCard({ group, onOpenBPA, onCancelled }: { group: PartGroup; onOpenB
                             <BPAUnderPartRow key={r.agreement_id + '-' + i} row={r}
                                 onOpen={() => onOpenBPA(r.agreement_id)}
                                 onCancelled={onCancelled}
+                                onNavigate={onNavigate}
                             />
                         ))}
                     </div>
@@ -607,7 +683,7 @@ function PartCard({ group, onOpenBPA, onCancelled }: { group: PartGroup; onOpenB
     );
 }
 
-function BPAUnderPartRow({ row, onOpen, onCancelled }: { row: FulfillmentRowRich; onOpen: () => void; onCancelled: () => void }) {
+function BPAUnderPartRow({ row, onOpen, onCancelled, onNavigate }: { row: FulfillmentRowRich; onOpen: () => void; onCancelled: () => void; onNavigate?: (view: string) => void }) {
     const isInactive = row.agreement_status === 'CANCELLED' || row.agreement_status === 'EXPIRED';
     const pct = row.blanket_quantity > 0 ? (row.delivered_quantity / row.blanket_quantity) * 100 : 0;
     const done = pct >= 100;
@@ -660,24 +736,20 @@ function BPAUnderPartRow({ row, onOpen, onCancelled }: { row: FulfillmentRowRich
             </div>
             {/* Blanket */}
             <div style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'monospace' }}>{Number(row.blanket_quantity).toLocaleString()}</div>
-            {/* Delivered */}
-            <div style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'monospace', color: 'var(--enterprise-success)' }}>{Number(row.delivered_quantity).toLocaleString()}</div>
             {/* Released */}
             <div style={{ textAlign: 'center', fontWeight: 600, fontFamily: 'monospace', color: 'var(--enterprise-gray-700)' }}>{Number(row.released_quantity).toLocaleString()}</div>
+            {/* Delivered */}
+            <div style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'monospace', color: 'var(--enterprise-success)' }}>{Number(row.delivered_quantity).toLocaleString()}</div>
             {/* Pending */}
             <div style={{ textAlign: 'center', fontWeight: 600, fontFamily: 'monospace', color: '#d97706' }}>{Number(row.pending_quantity).toLocaleString()}</div>
             {/* Status */}
             <div style={{ textAlign: 'center' }}>
                 <StatusChip status={row.agreement_status as AgreementStatus} />
             </div>
-            {/* Date */}
-            <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--enterprise-gray-600)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {dateRange}
-            </div>
             {/* Progress */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 12, paddingRight: 16 }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color: done ? 'var(--enterprise-success)' : 'var(--enterprise-gray-700)', minWidth: 32, textAlign: 'right' }}>{pct.toFixed(0)}%</span>
-                <div style={{ width: 70, height: 4, background: 'var(--enterprise-gray-200)', borderRadius: 2, overflow: 'hidden' }}>
+                <div style={{ flex: 1, height: 6, background: 'var(--enterprise-gray-200)', borderRadius: 3, overflow: 'hidden' }}>
                     <div style={{ width: `${Math.min(100, pct)}%`, height: '100%', background: done ? 'var(--enterprise-success)' : 'var(--enterprise-info, #3b82f6)' }} />
                 </div>
             </div>

@@ -9,11 +9,12 @@
  *   • "BPA Rev"     — agreement-level revision, bumped by amendments
  *   • "Drawing Rev" — per-part drawing/spec revision supplied by customer
  */
-import React, { useEffect, useMemo, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import {
     X, FileText, List, Clock, Edit3, Upload, Download, ExternalLink,
     Calendar, User, Mail, Truck, DollarSign, Package, TrendingUp,
-    RefreshCw, History, ChevronRight, XCircle, AlertTriangle, Trash2
+    RefreshCw, History, ChevronRight, XCircle, AlertTriangle, Trash2,
+    Plus, Hash, Clipboard, CheckCircle, Loader2,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { LoadingSpinner } from '../ui/EnterpriseUI';
@@ -21,6 +22,9 @@ import { getBPA, uploadBPADocument, createBOFromBPA, cancelBPA } from './bpaServ
 import type { BPAGetResponse } from './bpaService';
 import { BPAAmend } from './BPAAmend';
 import type { AgreementStatus } from './types';
+import { listReleases } from '../release/releaseService';
+import type { BlanketRelease } from '../release/types';
+import { CreateRelease } from '../release/CreateRelease';
 
 interface Props {
     agreementId: string;
@@ -28,23 +32,26 @@ interface Props {
     onAmended?: () => void;
     onCancelled?: () => void;
     canAmend: boolean;
+    initialTab?: Tab;
 }
 
-type Tab = 'overview' | 'parts' | 'fulfillment' | 'amendments';
+type Tab = 'overview' | 'parts' | 'fulfillment' | 'releases' | 'amendments';
 
 const fmtDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
 const fmtDateTime = (iso: string) => new Date(iso).toLocaleString(undefined, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 const fmtMoney = (n: number | null | undefined, cur = 'USD') => `${cur} ${Number(n ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
-export function BPADetail({ agreementId, onClose, onAmended, onCancelled, canAmend }: Props) {
+export function BPADetail({ agreementId, onClose, onAmended, onCancelled, canAmend, initialTab }: Props) {
     const [data, setData] = useState<BPAGetResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [tab, setTab] = useState<Tab>('overview');
+    const [tab, setTab] = useState<Tab>(initialTab ?? 'overview');
     const [showAmend, setShowAmend] = useState(false);
     const [showCancelConfirm, setShowCancelConfirm] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [activatingBO, setActivatingBO] = useState(false);
+    const [showCreateRelease, setShowCreateRelease] = useState(false);
+    const [releaseCounts, setReleaseCounts] = useState<{ total: number; open: number; fulfilled: number; cancelled: number }>({ total: 0, open: 0, fulfilled: 0, cancelled: 0 });
 
     // Sliding tab state
     const [activeTabRect, setActiveTabRect] = useState<{ left: number, width: number } | null>(null);
@@ -73,6 +80,20 @@ export function BPADetail({ agreementId, onClose, onAmended, onCancelled, canAme
     };
 
     useEffect(() => { load(); /* eslint-disable-next-line */ }, [agreementId]);
+
+    // Fetch release counts for badge
+    useEffect(() => {
+        if (!agreementId) return;
+        listReleases({ agreement_id: agreementId, page_size: 1 }).then(r => {
+            // Use total_count (from the filtered main query) NOT counts.total (global)
+            setReleaseCounts({
+                total: r.total_count ?? 0,
+                open: r.counts.open ?? 0,
+                fulfilled: r.counts.fulfilled ?? 0,
+                cancelled: r.counts.cancelled ?? 0,
+            });
+        }).catch(() => {});
+    }, [agreementId, showCreateRelease]);
 
     const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -165,7 +186,7 @@ export function BPADetail({ agreementId, onClose, onAmended, onCancelled, canAme
                                     top: '6px', bottom: '6px',
                                     left: activeTabRect.left,
                                     width: activeTabRect.width,
-                                    background: '#1e3a8a',
+                                    background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)',
                                     borderRadius: '999px',
                                     transition: 'all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)', // Bouncy spring feel
                                     boxShadow: '0 4px 12px rgba(30,58,138,0.25)'
@@ -175,6 +196,7 @@ export function BPADetail({ agreementId, onClose, onAmended, onCancelled, canAme
                             <TabButton active={tab === 'overview'}    onClick={() => setTab('overview')}    icon={<FileText size={14} />} label="Overview" />
                             <TabButton active={tab === 'parts'}       onClick={() => setTab('parts')}       icon={<List size={14} />}     label="Parts" count={data.parts.length} />
                             <TabButton active={tab === 'fulfillment'} onClick={() => setTab('fulfillment')} icon={<TrendingUp size={14} />} label="Fulfillment" />
+                            <TabButton active={tab === 'releases'}    onClick={() => setTab('releases')}    icon={<Truck size={14} />}   label="Releases" count={releaseCounts.total} />
                             <TabButton active={tab === 'amendments'}  onClick={() => setTab('amendments')}  icon={<History size={14} />} label="Amendments" count={data.revisions.length} />
                         </div>
                     </div>
@@ -188,6 +210,7 @@ export function BPADetail({ agreementId, onClose, onAmended, onCancelled, canAme
                             {tab === 'overview'    && <OverviewTab data={data} />}
                             {tab === 'parts'       && <PartsTab data={data} />}
                             {tab === 'fulfillment' && <FulfillmentTab data={data} />}
+                            {tab === 'releases'    && <ReleasesTab data={data} onNewRelease={() => setShowCreateRelease(true)} />}
                             {tab === 'amendments'  && <AmendmentsTab data={data} />}
                         </div>
                     )}
@@ -211,25 +234,6 @@ export function BPADetail({ agreementId, onClose, onAmended, onCancelled, canAme
                                 <Edit3 size={16} /> Amend BPA
                             </button>
                         )}
-                        {canAmend && (
-                            <button 
-                                onClick={() => setShowCancelConfirm(true)}
-                                style={{ ...actionBtnStyle, color: '#ef4444', background: '#fef2f2' }}
-                                onMouseEnter={(e) => { e.currentTarget.style.background = '#fee2e2'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
-                                onMouseLeave={(e) => { e.currentTarget.style.background = '#fef2f2'; e.currentTarget.style.transform = 'none'; }}
-                            >
-                                <XCircle size={16} /> Cancel BPA
-                            </button>
-                        )}
-                        <button 
-                            onClick={handleActivateBO} disabled={activatingBO}
-                            style={{ ...actionBtnStyle, background: 'linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%)', color: '#fff', boxShadow: '0 4px 12px rgba(30,58,138,0.25)' }}
-                            onMouseEnter={(e) => { if(!activatingBO) e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 6px 16px rgba(30,58,138,0.35)'; }}
-                            onMouseLeave={(e) => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(30,58,138,0.25)'; }}
-                        >
-                            <RefreshCw size={16} className={activatingBO ? "animate-spin" : ""} />
-                            {activatingBO ? 'Activating…' : 'Activate / Refresh BO'}
-                        </button>
                         <label 
                             style={actionBtnStyle}
                             onMouseEnter={(e) => { e.currentTarget.style.background = '#e2e8f0'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
@@ -248,6 +252,16 @@ export function BPADetail({ agreementId, onClose, onAmended, onCancelled, canAme
                             >
                                 <ExternalLink size={16} /> View PDF
                             </a>
+                        )}
+                        {canAmend && (
+                            <button 
+                                onClick={() => setShowCancelConfirm(true)}
+                                style={{ ...actionBtnStyle, color: '#ef4444', background: '#fef2f2' }}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = '#fee2e2'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = '#fef2f2'; e.currentTarget.style.transform = 'none'; }}
+                            >
+                                <XCircle size={16} /> Cancel BPA
+                            </button>
                         )}
                         <div style={{ flex: 1 }} />
                         <button 
@@ -280,6 +294,15 @@ export function BPADetail({ agreementId, onClose, onAmended, onCancelled, canAme
                         await cancelBPA(data.agreement.id, reason);
                         onCancelled?.();
                     }}
+                />
+            )}
+
+            {showCreateRelease && data && (
+                <CreateRelease
+                    prefilledBpa={data.agreement}
+                    prefilledParts={data.parts}
+                    onClose={() => setShowCreateRelease(false)}
+                    onCreated={() => { setShowCreateRelease(false); load(); }}
                 />
             )}
         </>
@@ -465,10 +488,10 @@ function OverviewTab({ data }: { data: BPAGetResponse }) {
 
     return (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px' }}>
-            <Section title="Customer & Buyer" icon={<User size={14} />}>
+            <Section title="Customer Details" icon={<User size={14} />}>
                 <Row label="Customer" value={<><div style={{ fontWeight: 600 }}>{a.customer_name}</div><div style={{ fontSize: '12px', color: 'var(--enterprise-gray-500)' }}>{a.customer_code}</div></>} />
                 <Row label="Buyer" value={a.buyer_name ?? '—'} />
-                <Row label="Email" value={a.buyer_email ? <a href={`mailto:${a.buyer_email}`} style={linkStyle}><Mail size={12} style={{ marginRight: 4, verticalAlign: 'middle' }} />{a.buyer_email}</a> : '—'} />
+                <Row label="Email" value={a.buyer_email ? <a href={`mailto:${a.buyer_email}`} style={linkStyle}>{a.buyer_email}</a> : '—'} />
                 <Row label="Phone" value={a.buyer_phone ?? '—'} />
             </Section>
 
@@ -483,21 +506,11 @@ function OverviewTab({ data }: { data: BPAGetResponse }) {
                 <Row label="Payment Terms" value={a.payment_terms ?? '—'} />
                 <Row label="Incoterms" value={a.incoterms ?? '—'} />
                 <Row label="Currency" value={a.currency_code} />
-                <Row label="Ship Via" value={a.ship_via ? <><Truck size={12} style={{ marginRight: 4, verticalAlign: 'middle' }} />{a.ship_via}</> : '—'} />
+                <Row label="Ship Via" value={a.ship_via ? <>{a.ship_via}</> : '—'} />
                 <Row label="Delivery Location" value={a.delivery_location ?? '—'} />
             </Section>
 
-            <Section title="Totals" icon={<Package size={14} />}>
-                <Row label="Total Parts" value={a.total_parts} />
-                <Row label="Total Blanket Value" value={<span style={{ fontWeight: 700 }}>{fmtMoney(a.total_blanket_value, a.currency_code)}</span>} />
-                <Row label="Agreement Value" value={a.agreement_value != null ? fmtMoney(a.agreement_value, a.currency_code) : '—'} />
-                <Row label="BPA Revision" value={
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', background: '#eef2ff', color: '#4338ca', borderRadius: '4px', fontSize: '12px', fontWeight: 600 }}>
-                        <History size={11} /> Rev {a.agreement_revision}
-                    </span>
-                } />
-                <Row label="Source" value={<span style={{ textTransform: 'uppercase', fontSize: '11px', fontWeight: 600, color: 'var(--enterprise-gray-600)' }}>{a.source}</span>} />
-            </Section>
+
         </div>
     );
 }
@@ -554,15 +567,14 @@ function PartsTab({ data }: { data: BPAGetResponse }) {
 
             <div style={{ overflowX: 'auto', background: '#fff', borderRadius: '16px', boxShadow: '0 4px 20px -10px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.04)' }}>
                 {/* Parts Grid Header */}
-                <div style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr)', gap: 8, padding: '16px 12px', background: '#fafafa', fontSize: 11, fontWeight: 800, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr)', gap: 8, padding: '16px 12px', background: '#fafafa', fontSize: 11, fontWeight: 800, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
                     <div style={{ textAlign: 'center' }}>#</div>
                     <div style={{ textAlign: 'center' }}>MSN</div>
                     <div style={{ textAlign: 'center' }}>Part #</div>
-                    <div style={{ textAlign: 'center' }}>Drawing</div>
                     <div style={{ textAlign: 'center' }} title="Customer-supplied drawing/spec revision">Draw Rev</div>
                     <div style={{ textAlign: 'center' }}>Blanket Qty</div>
-                    <div style={{ textAlign: 'center' }}>Unit Price</div>
-                    <div style={{ textAlign: 'center' }}>Total</div>
+                    <div style={{ textAlign: 'center' }}>Unit Price ({a.currency_code})</div>
+                    <div style={{ textAlign: 'center' }}>Total Price ({a.currency_code})</div>
                     <div style={{ textAlign: 'center' }} title="Release multiple">Rel Mult</div>
                     <div style={{ textAlign: 'center' }} title="Min / Max warehouse stock">Min / Max</div>
                     <div style={{ textAlign: 'center' }} title="Avg monthly demand">Avg/Mo</div>
@@ -574,7 +586,7 @@ function PartsTab({ data }: { data: BPAGetResponse }) {
                     const pct = f?.fulfillment_pct ?? 0;
                     const barColor = pct >= 80 ? '#16a34a' : pct >= 40 ? '#f59e0b' : '#3b82f6';
                     return (
-                        <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr)', gap: 8, padding: '12px', background: idx % 2 === 0 ? '#fff' : '#f8fafc', borderBottom: '1px solid rgba(0,0,0,0.03)', alignItems: 'center', transition: 'background .2s', cursor: 'default' }} onMouseEnter={(e) => e.currentTarget.style.background = '#f1f5f9'} onMouseLeave={(e) => e.currentTarget.style.background = idx % 2 === 0 ? '#fff' : '#f8fafc'}>
+                        <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '40px minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr)', gap: 8, padding: '12px', background: idx % 2 === 0 ? '#fff' : '#f8fafc', borderBottom: '1px solid rgba(0,0,0,0.03)', alignItems: 'center', transition: 'background .2s', cursor: 'default' }} onMouseEnter={(e) => e.currentTarget.style.background = '#f1f5f9'} onMouseLeave={(e) => e.currentTarget.style.background = idx % 2 === 0 ? '#fff' : '#f8fafc'}>
                             <div style={{ textAlign: 'center', fontSize: 13, color: '#94a3b8', fontWeight: 600 }}>{p.line_number}</div>
                             <div style={{ textAlign: 'center', fontSize: 14, fontWeight: 700, color: '#0f172a' }}>
                                 {p.msn_code}
@@ -586,7 +598,6 @@ function PartsTab({ data }: { data: BPAGetResponse }) {
                                 )}
                             </div>
                             <div style={{ textAlign: 'center', fontSize: 14, color: '#475569', fontWeight: 500 }}>{p.part_number}</div>
-                            <div style={{ textAlign: 'center', fontSize: 13, color: '#64748b' }}>{p.drawing_number}</div>
                             <div style={{ textAlign: 'center' }}>
                                 {p.drawing_revision ? (
                                     <span style={{ padding: '4px 10px', background: '#f1f5f9', color: '#475569', borderRadius: '6px', fontSize: '12px', fontWeight: 700, fontFamily: 'monospace' }}>
@@ -595,20 +606,17 @@ function PartsTab({ data }: { data: BPAGetResponse }) {
                                 ) : '—'}
                             </div>
                             <div style={{ textAlign: 'center', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#0f172a' }}>{p.blanket_quantity != null ? Number(p.blanket_quantity).toLocaleString() : '—'}</div>
-                            <div style={{ textAlign: 'center', fontSize: 14, fontFamily: 'monospace', color: '#475569' }}>{p.unit_price != null ? Number(p.unit_price).toFixed(2) : '—'}</div>
-                            <div style={{ textAlign: 'center', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#0f172a' }}>{p.total_value != null ? fmtMoney(p.total_value, a.currency_code) : '—'}</div>
+                            <div style={{ textAlign: 'center', fontSize: 14, fontFamily: 'monospace', color: '#475569' }}>{p.unit_price != null ? '$' + Number(p.unit_price).toFixed(2) : '—'}</div>
+                            <div style={{ textAlign: 'center', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#0f172a' }}>{p.total_value != null ? '$' + Number(p.total_value).toLocaleString() : '—'}</div>
                             <div style={{ textAlign: 'center', fontSize: 14, fontFamily: 'monospace', color: '#475569' }}>{p.release_multiple ?? '—'}</div>
                             <div style={{ textAlign: 'center', fontSize: 14, fontFamily: 'monospace', color: '#475569' }}>{Number(p.min_warehouse_stock ?? 0).toLocaleString()} / {Number(p.max_warehouse_stock ?? 0).toLocaleString()}</div>
                             <div style={{ textAlign: 'center', fontSize: 14, fontFamily: 'monospace', color: '#475569' }}>{p.avg_monthly_demand != null ? Number(p.avg_monthly_demand).toFixed(0) : '—'}</div>
                             <div style={{ textAlign: 'center' }}>
                                 {f ? (
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                                        <span style={{ fontSize: '12px', fontWeight: 800, minWidth: '36px', textAlign: 'right', color: pct === 100 ? '#16a34a' : '#475569' }}>{pct.toFixed(0)}%</span>
-                                        <div style={{ width: 80, height: '6px', background: '#f1f5f9', borderRadius: '3px', overflow: 'hidden' }}>
-                                            <div style={{ width: `${Math.min(100, pct)}%`, height: '100%', background: barColor, borderRadius: '3px' }} />
-                                        </div>
-                                    </div>
-                                ) : <span style={{ color: '#cbd5e1' }}>—</span>}
+                                    <span style={{ fontSize: '13px', fontWeight: 800, color: pct === 100 ? '#16a34a' : '#475569' }}>{pct.toFixed(0)}%</span>
+                                ) : (
+                                    <span style={{ color: '#cbd5e1' }}>—</span>
+                                )}
                             </div>
                         </div>
                     );
@@ -634,14 +642,14 @@ function FulfillmentTab({ data }: { data: BPAGetResponse }) {
     return (
         <div style={{ overflowX: 'auto', background: '#fff', borderRadius: '16px', boxShadow: '0 4px 20px -10px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.04)' }}>
             {/* Fulfillment Header */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.5fr)', gap: 8, padding: '16px 12px', background: '#fafafa', fontSize: 11, fontWeight: 800, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)', gap: 8, padding: '16px 12px', background: '#fafafa', fontSize: 11, fontWeight: 800, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
+                <div style={{ textAlign: 'center' }}>Shipped</div>
+                <div style={{ textAlign: 'center' }}>Released</div>
+                <div style={{ textAlign: 'center' }}>Delivered</div>
+                <div style={{ textAlign: 'center' }}>Pending</div>
                 <div style={{ textAlign: 'center' }}>MSN</div>
                 <div style={{ textAlign: 'center' }}>Part #</div>
                 <div style={{ textAlign: 'center' }}>Blanket</div>
-                <div style={{ textAlign: 'center' }}>Released</div>
-                <div style={{ textAlign: 'center' }}>Shipped</div>
-                <div style={{ textAlign: 'center' }}>Delivered</div>
-                <div style={{ textAlign: 'center' }}>Pending</div>
                 <div style={{ textAlign: 'center' }}>In Rack</div>
                 <div style={{ textAlign: 'center' }}>Fulfillment</div>
             </div>
@@ -652,24 +660,19 @@ function FulfillmentTab({ data }: { data: BPAGetResponse }) {
                 const pending = Number(f.pending_quantity ?? 0);
                 const done = pct === 100;
                 return (
-                    <div key={`${f.agreement_id}-${f.part_number}`} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.5fr)', gap: 8, padding: '12px', background: idx % 2 === 0 ? '#fff' : '#f8fafc', borderBottom: '1px solid rgba(0,0,0,0.03)', alignItems: 'center', transition: 'background .2s', cursor: 'default' }} onMouseEnter={(e) => e.currentTarget.style.background = '#f1f5f9'} onMouseLeave={(e) => e.currentTarget.style.background = idx % 2 === 0 ? '#fff' : '#f8fafc'}>
+                    <div key={`${f.agreement_id}-${f.part_number}`} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)', gap: 8, padding: '12px', background: idx % 2 === 0 ? '#fff' : '#f8fafc', borderBottom: '1px solid rgba(0,0,0,0.03)', alignItems: 'center', transition: 'background .2s', cursor: 'default' }} onMouseEnter={(e) => e.currentTarget.style.background = '#f1f5f9'} onMouseLeave={(e) => e.currentTarget.style.background = idx % 2 === 0 ? '#fff' : '#f8fafc'}>
+                        <div style={{ textAlign: 'center', fontSize: 14, fontWeight: 600, fontFamily: 'monospace', color: '#64748b' }}>{Number(f.shipped_quantity ?? 0).toLocaleString()}</div>
+                        <div style={{ textAlign: 'center', fontSize: 14, fontWeight: 600, fontFamily: 'monospace', color: '#64748b' }}>{Number(f.released_quantity ?? 0).toLocaleString()}</div>
+                        <div style={{ textAlign: 'center', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#16a34a' }}>{Number(f.delivered_quantity ?? 0).toLocaleString()}</div>
+                        <div style={{ textAlign: 'center', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: pending > 0 ? '#f59e0b' : '#94a3b8' }}>{pending.toLocaleString()}</div>
                         <div style={{ textAlign: 'center', fontSize: 14, fontWeight: 700, color: '#0f172a' }}>{f.msn_code}</div>
                         <div style={{ textAlign: 'center', fontSize: 14, color: '#475569', fontWeight: 500 }}>{f.part_number}</div>
                         <div style={{ textAlign: 'center', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#0f172a' }}>{Number(f.blanket_quantity ?? 0).toLocaleString()}</div>
-                        <div style={{ textAlign: 'center', fontSize: 14, fontWeight: 600, fontFamily: 'monospace', color: '#64748b' }}>{Number(f.released_quantity ?? 0).toLocaleString()}</div>
-                        <div style={{ textAlign: 'center', fontSize: 14, fontWeight: 600, fontFamily: 'monospace', color: '#64748b' }}>{Number(f.shipped_quantity ?? 0).toLocaleString()}</div>
-                        <div style={{ textAlign: 'center', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#16a34a' }}>{Number(f.delivered_quantity ?? 0).toLocaleString()}</div>
-                        <div style={{ textAlign: 'center', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: pending > 0 ? '#f59e0b' : '#94a3b8' }}>{pending.toLocaleString()}</div>
                         <div style={{ textAlign: 'center', fontSize: 14, fontFamily: 'monospace', color: '#475569', fontWeight: 600 }}>
                             {Number(f.pallets_in_rack ?? 0)} <span style={{ color: '#94a3b8', fontSize: '12px', fontWeight: 500 }}>({Number(f.qty_in_rack ?? 0).toLocaleString()})</span>
                         </div>
                         <div style={{ textAlign: 'center' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                                <span style={{ fontSize: '12px', fontWeight: 800, minWidth: '36px', textAlign: 'right', color: done ? '#16a34a' : '#475569' }}>{pct.toFixed(0)}%</span>
-                                <div style={{ width: 80, height: '6px', background: '#f1f5f9', borderRadius: '3px', overflow: 'hidden' }}>
-                                    <div style={{ width: `${Math.min(100, pct)}%`, height: '100%', background: barColor, borderRadius: '3px' }} />
-                                </div>
-                            </div>
+                            <span style={{ fontSize: '13px', fontWeight: 800, color: done ? '#16a34a' : '#475569' }}>{pct.toFixed(0)}%</span>
                         </div>
                     </div>
                 );
@@ -698,10 +701,11 @@ function AmendmentsTab({ data }: { data: BPAGetResponse }) {
     return (
         <div>
             <div style={{
-                marginBottom: '16px', padding: '10px 14px', background: '#fef9c3', borderRadius: '6px',
-                fontSize: '12px', color: '#854d0e', display: 'flex', alignItems: 'center', gap: '8px',
+                marginBottom: '16px', padding: '12px 16px', background: 'linear-gradient(135deg, #fef9c3 0%, #fef08a 100%)', borderRadius: '8px',
+                fontSize: '12px', color: '#854d0e', display: 'flex', alignItems: 'center', gap: '10px',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.02)', border: '1px solid #fde047'
             }}>
-                <History size={14} />
+                <History size={16} />
                 <span>These are <strong>BPA revisions</strong> (agreement-level amendments). Per-part <strong>drawing revisions</strong> are shown on the Parts tab.</span>
             </div>
 
@@ -731,8 +735,8 @@ function AmendmentsTab({ data }: { data: BPAGetResponse }) {
                                             <span style={{ fontSize: '13px', fontWeight: 700, color: '#1f2937' }}>
                                                 BPA Amendment
                                             </span>
-                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', background: '#fef3c7', color: '#92400e', borderRadius: '4px', fontSize: '11px', fontWeight: 700 }}>
-                                                Rev {r.revision_from} <ChevronRight size={11} /> Rev {r.revision_to}
+                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 10px', background: 'linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%)', color: '#fff', borderRadius: '6px', fontSize: '11px', fontWeight: 800, boxShadow: '0 2px 6px rgba(59,130,246,0.25)' }}>
+                                                Rev {r.revision_from} <ChevronRight size={11} strokeWidth={3} /> Rev {r.revision_to}
                                             </span>
                                         </div>
                                         <p style={{ fontSize: '11px', color: 'var(--enterprise-gray-500)', margin: '3px 0 0' }}>
@@ -760,17 +764,47 @@ function AmendmentsTab({ data }: { data: BPAGetResponse }) {
                                         <summary style={{ cursor: 'pointer', fontSize: '12px', color: 'var(--enterprise-primary)', fontWeight: 600, padding: '4px 0' }}>
                                             View change details
                                         </summary>
-                                        <div style={{ marginTop: '8px', display: 'grid', gap: '10px' }}>
+                                        <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                             {headerChanges ? (
-                                                <div>
-                                                    <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--enterprise-gray-600)', marginBottom: '4px' }}>Header changes</div>
-                                                    <pre style={preStyle}>{JSON.stringify(r.agreement_changes, null, 2)}</pre>
+                                                <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px' }}>
+                                                    <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', color: '#475569', marginBottom: '8px', letterSpacing: '0.05em' }}>Header changes</div>
+                                                    <div style={{ display: 'grid', gap: '8px' }}>
+                                                        {Object.entries(r.agreement_changes as Record<string, unknown>).map(([k, v]) => (
+                                                            <div key={k} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+                                                                <span style={{ fontWeight: 600, color: '#64748b', textTransform: 'uppercase', fontSize: '11px', width: '140px' }}>{k.replace(/_/g, ' ')}</span>
+                                                                <span style={{ color: '#0f172a', fontWeight: 500 }}>
+                                                                    {typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)}
+                                                                </span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
                                                 </div>
                                             ) : null}
                                             {partChanges ? (
-                                                <div>
-                                                    <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--enterprise-gray-600)', marginBottom: '4px' }}>Part changes</div>
-                                                    <pre style={preStyle}>{JSON.stringify(r.part_changes, null, 2)}</pre>
+                                                <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px' }}>
+                                                    <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', color: '#475569', marginBottom: '8px', letterSpacing: '0.05em' }}>Part changes</div>
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                        {(r.part_changes as Array<any>).map((pc, idx) => {
+                                                            // Handle { new: {...}, old: {...} } format or flat format
+                                                            const data = pc.new || pc;
+                                                            const partNum = data.part_number || `Item ${idx + 1}`;
+                                                            return (
+                                                                <div key={idx} style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '10px' }}>
+                                                                    <div style={{ fontSize: '12px', fontWeight: 700, color: '#1e3a8a', marginBottom: '6px' }}>Part {partNum}</div>
+                                                                    <div style={{ display: 'grid', gap: '6px' }}>
+                                                                        {Object.entries(data).filter(([k]) => k !== 'part_number').map(([k, v]) => (
+                                                                            <div key={k} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
+                                                                                <span style={{ fontWeight: 600, color: '#64748b', textTransform: 'uppercase', fontSize: '10px', width: '140px' }}>{k.replace(/_/g, ' ')}</span>
+                                                                                <span style={{ color: '#0f172a', fontWeight: 500, background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px' }}>
+                                                                                    {typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)}
+                                                                                </span>
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
                                                 </div>
                                             ) : null}
                                         </div>
@@ -843,7 +877,7 @@ const td: React.CSSProperties = {
 const actionBtnStyle: React.CSSProperties = {
     display: 'inline-flex', alignItems: 'center', gap: '8px',
     padding: '10px 20px', height: '42px',
-    border: 'none', borderRadius: '999px',
+    border: 'none', borderRadius: '8px',
     cursor: 'pointer', fontSize: '14px', fontWeight: 600,
     background: '#f1f5f9', color: '#334155',
     transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
@@ -957,6 +991,167 @@ function CancelConfirmModal({ agreement, onClose, onConfirm }: { agreement: any,
                     </button>
                 </div>
             </div>
+        </div>
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Releases Tab — embedded release list scoped to this BPA
+// ──────────────────────────────────────────────────────────────────────
+
+function ReleasesTab({ data, onNewRelease }: { data: BPAGetResponse; onNewRelease: () => void }) {
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [rows, setRows] = useState<BlanketRelease[]>([]);
+
+    const fetchReleases = useCallback(async () => {
+        setLoading(true); setError(null);
+        try {
+            const r = await listReleases({ agreement_id: data.agreement.id, status_filter: 'ALL', page_size: 200 });
+            setRows(r.releases);
+        } catch (e: any) {
+            setError(e?.message ?? 'Failed to load releases');
+        } finally {
+            setLoading(false);
+        }
+    }, [data.agreement.id]);
+
+    useEffect(() => { fetchReleases(); }, [fetchReleases]);
+
+    if (loading && rows.length === 0) {
+        return <div style={{ padding: 60, textAlign: 'center' }}><LoadingSpinner size={28} /><p style={{ marginTop: 12, fontSize: 13, color: '#64748b' }}>Loading releases…</p></div>;
+    }
+
+    return (
+        <div>
+            {/* Action Bar */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 16, gap: 8 }}>
+                <button onClick={fetchReleases} style={{ padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 600, border: '1px solid #e2e8f0', background: '#fff', color: '#475569', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <RefreshCw size={13} style={loading ? { animation: 'spin 1s linear infinite' } : {}} /> Refresh
+                </button>
+                <button onClick={onNewRelease}
+                    style={{ padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 700, border: 'none', background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 8px rgba(30,58,138,0.25)' }}
+                >
+                    <Plus size={14} /> New Release
+                </button>
+            </div>
+
+            {error && <div style={{ padding: 12, background: '#fef2f2', borderLeft: '3px solid #dc2626', borderRadius: 8, color: '#991b1b', fontSize: 13, marginBottom: 14 }}>{error}</div>}
+
+            {rows.length === 0 ? (
+                <div style={{ padding: 60, textAlign: 'center', border: '1px dashed #cbd5e1', borderRadius: 12, background: '#fafbfc' }}>
+                    <Truck size={32} style={{ color: '#94a3b8', marginBottom: 8 }} />
+                    <p style={{ color: '#64748b', fontSize: 14, fontWeight: 500, margin: 0 }}>No releases yet for this BPA.</p>
+                    <p style={{ color: '#94a3b8', fontSize: 12, marginTop: 4 }}>Click "New Release" to create one.</p>
+                </div>
+            ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {rows.map(r => <EmbeddedReleaseCard key={r.id} release={r} />)}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function EmbeddedReleaseCard({ release: r }: { release: BlanketRelease }) {
+    const [expanded, setExpanded] = useState(false);
+    const fulfilled = r.status === 'FULFILLED';
+    const cancelled = r.status === 'CANCELLED';
+    const accent = fulfilled ? '#16a34a' : cancelled ? '#6b7280' : '#2563eb';
+    const statusLabel = fulfilled ? 'Completed' : cancelled ? 'Cancelled' : 'Drafted';
+    const statusBg = fulfilled ? '#dcfce7' : cancelled ? '#f3f4f6' : '#dbeafe';
+
+    return (
+        <div style={{
+            border: expanded ? `1.5px solid ${accent}` : '1px solid #e2e8f0',
+            borderRadius: 12, overflow: 'hidden', background: '#fff',
+            boxShadow: expanded ? '0 6px 18px rgba(30,58,138,0.08)' : '0 1px 2px rgba(0,0,0,0.03)',
+            transition: 'all 0.2s cubic-bezier(0.4,0,0.2,1)',
+            opacity: cancelled ? 0.75 : 1,
+        }}>
+            <div onClick={() => setExpanded(v => !v)} style={{ display: 'flex', cursor: 'pointer', transition: 'background 0.2s ease', background: expanded ? 'linear-gradient(135deg, rgba(30,58,138,0.02) 0%, rgba(30,58,138,0.06) 100%)' : '#fff' }}>
+                {/* Chevron strip */}
+                <div style={{ width: 36, minWidth: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRight: '1px solid #f1f5f9', background: expanded ? accent : '#f8fafc', transition: 'all 0.2s ease' }}>
+                    <ChevronRight size={15} style={{ color: expanded ? '#fff' : '#94a3b8', transform: expanded ? 'rotate(90deg)' : 'rotate(0)', transition: 'transform 0.25s ease' }} />
+                </div>
+
+                {/* Content */}
+                <div style={{ flex: 1, padding: '12px 16px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 0.8fr 0.6fr', gap: 14, marginBottom: 8 }}>
+                        <div>
+                            <div style={{ fontSize: 10, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 3 }}>Release #</div>
+                            <div style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 13, color: accent }}>{r.release_number}</div>
+                        </div>
+                        <div>
+                            <div style={{ fontSize: 10, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 3 }}>Part</div>
+                            <div style={{ fontFamily: 'monospace', fontWeight: 600, fontSize: 13, color: '#1e40af' }}>{r.part_number ?? '—'}
+                                {r.msn_code && <span style={{ color: '#64748b', fontSize: 11, marginLeft: 4 }}>({r.msn_code})</span>}
+                            </div>
+                        </div>
+                        <div>
+                            <div style={{ fontSize: 10, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 3 }}>Buyer</div>
+                            <div style={{ fontSize: 13, color: '#334155' }}>{r.buyer_name ?? '—'}</div>
+                        </div>
+                        <div>
+                            <div style={{ fontSize: 10, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 3 }}>Qty</div>
+                            <div style={{ fontWeight: 700, fontSize: 13, color: '#16a34a' }}>{Number(r.requested_quantity).toLocaleString()}</div>
+                        </div>
+                        <div>
+                            <div style={{ fontSize: 10, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 3 }}>Status</div>
+                            <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700, background: statusBg, color: accent }}>{statusLabel}</span>
+                        </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 20, fontSize: 11, color: '#94a3b8' }}>
+                        <span>PO: <span style={{ color: '#475569', fontFamily: 'monospace' }}>{r.customer_po_base ?? '—'}</span></span>
+                        <span>Need By: <span style={{ color: '#475569' }}>{r.need_by_date ? fmtDate(r.need_by_date) : '—'}</span></span>
+                        <span>Created: <span style={{ color: '#475569' }}>{fmtDate(r.created_at)}</span></span>
+                        {r.sub_invoice_number && <span>Sub-Inv: <span style={{ color: '#1e40af', fontFamily: 'monospace' }}>{r.sub_invoice_number}</span></span>}
+                    </div>
+                </div>
+            </div>
+
+            {expanded && (
+                <div style={{ background: 'linear-gradient(180deg, rgba(30,58,138,0.02) 0%, rgba(30,58,138,0.01) 100%)', borderTop: '1px solid #e2e8f0', padding: '14px 52px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14 }}>
+                        <ReleaseDetailCard label="Release Sequence" value={r.release_sequence != null ? String(r.release_sequence) : '—'} />
+                        <ReleaseDetailCard label="Sub-Invoice #" value={r.sub_invoice_number ?? '—'} mono />
+                        <ReleaseDetailCard label="Pallets" value={r.sub_invoice_pallets != null ? String(r.sub_invoice_pallets) : '—'} />
+                    </div>
+                    {r.sub_invoice_lines && r.sub_invoice_lines.length > 0 && (
+                        <div>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: 8 }}>
+                                Released Against {r.sub_invoice_lines.length === 1 ? 'Parent Invoice' : `${r.sub_invoice_lines.length} Parent Invoices`}
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                                {r.sub_invoice_lines.map((l, i) => (
+                                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr 1fr', gap: 10, alignItems: 'center', padding: '8px 12px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+                                        <div><div style={{ fontSize: 10, color: '#94a3b8', marginBottom: 2 }}>PARENT INVOICE</div><span style={{ fontFamily: 'monospace', fontWeight: 600, fontSize: 12 }}>{l.parent_invoice_number ?? '—'}</span></div>
+                                        <div><div style={{ fontSize: 10, color: '#94a3b8', marginBottom: 2 }}>PART</div><span style={{ fontFamily: 'monospace', fontWeight: 600, fontSize: 12, color: '#1e40af' }}>{l.part_number}</span></div>
+                                        <div><div style={{ fontSize: 10, color: '#94a3b8', marginBottom: 2 }}>QTY</div><span style={{ fontWeight: 700, fontSize: 12, color: '#16a34a' }}>{Number(l.quantity).toLocaleString()}</span></div>
+                                        <div><div style={{ fontSize: 10, color: '#94a3b8', marginBottom: 2 }}>PALLETS</div><span style={{ fontWeight: 600, fontSize: 12 }}>{l.pallet_count}</span></div>
+                                        <div><div style={{ fontSize: 10, color: '#94a3b8', marginBottom: 2 }}>UNIT PRICE</div><span style={{ fontSize: 12, color: '#475569' }}>${Number(l.unit_price ?? 0).toFixed(4)}</span></div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    {r.notes && (
+                        <div style={{ marginTop: 12, padding: '10px 12px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+                            <div style={{ fontSize: 10, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>Notes</div>
+                            <p style={{ fontSize: 13, color: '#334155', lineHeight: 1.5, margin: 0 }}>{r.notes}</p>
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function ReleaseDetailCard({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+    return (
+        <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 12px' }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 3 }}>{label}</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#1e293b', fontFamily: mono ? 'monospace' : 'inherit' }}>{value}</div>
         </div>
     );
 }

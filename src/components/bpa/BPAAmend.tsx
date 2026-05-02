@@ -43,6 +43,7 @@ export function BPAAmend({ agreement, parts, onClose, onAmended }: Props) {
             max_warehouse_stock: p.max_warehouse_stock,
             avg_monthly_demand:  p.avg_monthly_demand,
             drawing_revision:    p.drawing_revision ?? '',
+            is_active:           p.is_active ?? true,
         })),
     );
 
@@ -76,6 +77,7 @@ export function BPAAmend({ agreement, parts, onClose, onAmended }: Props) {
             if (Number(ep.max_warehouse_stock) !== Number(orig.max_warehouse_stock)) { d.max_warehouse_stock = ep.max_warehouse_stock; changed = true; }
             if (Number(ep.avg_monthly_demand) !== Number(orig.avg_monthly_demand)) { d.avg_monthly_demand = ep.avg_monthly_demand; changed = true; }
             if (ep.drawing_revision !== (orig.drawing_revision ?? '')) { d.drawing_revision = ep.drawing_revision; changed = true; }
+            if (ep.is_active !== (orig.is_active ?? true)) { d.is_active = ep.is_active; changed = true; }
             if (changed) partDiffs.push(d);
         });
 
@@ -117,14 +119,14 @@ export function BPAAmend({ agreement, parts, onClose, onAmended }: Props) {
                         </div>
                         <h2 style={{ fontSize: '24px', fontWeight: 800, margin: 0, color: '#0f172a', letterSpacing: '-0.02em', display: 'flex', alignItems: 'center', gap: '12px' }}>
                             {agreement.agreement_number}
-                            <span style={{ fontSize: '13px', padding: '4px 10px', background: '#e0e7ff', color: '#3730a3', borderRadius: '999px', fontWeight: 600, letterSpacing: '0' }}>
+                            <span style={{ fontSize: '13px', padding: '4px 10px', background: '#e0e7ff', color: '#3730a3', borderRadius: '8px', fontWeight: 600, letterSpacing: '0' }}>
                                 Rev {agreement.agreement_revision} → {agreement.agreement_revision + 1}
                             </span>
                         </h2>
                     </div>
                     <button 
                         onClick={onClose} 
-                        style={{ width: '36px', height: '36px', borderRadius: '50%', background: '#f1f5f9', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', cursor: 'pointer', transition: 'all 0.2s' }}
+                        style={{ width: '36px', height: '36px', borderRadius: '8px', background: '#f1f5f9', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', cursor: 'pointer', transition: 'all 0.2s' }}
                         onMouseEnter={e => { e.currentTarget.style.background = '#e2e8f0'; e.currentTarget.style.color = '#0f172a'; }}
                         onMouseLeave={e => { e.currentTarget.style.background = '#f1f5f9'; e.currentTarget.style.color = '#64748b'; }}
                     >
@@ -166,17 +168,24 @@ export function BPAAmend({ agreement, parts, onClose, onAmended }: Props) {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             {editedParts.map((p, i) => {
                                 const orig = parts[i];
-                                const isChanged = Number(p.unit_price) !== Number(orig.unit_price) || Number(p.blanket_quantity) !== Number(orig.blanket_quantity) || Number(p.release_multiple) !== Number(orig.release_multiple) || p.drawing_revision !== orig.drawing_revision || Number(p.min_warehouse_stock) !== Number(orig.min_warehouse_stock) || Number(p.max_warehouse_stock) !== Number(orig.max_warehouse_stock) || Number(p.avg_monthly_demand) !== Number(orig.avg_monthly_demand);
+                                const isChanged = Number(p.unit_price) !== Number(orig.unit_price) || Number(p.blanket_quantity) !== Number(orig.blanket_quantity) || Number(p.release_multiple) !== Number(orig.release_multiple) || p.drawing_revision !== orig.drawing_revision || Number(p.min_warehouse_stock) !== Number(orig.min_warehouse_stock) || Number(p.max_warehouse_stock) !== Number(orig.max_warehouse_stock) || Number(p.avg_monthly_demand) !== Number(orig.avg_monthly_demand) || p.is_active !== (orig.is_active ?? true);
                                 
                                 return (
-                                    <div key={orig.id} style={{ background: isChanged ? '#fef3c7' : '#fff', padding: '24px', borderRadius: '12px', border: `1px solid ${isChanged ? '#fde68a' : '#e2e8f0'}`, boxShadow: '0 4px 6px -1px rgba(0,0,0,0.02)', transition: 'all 0.2s ease' }}>
+                                    <div key={orig.id} style={{ background: !p.is_active ? '#f1f5f9' : isChanged ? '#fef3c7' : '#fff', padding: '24px', borderRadius: '12px', border: `1px solid ${!p.is_active ? '#cbd5e1' : isChanged ? '#fde68a' : '#e2e8f0'}`, boxShadow: '0 4px 6px -1px rgba(0,0,0,0.02)', transition: 'all 0.2s ease', opacity: !p.is_active ? 0.75 : 1 }}>
                                         <div style={{ fontSize: '14px', fontWeight: 700, color: '#0f172a', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
                                             <span style={{ padding: '4px 8px', background: '#e2e8f0', borderRadius: '6px', fontSize: '12px', color: '#475569' }}>{orig.msn_code}</span>
-                                            <span>Part {orig.part_number}</span>
+                                            <span style={{ textDecoration: !p.is_active ? 'line-through' : 'none' }}>Part {orig.part_number}</span>
                                             <span style={{ color: '#94a3b8', fontWeight: 400 }}>|</span>
-                                            <span style={{ color: '#64748b', fontWeight: 500 }}>Drawing Rev {orig.drawing_revision ?? '—'}</span>
+                                            <span style={{ color: '#64748b', fontWeight: 500, textDecoration: !p.is_active ? 'line-through' : 'none' }}>Drawing Rev {orig.drawing_revision ?? '—'}</span>
+                                            <div style={{ flex: 1 }} />
+                                            <button 
+                                                onClick={() => updatePart(i, 'is_active', !p.is_active)}
+                                                style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, border: 'none', cursor: 'pointer', background: p.is_active ? '#fee2e2' : '#dcfce7', color: p.is_active ? '#991b1b' : '#166534', transition: 'all 0.2s' }}
+                                            >
+                                                {p.is_active ? 'Cancel Part' : 'Restore Part'}
+                                            </button>
                                         </div>
-                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', pointerEvents: !p.is_active ? 'none' : 'auto' }}>
                                             <div><Label style={{ color: '#334155', fontWeight: 600, marginBottom: '6px', display: 'block', fontSize: '12px' }}>Unit Price <span style={{ color: '#94a3b8', fontWeight: 400 }}>(was {orig.unit_price})</span></Label>
                                                 <Input type="number" step="0.01" value={p.unit_price} onChange={(e) => updatePart(i, 'unit_price', Number(e.target.value))} style={{ borderRadius: '8px', border: '1px solid #cbd5e1' }} />
                                             </div>
@@ -227,7 +236,7 @@ export function BPAAmend({ agreement, parts, onClose, onAmended }: Props) {
                     <div style={{ display: 'flex', gap: '12px' }}>
                         <button 
                             onClick={onClose} disabled={submitting}
-                            style={{ padding: '10px 24px', height: '42px', borderRadius: '999px', background: '#f1f5f9', color: '#334155', fontWeight: 600, fontSize: '14px', border: 'none', cursor: submitting ? 'not-allowed' : 'pointer', transition: 'all 0.2s', opacity: submitting ? 0.7 : 1 }}
+                            style={{ padding: '10px 24px', height: '42px', borderRadius: '8px', background: '#f1f5f9', color: '#334155', fontWeight: 600, fontSize: '14px', border: 'none', cursor: submitting ? 'not-allowed' : 'pointer', transition: 'all 0.2s', opacity: submitting ? 0.7 : 1 }}
                             onMouseEnter={e => { if(!submitting) { e.currentTarget.style.background = '#e2e8f0'; e.currentTarget.style.transform = 'translateY(-1px)'; } }}
                             onMouseLeave={e => { if(!submitting) { e.currentTarget.style.background = '#f1f5f9'; e.currentTarget.style.transform = 'none'; } }}
                         >
@@ -236,7 +245,7 @@ export function BPAAmend({ agreement, parts, onClose, onAmended }: Props) {
                         <button 
                             onClick={submit} disabled={submitting || !hasChanges || !reason.trim()}
                             style={{ 
-                                padding: '10px 24px', height: '42px', borderRadius: '999px', 
+                                padding: '10px 24px', height: '42px', borderRadius: '8px', 
                                 background: (hasChanges && reason.trim()) ? 'linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%)' : '#94a3b8', 
                                 color: '#fff', fontWeight: 600, fontSize: '14px', border: 'none', 
                                 cursor: (submitting || !hasChanges || !reason.trim()) ? 'not-allowed' : 'pointer', 

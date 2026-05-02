@@ -31,7 +31,12 @@ import type { AvailablePallet } from './types';
 
 interface Props {
     onClose:   () => void;
-    onCreated: (result: { release_id: string; release_number: string; sub_invoice_number: string }) => void;
+    onCreated: (result: { release_id: string; release_number: string; sub_invoice_number: string } | any) => void;
+    /** When provided, auto-populates the BPA and skips Step 1 */
+    prefilledBpa?:   CustomerAgreement;
+    prefilledParts?: CustomerAgreementPart[];
+    /** When provided, shows these BPAs as clickable options in Step 1 */
+    candidateBpas?: { agreement_id: string; agreement_number: string; customer_name: string; blanket_quantity: number; status: string }[];
 }
 
 type Step = 1 | 2 | 3 | 4 | 5;
@@ -60,14 +65,16 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 // Main
 // ============================================================================
 
-export function CreateRelease({ onClose, onCreated }: Props) {
-    const [step, setStep] = useState<Step>(1);
+export function CreateRelease({ onClose, onCreated, prefilledBpa, prefilledParts, candidateBpas }: Props) {
+    const isPrefilled = !!prefilledBpa;
+    const minStep: Step = isPrefilled ? 2 : 1;
+    const [step, setStep] = useState<Step>(minStep);
     const [submitting, setSubmitting] = useState(false);
     const [submitError, setSubmitError] = useState<string | null>(null);
 
     const [state, setState] = useState<WizardState>({
-        bpa: null,
-        parts: [],
+        bpa: prefilledBpa ?? null,
+        parts: prefilledParts ?? [],
         releasePo: '',
         revision: 0,
         orderDate: todayISO(),
@@ -94,7 +101,7 @@ export function CreateRelease({ onClose, onCreated }: Props) {
     }, [step, state]);
 
     const goNext = () => step < 5 && canGoNext && setStep((step + 1) as Step);
-    const goBack = () => step > 1 && setStep((step - 1) as Step);
+    const goBack = () => step > minStep && setStep((step - 1) as Step);
 
     const handleSubmit = async (pallets: AvailablePallet[]) => {
         if (!state.bpa) return;
@@ -166,12 +173,12 @@ export function CreateRelease({ onClose, onCreated }: Props) {
     return (
         <div style={backdropStyle} onClick={onClose}>
             <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
-                <Header step={step} onClose={onClose} />
+                <Header step={step} onClose={onClose} isPrefilled={isPrefilled} />
 
                 <div style={{ flex: 1, overflow: 'auto', display: 'flex' }}>
-                    <Stepper step={step} />
+                    <Stepper step={step} isPrefilled={isPrefilled} onStepClick={(s) => { if (s < step && s >= minStep) setStep(s); }} />
                     <div style={{ flex: 1, padding: '28px 32px', minWidth: 0 }}>
-                        {step === 1 && <Step1Match state={state} patch={patch} />}
+                        {step === 1 && <Step1Match state={state} patch={patch} candidateBpas={candidateBpas} />}
                         {step === 2 && <Step2Header state={state} patch={patch} />}
                         {step === 3 && <Step3Part state={state} patch={patch} />}
                         {step === 4 && <Step4Pallets state={state} patch={patch} onSubmit={handleSubmit} submitting={submitting} />}
@@ -196,13 +203,15 @@ export function CreateRelease({ onClose, onCreated }: Props) {
 // Layout chrome
 // ============================================================================
 
-function Header({ step, onClose }: { step: Step; onClose: () => void }) {
+function Header({ step, onClose, isPrefilled }: { step: Step; onClose: () => void; isPrefilled?: boolean }) {
+    const displayStep = isPrefilled ? step - 1 : step;
+    const totalSteps = isPrefilled ? 4 : 5;
     return (
         <div style={{ padding: '20px 28px', borderBottom: '1px solid var(--enterprise-gray-200)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'linear-gradient(135deg, #fafbfc 0%, #f1f5f9 100%)' }}>
             <div>
                 <h2 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--enterprise-gray-900)', margin: 0 }}>New Blanket Release</h2>
                 <p style={{ fontSize: '12px', color: 'var(--enterprise-gray-600)', margin: '2px 0 0', letterSpacing: '0.3px' }}>
-                    Step {step} of 5 · {STEP_LABELS[step - 1]}
+                    Step {displayStep} of {totalSteps} · {STEP_LABELS[step - 1]}
                 </p>
             </div>
             <button onClick={onClose} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--enterprise-gray-500)', padding: 6, borderRadius: 6 }}
@@ -217,30 +226,45 @@ function Header({ step, onClose }: { step: Step; onClose: () => void }) {
 const STEP_LABELS = ['Match BPA', 'Release Header', 'Part & Quantity', 'Pallet Pick', 'Review & Submit'];
 const STEP_ICONS  = [Search, FileText, Package, ClipboardList, CheckCircle2];
 
-function Stepper({ step }: { step: Step }) {
+function Stepper({ step, isPrefilled, onStepClick }: { step: Step; isPrefilled?: boolean; onStepClick?: (s: Step) => void }) {
     return (
-        <div style={{ width: 200, minWidth: 200, borderRight: '1px solid var(--enterprise-gray-200)', padding: '24px 0', background: 'var(--enterprise-gray-50)' }}>
+        <div style={{ width: 200, minWidth: 200, borderRight: '1px solid var(--enterprise-gray-200)', padding: '24px 0', background: 'linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%)' }}>
             {STEP_LABELS.map((label, idx) => {
                 const n = (idx + 1) as Step;
+                // Hide Step 1 when BPA is pre-filled
+                if (isPrefilled && n === 1) return null;
                 const active = n === step;
                 const done   = n < step;
                 const Icon   = STEP_ICONS[idx];
+                const displayN = isPrefilled ? n - 1 : n;
+                const clickable = done && onStepClick;
                 return (
-                    <div key={n} style={{ padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 12, position: 'relative' }}>
+                    <div
+                        key={n}
+                        onClick={() => clickable && onStepClick?.(n)}
+                        style={{
+                            padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 12, position: 'relative',
+                            cursor: clickable ? 'pointer' : 'default',
+                            transition: 'background 0.15s ease',
+                        }}
+                        onMouseEnter={e => { if (clickable) e.currentTarget.style.background = 'rgba(59,130,246,0.06)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                    >
                         {active && <div style={{ position: 'absolute', left: 0, top: 6, bottom: 6, width: 3, background: 'var(--enterprise-primary)', borderRadius: '0 2px 2px 0' }} />}
                         <div style={{
-                            width: 28, height: 28, borderRadius: '50%',
+                            width: 30, height: 30, borderRadius: '50%',
                             background: done ? 'var(--enterprise-success)' : active ? 'var(--enterprise-primary)' : 'var(--enterprise-gray-200)',
                             color: (done || active) ? '#fff' : 'var(--enterprise-gray-600)',
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
                             flexShrink: 0,
                             transition: 'all 0.2s ease',
+                            boxShadow: active ? '0 2px 8px rgba(30,58,138,0.3)' : done ? '0 1px 4px rgba(22,163,74,0.2)' : 'none',
                         }}>
                             {done ? <Check size={14} /> : <Icon size={13} />}
                         </div>
                         <div>
-                            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Step {n}</div>
-                            <div style={{ fontSize: 13, fontWeight: active ? 700 : 500, color: active ? 'var(--enterprise-primary)' : done ? 'var(--enterprise-gray-800)' : 'var(--enterprise-gray-600)' }}>
+                            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Step {displayN}</div>
+                            <div style={{ fontSize: 13, fontWeight: active ? 700 : 500, color: active ? 'var(--enterprise-primary)' : done ? 'var(--enterprise-gray-800)' : 'var(--enterprise-gray-500)' }}>
                                 {label}
                             </div>
                         </div>
@@ -277,7 +301,7 @@ function Footer({ step, canGoNext, onBack, onNext, onCancel, submitting }: {
 // Step 1 — Match BPA (autocomplete)
 // ============================================================================
 
-function Step1Match({ state, patch }: { state: WizardState; patch: (p: Partial<WizardState>) => void }) {
+function Step1Match({ state, patch, candidateBpas }: { state: WizardState; patch: (p: Partial<WizardState>) => void; candidateBpas?: Props['candidateBpas'] }) {
     const [query, setQuery] = useState(state.bpa?.agreement_number ?? '');
     const [results, setResults] = useState<CustomerAgreement[]>([]);
     const [loading, setLoading] = useState(false);
@@ -311,14 +335,106 @@ function Step1Match({ state, patch }: { state: WizardState; patch: (p: Partial<W
         }
     };
 
-    return (
-        <div style={{ maxWidth: 720 }}>
-            <SectionTitle title="Match Customer BPA" subtitle="Start typing the Blanket Purchase Agreement number the customer is releasing against." icon={<Search size={18} />} />
+    const pickById = async (agreementId: string) => {
+        try {
+            const full = await getBPA({ agreement_id: agreementId });
+            setQuery(full.agreement.agreement_number);
+            setResults([]);
+            patch({ bpa: full.agreement, parts: full.parts ?? [] });
+        } catch (e: any) {
+            // fallback
+        }
+    };
 
-            <div style={{ position: 'relative', marginTop: 20 }}>
+    return (
+        <div style={{ maxWidth: 800 }}>
+            <SectionTitle title="Match Customer BPA" subtitle="Select a BPA below or search by agreement number." icon={<Search size={18} />} />
+
+            {/* Candidate BPA cards — shown when multiple BPAs are available */}
+            {candidateBpas && candidateBpas.length > 0 && !state.bpa && (
+                <div style={{ marginTop: 24, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
+                        <div style={{ width: 20, height: 2, background: 'linear-gradient(90deg, #1e3a8a, #3b82f6)', borderRadius: 2 }} />
+                        <span style={{ fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.8px' }}>Available Agreements</span>
+                        <div style={{ flex: 1, height: 1, background: '#e2e8f0' }} />
+                        <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 500 }}>{candidateBpas.length} found</span>
+                    </div>
+                    {candidateBpas.map((c, idx) => (
+                        <button
+                            key={c.agreement_id}
+                            onClick={() => pickById(c.agreement_id)}
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: 14,
+                                width: '100%', padding: '16px 20px', textAlign: 'left',
+                                border: '1px solid #e2e8f0', borderRadius: 12, background: '#fff',
+                                cursor: 'pointer', transition: 'all 0.2s cubic-bezier(0.4,0,0.2,1)',
+                                boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+                                borderLeft: `3px solid ${c.status === 'ACTIVE' ? '#22c55e' : c.status === 'AMENDED' ? '#f59e0b' : '#94a3b8'}`,
+                            }}
+                            onMouseEnter={e => {
+                                e.currentTarget.style.borderColor = '#93c5fd';
+                                e.currentTarget.style.borderLeftColor = c.status === 'ACTIVE' ? '#22c55e' : c.status === 'AMENDED' ? '#f59e0b' : '#94a3b8';
+                                e.currentTarget.style.background = 'linear-gradient(135deg, #f8faff 0%, #eef2ff 100%)';
+                                e.currentTarget.style.boxShadow = '0 4px 12px rgba(59,130,246,0.1)';
+                                e.currentTarget.style.transform = 'translateY(-1px)';
+                            }}
+                            onMouseLeave={e => {
+                                e.currentTarget.style.borderColor = '#e2e8f0';
+                                e.currentTarget.style.borderLeftColor = c.status === 'ACTIVE' ? '#22c55e' : c.status === 'AMENDED' ? '#f59e0b' : '#94a3b8';
+                                e.currentTarget.style.background = '#fff';
+                                e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.04)';
+                                e.currentTarget.style.transform = 'none';
+                            }}
+                        >
+                            {/* Icon */}
+                            <div style={{
+                                width: 40, height: 40, borderRadius: 10, flexShrink: 0,
+                                background: c.status === 'ACTIVE' ? 'linear-gradient(135deg, #f0fdf4, #dcfce7)' : 'linear-gradient(135deg, #fffbeb, #fef3c7)',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            }}>
+                                <FileText size={18} style={{ color: c.status === 'ACTIVE' ? '#16a34a' : '#d97706' }} />
+                            </div>
+                            {/* Info */}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <span style={{ fontFamily: 'monospace', fontSize: 15, fontWeight: 800, color: '#1e293b', letterSpacing: '0.3px' }}>{c.agreement_number}</span>
+                                    <span style={{
+                                        fontSize: 9, fontWeight: 700, padding: '2px 8px', borderRadius: 6, textTransform: 'uppercase', letterSpacing: '0.5px',
+                                        background: c.status === 'ACTIVE' ? '#dcfce7' : c.status === 'AMENDED' ? '#fef3c7' : '#f3f4f6',
+                                        color: c.status === 'ACTIVE' ? '#15803d' : c.status === 'AMENDED' ? '#b45309' : '#374151',
+                                    }}>{c.status}</span>
+                                </div>
+                                <div style={{ fontSize: 12, color: '#64748b', marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.customer_name}</div>
+                            </div>
+                            {/* Qty + Arrow */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                                <div style={{ textAlign: 'right' }}>
+                                    <div style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#1e293b' }}>{Number(c.blanket_quantity).toLocaleString()}</div>
+                                    <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 500 }}>blanket qty</div>
+                                </div>
+                                <div style={{
+                                    width: 28, height: 28, borderRadius: 8, background: '#f1f5f9',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                }}>
+                                    <ChevronRight size={14} style={{ color: '#64748b' }} />
+                                </div>
+                            </div>
+                        </button>
+                    ))}
+                    {/* Divider */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6, marginBottom: 2 }}>
+                        <div style={{ flex: 1, height: 1, background: '#e2e8f0' }} />
+                        <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 500, whiteSpace: 'nowrap' }}>or search manually</span>
+                        <div style={{ flex: 1, height: 1, background: '#e2e8f0' }} />
+                    </div>
+                </div>
+            )}
+
+            {!state.bpa && (
+            <div style={{ position: 'relative', marginTop: candidateBpas && candidateBpas.length > 0 && !state.bpa ? 0 : 20 }}>
                 <Search size={18} style={{ position: 'absolute', left: 14, top: 18, color: 'var(--enterprise-gray-400)' }} />
                 <input
-                    autoFocus
+                    autoFocus={!candidateBpas || candidateBpas.length === 0}
                     type="text"
                     value={query}
                     onChange={(e) => { setQuery(e.target.value); if (state.bpa) patch({ bpa: null, parts: [] }); }}
@@ -329,7 +445,7 @@ function Step1Match({ state, patch }: { state: WizardState; patch: (p: Partial<W
                 />
                 {loading && <Loader2 size={16} className="animate-spin" style={{ position: 'absolute', right: 14, top: 19, color: 'var(--enterprise-gray-400)', animation: 'spin 1s linear infinite' }} />}
 
-                {results.length > 0 && (
+                {results.length > 0 && !state.bpa && (
                     <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, background: 'white', border: '1px solid var(--enterprise-gray-200)', borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.12)', maxHeight: 360, overflow: 'auto', zIndex: 10 }}>
                         {results.map(r => (
                             <button
@@ -353,14 +469,19 @@ function Step1Match({ state, patch }: { state: WizardState; patch: (p: Partial<W
                     </div>
                 )}
             </div>
+            )}
 
             {state.bpa && (
-                <div style={{ marginTop: 28, padding: 20, border: '1.5px solid var(--enterprise-primary)', borderRadius: 12, background: 'linear-gradient(135deg, rgba(30,58,138,0.03) 0%, rgba(30,58,138,0.07) 100%)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--enterprise-primary)', letterSpacing: '0.8px', textTransform: 'uppercase' }}>Matched BPA</div>
-                        <Check size={18} color="var(--enterprise-primary)" />
+                <div style={{ marginTop: 28, padding: 24, border: '1.5px solid var(--enterprise-primary)', borderRadius: 12, background: 'linear-gradient(135deg, rgba(30,58,138,0.03) 0%, rgba(30,58,138,0.07) 100%)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <div style={{ width: 28, height: 28, borderRadius: 8, background: 'linear-gradient(135deg, #1e3a8a, #3b82f6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <Check size={14} style={{ color: '#fff' }} />
+                            </div>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--enterprise-primary)', letterSpacing: '0.5px', textTransform: 'uppercase' }}>BPA Matched</span>
+                        </div>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 20 }}>
                         <KeyVal label="Number"   value={state.bpa.agreement_number} mono bold accent />
                         <KeyVal label="Customer" value={state.bpa.customer_name} />
                         <KeyVal label="Status"   value={state.bpa.status} />

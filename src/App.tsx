@@ -220,7 +220,6 @@ const menuItems: MenuItem[] = [
   { id: 'bpa', label: 'Blanket Purchase Agreement', icon: FileText, description: 'Customer BPAs' },
   { id: 'rack-view-v2', label: 'Inbound Receiving', icon: Truck, description: 'Shipment verify & Goods Receipt' },
   { id: 'rack-view', label: 'Rack Storage', icon: Grid3X3, description: 'Physical rack placement & movement' },
-  { id: 'releases-v2', label: 'Blanket Release', icon: Calendar, description: 'Customer PO Releases' },
   { id: 'forecast', label: 'Forecasting', icon: TrendingUp, description: 'Demand Prediction' },
 
 ];
@@ -798,7 +797,7 @@ export default function App() {
       case 'bpa':
         // Customer Agreement (BPA) management — blanket qty, MIN/MAX, REL MULT,
         // revision tracking. Feeds into Blanket Orders via "Activate BO".
-        return <BPAList userRole={userRole} userPerms={userPerms} />;
+        return <BPAList userRole={userRole} userPerms={userPerms} onNavigate={(v) => setCurrentView(v as View)} />;
       case 'releases-v2':
         // New release flow: paste customer PO → FIFO pallet picker →
         // atomic sub-invoice + tariff creation via RPC.
