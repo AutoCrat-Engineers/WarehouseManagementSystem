@@ -15,7 +15,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     FileText, CheckCircle, Edit, Clock, AlertCircle, XCircle, X,
     Plus, RefreshCw, Search, ChevronRight, ChevronDown, DollarSign, Package,
-    Layers, Calendar, TrendingUp, Loader2,
+    Layers, Calendar, TrendingUp, Loader2, ArrowRight,
 } from 'lucide-react';
 import { Card, ModuleLoader } from '../ui/EnterpriseUI';
 import { Badge } from '../ui/badge';
@@ -606,9 +606,9 @@ function PartCard({ group, onOpenBPA, onNewRelease, loadingRelease, onCancelled,
 
                     {/* Evenly spaced KPI row */}
                     <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr 1fr 160px', alignItems: 'center', marginBottom: 8, gap: 8 }}>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--enterprise-primary)', background: 'rgba(30,58,138,0.08)', padding: '5px 14px', borderRadius: 12, letterSpacing: '0.3px', whiteSpace: 'nowrap' }}>
-                            {group.bpa_rows.length} BPA{group.bpa_rows.length !== 1 ? 's' : ''}
-                        </span>
+                        <div style={{ display: 'flex', justifyContent: 'center' }}>
+                            <KPIInline label="Total BPA's" value={group.bpa_rows.length.toString()} align="center" />
+                        </div>
                         <div style={{ display: 'flex', justifyContent: 'center' }}>
                             <KPIInline label="Total BPA Qty" value={group.total_blanket.toLocaleString()} align="center" />
                         </div>
@@ -645,7 +645,7 @@ function PartCard({ group, onOpenBPA, onNewRelease, loadingRelease, onCancelled,
                                     onMouseEnter={e => { if (!loadingRelease) e.currentTarget.style.transform = 'translateY(-1px)'; }}
                                     onMouseLeave={e => e.currentTarget.style.transform = 'none'}
                                 >
-                                    <Plus size={14} /> {loadingRelease ? 'Loading…' : 'New Release'}
+                                    {loadingRelease ? 'Loading…' : 'New Release'} <ArrowRight size={14} />
                                 </button>
                             )}
                         </div>
