@@ -232,7 +232,7 @@ export function BPAList({ userRole, userPerms = {}, onNavigate }: Props) {
     if (loading && agreements.length === 0) {
         return (
             <ModuleLoader
-                moduleName="Blanket Purchase Agreements"
+                moduleName="Blanket Order & Release"
                 icon={<FileText size={24} style={{ color: 'var(--enterprise-primary)', animation: 'moduleLoaderSpin 0.8s linear infinite' }} />}
             />
         );

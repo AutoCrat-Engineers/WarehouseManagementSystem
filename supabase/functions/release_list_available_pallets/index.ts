@@ -88,7 +88,7 @@ export const handler = withErrorHandler(async (req) => {
     // ── 4. MPL / agreement info for backchain display ───────────────────
     const { data: mppRows } = await ctx.db
         .from('master_packing_list_pallets')
-        .select('pallet_id, master_packing_lists!inner(invoice_number, po_number, proforma_invoice_id)')
+        .select('pallet_id, master_packing_lists!inner(invoice_number, po_number, proforma_invoice_id, pack_proforma_invoices(shipment_number))')
         .in('pallet_id', palletIds)
         .eq('status', 'ACTIVE');
     const mplByPallet = new Map<string, any>();
@@ -197,7 +197,7 @@ export const handler = withErrorHandler(async (req) => {
             parent_unit_price:      piliRow?.unit_price        ?? null,
             agreement_id:           ag?.id ?? null,
             agreement_number:       agNo,
-            packing_list_number:    null,
+            packing_list_number:    mpl?.pack_proforma_invoices?.shipment_number ?? null,
             blanket_order_id:       null,
             blanket_order_number:   null,
             is_oldest_shipment:     false,

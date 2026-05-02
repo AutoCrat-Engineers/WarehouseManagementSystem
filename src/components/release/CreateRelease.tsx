@@ -16,6 +16,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     X, Search, ChevronRight, ChevronLeft, Check, Loader2, Package, Calendar,
     User, FileText, Hash, AlertCircle, CheckCircle2, Info, ClipboardList,
+    ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { listBPAs, getBPA } from '../bpa/bpaService';
 import type { CustomerAgreement, CustomerAgreementPart } from '../bpa/types';
@@ -47,11 +48,10 @@ interface WizardState {
     parts:     CustomerAgreementPart[];
     // Step 2
     releasePo:     string;
-    revision:      number;
+
     orderDate:     string;    // customer's release order date
     needByDate:    string;
     buyerName:     string;
-    notes:         string;
     // Step 3
     partNumber:        string;
     requestedQuantity: number;
@@ -76,11 +76,10 @@ export function CreateRelease({ onClose, onCreated, prefilledBpa, prefilledParts
         bpa: prefilledBpa ?? null,
         parts: prefilledParts ?? [],
         releasePo: '',
-        revision: 0,
+
         orderDate: todayISO(),
         needByDate: '',
         buyerName: '',
-        notes: '',
         partNumber: '',
         requestedQuantity: 0,
         selectedPallets: new Map(),
@@ -115,7 +114,6 @@ export function CreateRelease({ onClose, onCreated, prefilledBpa, prefilledParts
                 requested_quantity: state.requestedQuantity,
                 need_by_date:       state.needByDate,
                 buyer_name:         state.buyerName.trim(),
-                notes:              state.notes || undefined,
             });
 
             // 2. Build allocations from selected pallets
@@ -155,7 +153,6 @@ export function CreateRelease({ onClose, onCreated, prefilledBpa, prefilledParts
                 customer_po_number: release.release_number,
                 buyer_name:         state.buyerName.trim(),
                 sub_invoice_date:   state.orderDate,
-                notes:              state.notes || undefined,
                 idempotency_key:    crypto.randomUUID(),
             });
 
@@ -482,12 +479,11 @@ function Step1Match({ state, patch, candidateBpas }: { state: WizardState; patch
                         </div>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 20 }}>
-                        <KeyVal label="Number"   value={state.bpa.agreement_number} mono bold accent />
-                        <KeyVal label="Customer" value={state.bpa.customer_name} />
-                        <KeyVal label="Status"   value={state.bpa.status} />
-                        <KeyVal label="Revision" value={`Rev ${state.bpa.agreement_revision ?? 0}`} />
-                        <KeyVal label="Parts"    value={String(state.parts.length)} />
-                        <KeyVal label="Valid"    value={state.bpa.effective_end_date ? `until ${new Date(state.bpa.effective_end_date).toLocaleDateString()}` : '—'} />
+                        <KeyVal label="BPA Number" value={state.bpa.agreement_number} mono bold accent />
+                        <KeyVal label="Customer"   value={state.bpa.customer_name} />
+                        <KeyVal label="Status"     value={state.bpa.status} />
+                        <KeyVal label="Parts"      value={String(state.parts.length)} />
+                        <KeyVal label="Valid"      value={state.bpa.effective_end_date ? new Date(state.bpa.effective_end_date).toLocaleDateString() : '—'} />
                     </div>
                 </div>
             )}
@@ -520,11 +516,7 @@ function Step2Header({ state, patch }: { state: WizardState; patch: (p: Partial<
                         placeholder={`${bpaNumber}-N`}
                         style={{ ...inputStyle, fontFamily: 'monospace' }} />
                 </Field>
-                <Field label="Revision">
-                    <input type="number" value={state.revision} min={0}
-                        onChange={(e) => patch({ revision: Math.max(0, Number(e.target.value) || 0) })}
-                        style={inputStyle} />
-                </Field>
+
                 <Field label="Order Date" required hint="Date on the customer's release document">
                     <input type="date" value={state.orderDate} onChange={(e) => patch({ orderDate: e.target.value })} style={inputStyle} />
                 </Field>
@@ -542,11 +534,7 @@ function Step2Header({ state, patch }: { state: WizardState; patch: (p: Partial<
                         </button>
                     )}
                 </Field>
-                <Field label="Ship Via / Notes" hint="E.g., DDP WILMINGTON, delivery instructions">
-                    <input type="text" value={state.notes} onChange={(e) => patch({ notes: e.target.value })}
-                        placeholder="Optional delivery notes"
-                        style={inputStyle} />
-                </Field>
+
             </div>
         </div>
     );
@@ -737,130 +725,146 @@ function Step4Pallets({ state, patch, onSubmit, submitting }: {
         patch({ selectedPallets: next });
     };
 
+    const pct = Math.min(100, (selectedQty / Math.max(1, state.requestedQuantity)) * 100);
+
     return (
-        <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 20, height: '100%' }}>
-            {/* Left: pallet groups */}
-            <div>
-                <SectionTitle title="Pick Pallets" subtitle={`Grouped by parent invoice · ${pallets.length} available for ${state.partNumber}`} icon={<ClipboardList size={18} />} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <SectionTitle title="Pick Pallets" subtitle={`Grouped by parent invoice · ${pallets.length} available for ${state.partNumber}`} icon={<ClipboardList size={18} />} />
 
-                {loading && <div style={{ padding: 40, textAlign: 'center', color: 'var(--enterprise-gray-500)' }}><Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} /></div>}
-                {err && <div style={{ padding: 14, background: '#fef2f2', borderLeft: '3px solid #dc2626', color: '#991b1b', fontSize: 13 }}>{err}</div>}
+            {/* Top: Selection Progress Bar & FIFO */}
+            <div style={{ position: 'sticky', top: -28, zIndex: 10, padding: '16px 20px', background: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(8px)', border: '1px solid var(--enterprise-gray-200)', borderRadius: 12, boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                            <span style={{ fontSize: 24, fontWeight: 800, color: selectedQty === state.requestedQuantity ? 'var(--enterprise-success)' : 'var(--enterprise-gray-900)' }}>
+                                {selectedQty.toLocaleString()}
+                            </span>
+                            <span style={{ fontSize: 13, color: 'var(--enterprise-gray-500)' }}>/ {state.requestedQuantity.toLocaleString()} pcs</span>
+                        </div>
+                        {remaining > 0 && <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--enterprise-warning)' }}>{remaining.toLocaleString()} more needed</span>}
+                        {remaining < 0 && <span style={{ fontSize: 13, fontWeight: 600, color: '#dc2626' }}>Over by {Math.abs(remaining).toLocaleString()} pcs</span>}
+                        {remaining === 0 && <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--enterprise-success)' }}>Ready</span>}
+                    </div>
+                    <button onClick={autoPickFIFO} style={{ fontSize: 12, padding: '8px 14px', border: '1px solid var(--enterprise-primary)', color: 'var(--enterprise-primary)', background: 'white', borderRadius: 6, cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--enterprise-gray-50)'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'white'}
+                    >
+                        Auto-pick FIFO
+                    </button>
+                </div>
 
-                {!loading && groups.length === 0 && !err && (
-                    <div style={{ marginTop: 20, padding: 40, textAlign: 'center', border: '1px dashed var(--enterprise-gray-300)', borderRadius: 10, color: 'var(--enterprise-gray-500)' }}>
-                        No pallets available in rack for this part on this BPA.
+                <div style={{ height: 6, background: 'var(--enterprise-gray-200)', borderRadius: 3, overflow: 'hidden', marginTop: 12 }}>
+                    <div style={{
+                        width: `${pct}%`,
+                        height: '100%',
+                        background: selectedQty === state.requestedQuantity ? 'var(--enterprise-success)' : 'var(--enterprise-primary)',
+                        transition: 'width 0.2s ease, background 0.2s ease',
+                    }} />
+                </div>
+
+                {knockOffByInvoice.size > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--enterprise-gray-500)', display: 'flex', alignItems: 'center' }}>DRAWING FROM:</div>
+                        {Array.from(knockOffByInvoice.entries()).map(([inv, qty]) => (
+                            <div key={inv} style={{ fontSize: 11, padding: '4px 8px', background: 'var(--enterprise-gray-100)', color: 'var(--enterprise-gray-700)', borderRadius: 4, display: 'flex', alignItems: 'center', gap: 6, border: '1px solid var(--enterprise-gray-200)' }}>
+                                <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{inv}</span>
+                                <span>{qty.toLocaleString()} pcs</span>
+                            </div>
+                        ))}
                     </div>
                 )}
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 18 }}>
-                    {groups.map(g => (
-                        <InvoiceGroup key={g.invoice_number} group={g} selected={state.selectedPallets} togglePallet={togglePallet} />
-                    ))}
-                </div>
             </div>
 
-            {/* Right: live preview */}
-            <div style={{ position: 'sticky', top: 0, alignSelf: 'start' }}>
-                <div style={{ padding: 18, background: 'white', border: '1px solid var(--enterprise-gray-200)', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--enterprise-gray-500)', letterSpacing: '0.6px', textTransform: 'uppercase' }}>Selection</div>
-                        <button onClick={autoPickFIFO} style={{ fontSize: 11, padding: '4px 10px', border: '1px solid var(--enterprise-primary)', color: 'var(--enterprise-primary)', background: 'white', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}>
-                            Auto-pick FIFO
-                        </button>
-                    </div>
+            {loading && <div style={{ padding: 40, textAlign: 'center', color: 'var(--enterprise-gray-500)' }}><Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} /></div>}
+            {err && <div style={{ padding: 14, background: '#fef2f2', borderLeft: '3px solid #dc2626', color: '#991b1b', fontSize: 13 }}>{err}</div>}
 
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 14 }}>
-                        <span style={{ fontSize: 28, fontWeight: 800, color: selectedQty === state.requestedQuantity ? 'var(--enterprise-success)' : 'var(--enterprise-gray-900)' }}>
-                            {selectedQty.toLocaleString()}
-                        </span>
-                        <span style={{ fontSize: 13, color: 'var(--enterprise-gray-500)' }}>/ {state.requestedQuantity.toLocaleString()} pcs</span>
-                    </div>
-
-                    <div style={{ height: 6, background: 'var(--enterprise-gray-200)', borderRadius: 3, overflow: 'hidden', marginBottom: 14 }}>
-                        <div style={{
-                            width: `${Math.min(100, (selectedQty / Math.max(1, state.requestedQuantity)) * 100)}%`,
-                            height: '100%',
-                            background: selectedQty === state.requestedQuantity ? 'var(--enterprise-success)' : 'var(--enterprise-primary)',
-                            transition: 'width 0.2s ease',
-                        }} />
-                    </div>
-
-                    {remaining > 0 && <div style={{ fontSize: 12, color: 'var(--enterprise-warning)', marginBottom: 14 }}>{remaining.toLocaleString()} more pcs needed</div>}
-                    {remaining < 0 && <div style={{ fontSize: 12, color: '#dc2626', marginBottom: 14 }}>Over by {Math.abs(remaining).toLocaleString()} pcs</div>}
-
-                    {knockOffByInvoice.size > 0 && (
-                        <>
-                            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--enterprise-gray-500)', letterSpacing: '0.6px', textTransform: 'uppercase', marginBottom: 8 }}>
-                                Knock-off Distribution
-                            </div>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                {Array.from(knockOffByInvoice.entries()).map(([inv, qty]) => (
-                                    <div key={inv} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '6px 10px', background: 'var(--enterprise-gray-50)', borderRadius: 6 }}>
-                                        <span style={{ fontFamily: 'monospace', color: 'var(--enterprise-gray-700)' }}>{inv}</span>
-                                        <span style={{ fontWeight: 700, color: 'var(--enterprise-gray-900)' }}>{qty.toLocaleString()}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        </>
-                    )}
+            {!loading && groups.length === 0 && !err && (
+                <div style={{ padding: 40, textAlign: 'center', border: '1px dashed var(--enterprise-gray-300)', borderRadius: 10, color: 'var(--enterprise-gray-500)' }}>
+                    No pallets available in rack for this part on this BPA.
                 </div>
+            )}
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {groups.map((g, idx) => (
+                    <InvoiceGroup key={g.invoice_number} group={g} selected={state.selectedPallets} togglePallet={togglePallet} initiallyExpanded={idx === 0} />
+                ))}
             </div>
         </div>
     );
 }
 
-function InvoiceGroup({ group, selected, togglePallet }: {
+function InvoiceGroup({ group, selected, togglePallet, initiallyExpanded = false }: {
     group: { invoice_number: string; invoice_date: string | null; pending_qty: number | null; pallets: AvailablePallet[] };
     selected: Map<string, number>;
     togglePallet: (p: AvailablePallet) => void;
+    initiallyExpanded?: boolean;
 }) {
     const selectedCount = group.pallets.filter(p => selected.has(p.pallet_id)).length;
+    const [expanded, setExpanded] = useState(initiallyExpanded);
+
     return (
         <div style={{ border: '1px solid var(--enterprise-gray-200)', borderRadius: 10, overflow: 'hidden' }}>
-            <div style={{ padding: '10px 14px', background: 'linear-gradient(135deg, rgba(30,58,138,0.03) 0%, rgba(30,58,138,0.06) 100%)', borderBottom: '1px solid var(--enterprise-gray-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                    <div style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 700, color: 'var(--enterprise-gray-900)' }}>{group.invoice_number}</div>
-                    <div style={{ fontSize: 11, color: 'var(--enterprise-gray-600)', marginTop: 1 }}>
-                        {group.invoice_date ? new Date(group.invoice_date).toLocaleDateString() : '—'}
-                        {group.pending_qty != null && <> · {group.pending_qty.toLocaleString()} pending</>}
+            <div 
+                onClick={() => setExpanded(!expanded)}
+                style={{ 
+                    padding: '12px 16px', background: 'linear-gradient(135deg, rgba(30,58,138,0.03) 0%, rgba(30,58,138,0.06) 100%)', 
+                    borderBottom: expanded ? '1px solid var(--enterprise-gray-200)' : 'none', 
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    cursor: 'pointer', transition: 'background 0.2s'
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'linear-gradient(135deg, rgba(30,58,138,0.05) 0%, rgba(30,58,138,0.08) 100%)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'linear-gradient(135deg, rgba(30,58,138,0.03) 0%, rgba(30,58,138,0.06) 100%)'}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ color: 'var(--enterprise-gray-500)', display: 'flex', alignItems: 'center' }}>
+                        {expanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                    </div>
+                    <div>
+                        <div style={{ fontFamily: 'monospace', fontSize: 14, fontWeight: 700, color: 'var(--enterprise-gray-900)' }}>{group.invoice_number}</div>
+                        <div style={{ fontSize: 11, color: 'var(--enterprise-gray-600)', marginTop: 2 }}>
+                            {group.invoice_date ? new Date(group.invoice_date).toLocaleDateString() : '—'}
+                            {group.pending_qty != null && <> · {group.pending_qty.toLocaleString()} pending</>}
+                        </div>
                     </div>
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--enterprise-gray-600)' }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: selectedCount > 0 ? 'var(--enterprise-primary)' : 'var(--enterprise-gray-500)' }}>
                     {selectedCount} / {group.pallets.length} selected
                 </div>
             </div>
-            <div>
-                {group.pallets.map(p => {
-                    const sel = selected.has(p.pallet_id);
-                    return (
-                        <button
-                            key={p.pallet_id}
-                            onClick={() => togglePallet(p)}
-                            style={{
-                                display: 'grid',
-                                gridTemplateColumns: '22px 1fr 1fr 1fr 1fr',
-                                gap: 12,
-                                width: '100%',
-                                padding: '10px 14px',
-                                alignItems: 'center',
-                                background: sel ? 'rgba(30,58,138,0.04)' : 'white',
-                                border: 'none',
-                                borderBottom: '1px solid var(--enterprise-gray-100)',
-                                cursor: 'pointer',
-                                textAlign: 'left',
-                                font: 'inherit',
-                            }}
-                            onMouseEnter={(e) => { if (!sel) e.currentTarget.style.background = 'var(--enterprise-gray-50)'; }}
-                            onMouseLeave={(e) => { if (!sel) e.currentTarget.style.background = 'white'; }}
-                        >
-                            <div style={{
-                                width: 16, height: 16, borderRadius: 4,
-                                background: sel ? 'var(--enterprise-primary)' : 'white',
-                                border: `1.5px solid ${sel ? 'var(--enterprise-primary)' : 'var(--enterprise-gray-300)'}`,
-                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            }}>
-                                {sel && <Check size={11} color="white" />}
-                            </div>
+            
+            {expanded && (
+                <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+                    {group.pallets.map(p => {
+                        const sel = selected.has(p.pallet_id);
+                        return (
+                            <button
+                                key={p.pallet_id}
+                                onClick={() => togglePallet(p)}
+                                style={{
+                                    display: 'grid',
+                                    gridTemplateColumns: '22px 1fr 1fr 1fr 1fr',
+                                    gap: 12,
+                                    width: '100%',
+                                    padding: '10px 14px',
+                                    alignItems: 'center',
+                                    background: sel ? 'rgba(30,58,138,0.04)' : 'white',
+                                    border: 'none',
+                                    borderBottom: '1px solid var(--enterprise-gray-100)',
+                                    cursor: 'pointer',
+                                    textAlign: 'left',
+                                    font: 'inherit',
+                                }}
+                                onMouseEnter={(e) => { if (!sel) e.currentTarget.style.background = 'var(--enterprise-gray-50)'; }}
+                                onMouseLeave={(e) => { if (!sel) e.currentTarget.style.background = 'white'; }}
+                            >
+                                <div style={{
+                                    width: 16, height: 16, borderRadius: 4,
+                                    background: sel ? 'var(--enterprise-primary)' : 'white',
+                                    border: `1.5px solid ${sel ? 'var(--enterprise-primary)' : 'var(--enterprise-gray-300)'}`,
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                }}>
+                                    {sel && <Check size={11} color="white" />}
+                                </div>
                             <div>
                                 <div style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 700, color: 'var(--enterprise-gray-900)' }}>{p.pallet_number}</div>
                                 <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', marginTop: 1 }}>Rack {p.location_code ?? '—'}</div>
@@ -880,6 +884,7 @@ function InvoiceGroup({ group, selected, togglePallet }: {
                     );
                 })}
             </div>
+        )}
         </div>
     );
 }
@@ -913,12 +918,14 @@ function Step5Review({ state, onSubmit, submitting, error }: {
     const unitPrice = Number(part?.unit_price ?? 0);
     const extendedPrice = state.requestedQuantity * unitPrice;
     const selectedPallets = pallets.filter(p => state.selectedPallets.has(p.pallet_id));
-    const invoiceBreakdown = new Map<string, number>();
+    const invoiceBreakdown = new Map<string, { qty: number; shipment_number: string | null }>();
     for (const [pid, qty] of state.selectedPallets) {
         const p = pallets.find(x => x.pallet_id === pid);
         if (!p) continue;
         const k = p.parent_invoice_number ?? '(unlinked)';
-        invoiceBreakdown.set(k, (invoiceBreakdown.get(k) ?? 0) + qty);
+        const shipmentStr = p.packing_list_number || null;
+        const prev = invoiceBreakdown.get(k) ?? { qty: 0, shipment_number: shipmentStr };
+        invoiceBreakdown.set(k, { qty: prev.qty + qty, shipment_number: prev.shipment_number || shipmentStr });
     }
 
     return (
@@ -933,7 +940,7 @@ function Step5Review({ state, onSubmit, submitting, error }: {
 
                 <div style={{ padding: 20, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
                     <KeyVal label="BPA"         value={state.bpa?.agreement_number ?? '—'} mono />
-                    <KeyVal label="Revision"    value={`Rev ${state.revision}`} />
+                    <KeyVal label="Revision"    value={String(state.bpa?.agreement_revision ?? 0)} />
                     <KeyVal label="Status"      value="DRAFT" />
                     <KeyVal label="Customer"    value={state.bpa?.customer_name ?? '—'} />
                     <KeyVal label="Buyer"       value={state.buyerName} />
@@ -943,7 +950,7 @@ function Step5Review({ state, onSubmit, submitting, error }: {
                     <KeyVal label="MSN"         value={part?.msn_code ?? '—'} />
                     <KeyVal label="Quantity"    value={state.requestedQuantity.toLocaleString()} bold />
                     <KeyVal label="Unit Price"  value={`$${unitPrice.toFixed(4)}`} />
-                    <KeyVal label="Ext. Price"  value={`$${extendedPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} bold />
+                    <KeyVal label="Release Value" value={`$${extendedPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} bold />
                 </div>
 
                 <div style={{ padding: '16px 20px', borderTop: '1px solid var(--enterprise-gray-200)', background: 'var(--enterprise-gray-50)' }}>
@@ -955,11 +962,21 @@ function Step5Review({ state, onSubmit, submitting, error }: {
                             <Info size={14} /> This release draws from <strong>{invoiceBreakdown.size} parent invoices</strong>. Knock-off will be split per source.
                         </div>
                     )}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        {Array.from(invoiceBreakdown.entries()).map(([inv, qty]) => (
-                            <div key={inv} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '8px 12px', background: 'white', borderRadius: 6, border: '1px solid var(--enterprise-gray-200)' }}>
-                                <span style={{ fontFamily: 'monospace' }}>{inv}</span>
-                                <span style={{ fontWeight: 700 }}>{qty.toLocaleString()} pcs</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {Array.from(invoiceBreakdown.entries()).map(([inv, data]) => (
+                            <div key={inv} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', fontSize: 13, padding: '12px 16px', background: 'white', borderRadius: 8, border: '1px solid var(--enterprise-gray-200)', alignItems: 'center' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                    <span style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Shipment Number</span>
+                                    <span style={{ fontFamily: 'monospace', color: 'var(--enterprise-gray-900)', fontWeight: 600 }}>{data.shipment_number ?? '—'}</span>
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                    <span style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Invoice Number</span>
+                                    <span style={{ fontFamily: 'monospace', color: 'var(--enterprise-gray-900)', fontWeight: 600 }}>{inv}</span>
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
+                                    <span style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Release Qty</span>
+                                    <span style={{ fontWeight: 800, color: 'var(--enterprise-primary)', fontSize: 14 }}>{data.qty.toLocaleString()} pcs</span>
+                                </div>
                             </div>
                         ))}
                     </div>

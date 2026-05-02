@@ -1053,7 +1053,7 @@ ${barcodeImg ? '<img src="' + barcodeImg + '" style="width:120px;height:120px" /
                                 </div>
                                 {/* PO Section */}
                                 <div style={{ marginBottom: 20 }}>
-                                    <div style={{ fontSize: 11, fontWeight: 700, color: '#1e3a8a', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}><FileText size={12} /> Blanket Purchase Agreement Details</div>
+                                    <div style={{ fontSize: 11, fontWeight: 700, color: '#1e3a8a', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}><FileText size={12} /> Blanket Order & Release Details</div>
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                                         <div style={{ position: 'relative' }}>
                                             <label style={{ ...lbl, color: '#374151', display: 'flex', alignItems: 'center', gap: 8 }}>

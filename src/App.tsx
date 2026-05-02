@@ -217,7 +217,7 @@ const menuItems: MenuItem[] = [
   { id: 'stock-movements', label: 'Stock Movements', icon: ArrowRightLeft, description: 'Audit Trail' },
   { id: 'packing', label: 'Packing', icon: PackageOpen, description: 'FG Packing Workflow', hasSubmenu: true },
   { id: 'dispatch' as View, label: 'Dispatch', icon: CargoShip as any, description: 'Dispatch & Shipping', hasSubmenu: true },
-  { id: 'bpa', label: 'Blanket Purchase Agreement', icon: FileText, description: 'Customer BPAs' },
+  { id: 'bpa', label: 'Blanket Order & Release', icon: FileText, description: 'Customer BPAs' },
   { id: 'rack-view-v2', label: 'Inbound Receiving', icon: Truck, description: 'Shipment verify & Goods Receipt' },
   { id: 'rack-view', label: 'Rack Storage', icon: Grid3X3, description: 'Physical rack placement & movement' },
   { id: 'forecast', label: 'Forecasting', icon: TrendingUp, description: 'Demand Prediction' },

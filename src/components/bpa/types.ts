@@ -116,8 +116,8 @@ export interface AgreementPartForm {
     avg_monthly_demand:   number | null;
     min_warehouse_stock:  number | null;
     max_warehouse_stock:  number | null;
-    release_multiple:     number | null;
     safety_stock:         number | null;
+    notes?:               string;
 }
 
 export interface AgreementCreateForm {
@@ -145,7 +145,7 @@ export const emptyPart = (): AgreementPartForm => ({
     drawing_revision: '', customer_description: '', hs_code: '', dbk_code: '',
     blanket_quantity: null, unit_price: null, avg_monthly_demand: null,
     min_warehouse_stock: null, max_warehouse_stock: null, release_multiple: null,
-    safety_stock: null,
+    safety_stock: null, notes: '',
 });
 
 export const emptyAgreementForm = (): AgreementCreateForm => ({

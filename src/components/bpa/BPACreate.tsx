@@ -141,7 +141,7 @@ function Header({ step, onClose }: { step: Step; onClose: () => void }) {
     return (
         <div style={{ padding: '24px 32px', borderBottom: '1px solid rgba(0,0,0,0.05)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff' }}>
             <div>
-                <h2 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a', margin: 0, letterSpacing: '-0.3px' }}>New Blanket Purchase Agreement</h2>
+                <h2 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a', margin: 0, letterSpacing: '-0.3px' }}>New Blanket Order & Release</h2>
                 <p style={{ fontSize: 13, color: '#64748b', margin: '4px 0 0', fontWeight: 500 }}>
                     Step {step} of 4 · {STEP_LABELS[step - 1]}
                 </p>
@@ -499,6 +499,16 @@ function PartCard({ idx, part, patch, onRemove }: {
                 <NumField label="MIN Stock"   value={part.min_warehouse_stock} onChange={(v) => patch({ min_warehouse_stock: v })} />
                 <NumField label="MAX Stock"   value={part.max_warehouse_stock} onChange={(v) => patch({ max_warehouse_stock: v })} />
                 <NumField label="AVG / Month" value={part.avg_monthly_demand}  onChange={(v) => patch({ avg_monthly_demand: v })} />
+            </div>
+
+            {/* Row 4 — Notes */}
+            <div style={{ marginTop: 14 }}>
+                <Field label="Notes">
+                    <input type="text" value={part.notes || ''}
+                        onChange={(e) => patch({ notes: e.target.value })}
+                        placeholder="Optional notes for this part"
+                        style={inputStyle} />
+                </Field>
             </div>
         </div>
     );
