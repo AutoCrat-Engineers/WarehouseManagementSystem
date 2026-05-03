@@ -11,6 +11,7 @@ import { Label } from '../ui/label';
 import { LoadingSpinner } from '../ui/EnterpriseUI';
 import { getRackView, movePallet } from './rackService';
 import type { RackCell } from './types';
+import { generateIdempotencyKey } from '../../utils/idempotency';
 
 interface Props {
     palletId: string;
@@ -48,7 +49,7 @@ export function MovePalletDialog({ palletId, palletNumber, warehouseId, currentL
                 dest_rack:            selectedCell.rack,
                 dest_location_number: selectedCell.location_number,
                 move_reason:          reason.trim(),
-                idempotency_key:      crypto.randomUUID(),
+                idempotency_key:      generateIdempotencyKey(),
             });
             onMoved();
         } catch (e: any) {

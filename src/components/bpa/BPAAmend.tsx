@@ -13,6 +13,7 @@ import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { amendBPA } from './bpaService';
 import type { CustomerAgreement, CustomerAgreementPart } from './types';
+import { generateIdempotencyKey } from '../../utils/idempotency';
 
 interface Props {
     agreement: CustomerAgreement;
@@ -99,7 +100,7 @@ export function BPAAmend({ agreement, parts, onClose, onAmended }: Props) {
                 expected_row_version: agreement.row_version,
                 revision_reason:      reason.trim(),
                 changes:              diff,
-                idempotency_key:      crypto.randomUUID(),
+                idempotency_key:      generateIdempotencyKey(),
             });
             onAmended();
         } catch (e: any) {

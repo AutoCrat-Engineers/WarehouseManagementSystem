@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { fetchWithAuth } from '../../utils/supabase/auth';
 import { getEdgeFunctionUrl } from '../../utils/supabase/info';
+import { generateIdempotencyKey } from '../../utils/idempotency';
 
 // ============================================================================
 // Types
@@ -194,7 +195,7 @@ export function ReceiveShipmentScreen({ onClose, onCompleted }: Props) {
                 mpl_id:              activeMpl.mpl_id,
                 lines,
                 notes:               mplNote || null,
-                idempotency_key:     crypto.randomUUID(),
+                idempotency_key:     generateIdempotencyKey(),
             });
 
             setLastGrNumber(r.gr_number);
