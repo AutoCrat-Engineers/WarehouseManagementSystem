@@ -53,14 +53,23 @@ export function BPACreate({ onClose, onCreated }: Props) {
     // shows one date; we derive the other.
     useEffect(() => { patch({ agreement_date: form.effective_start_date }); /* eslint-disable-next-line */ }, [form.effective_start_date]);
 
-    const canGoNext = useMemo(() => {
-        if (step === 1) return !!form.agreement_number.trim() && !!form.effective_start_date && !!form.effective_end_date && form.effective_start_date <= form.effective_end_date;
-        if (step === 2) return !!form.customer_code.trim() && !!form.customer_name.trim() && !!form.buyer_name.trim();
-        if (step === 3) return !!form.currency_code && !!form.payment_terms;
-        if (step === 4) return form.parts.length > 0 && form.parts.every(p =>
+    const isStepValid = useCallback((s: Step) => {
+        if (s === 1) return !!form.agreement_number.trim() && !!form.effective_start_date && !!form.effective_end_date && form.effective_start_date <= form.effective_end_date;
+        if (s === 2) return !!form.customer_code.trim() && !!form.customer_name.trim() && !!form.buyer_name.trim();
+        if (s === 3) return !!form.currency_code && !!form.payment_terms;
+        if (s === 4) return form.parts.length > 0 && form.parts.every(p =>
             p.part_number && p.msn_code && p.blanket_quantity && p.unit_price && p.release_multiple);
         return true;
-    }, [step, form]);
+    }, [form]);
+
+    const maxAllowedStep = useMemo(() => {
+        if (!isStepValid(1)) return 1;
+        if (!isStepValid(2)) return 2;
+        if (!isStepValid(3)) return 3;
+        return 4;
+    }, [isStepValid]);
+
+    const canGoNext = isStepValid(step);
 
     const submit = async () => {
         setError(null); setSubmitting(true);
@@ -96,7 +105,7 @@ export function BPACreate({ onClose, onCreated }: Props) {
                 <Header step={step} onClose={onClose} />
 
                 <div style={{ flex: 1, overflow: 'auto', display: 'flex' }}>
-                    <Stepper step={step} />
+                    <Stepper step={step} maxAllowedStep={maxAllowedStep} setStep={setStep} />
                     <div style={{ flex: 1, padding: '28px 32px', minWidth: 0 }}>
                         {step === 1 && <Step1Core form={form} patch={patch} />}
                         {step === 2 && <Step2CustomerBuyer form={form} patch={patch} />}
@@ -130,44 +139,57 @@ export function BPACreate({ onClose, onCreated }: Props) {
 
 function Header({ step, onClose }: { step: Step; onClose: () => void }) {
     return (
-        <div style={{ padding: '20px 28px', borderBottom: '1px solid var(--enterprise-gray-200)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'linear-gradient(135deg, #fafbfc 0%, #f1f5f9 100%)' }}>
+        <div style={{ padding: '24px 32px', borderBottom: '1px solid rgba(0,0,0,0.05)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff' }}>
             <div>
-                <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--enterprise-gray-900)', margin: 0 }}>New Blanket Purchase Agreement</h2>
-                <p style={{ fontSize: 12, color: 'var(--enterprise-gray-600)', margin: '2px 0 0', letterSpacing: '0.3px' }}>
+                <h2 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a', margin: 0, letterSpacing: '-0.3px' }}>New Blanket Order & Release</h2>
+                <p style={{ fontSize: 13, color: '#64748b', margin: '4px 0 0', fontWeight: 500 }}>
                     Step {step} of 4 · {STEP_LABELS[step - 1]}
                 </p>
             </div>
             <button onClick={onClose} style={closeBtnStyle}
-                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--enterprise-gray-100)'}
-                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
-                <X size={20} />
+                onMouseEnter={(e) => { e.currentTarget.style.background = '#f1f5f9'; e.currentTarget.style.color = '#0f172a'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#64748b'; }}>
+                <X size={20} strokeWidth={2.5} />
             </button>
         </div>
     );
 }
 
-function Stepper({ step }: { step: Step }) {
+function Stepper({ step, maxAllowedStep, setStep }: { step: Step; maxAllowedStep: number; setStep: (s: Step) => void }) {
     return (
-        <div style={{ width: 200, minWidth: 200, borderRight: '1px solid var(--enterprise-gray-200)', padding: '24px 0', background: 'var(--enterprise-gray-50)' }}>
+        <div style={{ width: 220, minWidth: 220, borderRight: '1px solid rgba(0,0,0,0.05)', padding: '32px 0', background: '#f8fafc' }}>
             {STEP_LABELS.map((label, idx) => {
                 const n = (idx + 1) as Step;
                 const active = n === step;
                 const done = n < step;
+                const disabled = n > maxAllowedStep && n !== step;
                 const Icon = STEP_ICONS[idx];
                 return (
-                    <div key={n} style={{ padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 12, position: 'relative' }}>
-                        {active && <div style={{ position: 'absolute', left: 0, top: 6, bottom: 6, width: 3, background: 'var(--enterprise-primary)', borderRadius: '0 2px 2px 0' }} />}
+                    <div key={n} 
+                        onClick={() => { if (!disabled) setStep(n); }}
+                        style={{ 
+                            padding: '12px 24px', display: 'flex', alignItems: 'center', gap: 14, position: 'relative',
+                            cursor: disabled ? 'not-allowed' : 'pointer',
+                            opacity: disabled ? 0.4 : 1,
+                            transition: 'all 0.2s'
+                        }}
+                        onMouseEnter={(e) => { if (!disabled && !active) e.currentTarget.style.background = 'rgba(0,0,0,0.02)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                    >
+                        {active && <div style={{ position: 'absolute', left: 0, top: 8, bottom: 8, width: 4, background: '#2563eb', borderRadius: '0 4px 4px 0' }} />}
                         <div style={{
-                            width: 28, height: 28, borderRadius: '50%',
-                            background: done ? 'var(--enterprise-success)' : active ? 'var(--enterprise-primary)' : 'var(--enterprise-gray-200)',
-                            color: (done || active) ? '#fff' : 'var(--enterprise-gray-600)',
+                            width: 32, height: 32, borderRadius: '50%',
+                            background: done ? '#10b981' : active ? '#2563eb' : '#e2e8f0',
+                            color: (done || active) ? '#fff' : '#64748b',
                             display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                            boxShadow: active ? '0 4px 12px rgba(37,99,235,0.25)' : 'none',
+                            transition: 'all 0.3s'
                         }}>
-                            {done ? <Check size={14} /> : <Icon size={13} />}
+                            {done ? <Check size={16} strokeWidth={3} /> : <Icon size={16} />}
                         </div>
                         <div>
-                            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Step {n}</div>
-                            <div style={{ fontSize: 13, fontWeight: active ? 700 : 500, color: active ? 'var(--enterprise-primary)' : done ? 'var(--enterprise-gray-800)' : 'var(--enterprise-gray-600)' }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Step {n}</div>
+                            <div style={{ fontSize: 14, fontWeight: active ? 700 : 500, color: active ? '#1e293b' : done ? '#334155' : '#64748b', transition: 'color 0.2s' }}>
                                 {label}
                             </div>
                         </div>
@@ -183,19 +205,29 @@ function Footer({ step, canGoNext, onBack, onNext, onCancel, onSubmit, submittin
     onCancel: () => void; onSubmit: () => void; submitting: boolean;
 }) {
     return (
-        <div style={{ padding: '14px 28px', borderTop: '1px solid var(--enterprise-gray-200)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'white' }}>
-            <button onClick={onCancel} style={ghostBtn}>Cancel</button>
-            <div style={{ display: 'flex', gap: 8 }}>
-                {step > 1 && <button onClick={onBack} disabled={submitting} style={{ ...secondaryBtn, display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <ChevronLeft size={14} /> Back
+        <div style={{ padding: '20px 32px', borderTop: '1px solid rgba(0,0,0,0.05)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fff' }}>
+            <button onClick={onCancel} style={ghostBtn}
+                onMouseEnter={(e) => { e.currentTarget.style.background = '#f1f5f9'; e.currentTarget.style.color = '#0f172a'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#64748b'; }}>
+                Cancel
+            </button>
+            <div style={{ display: 'flex', gap: 12 }}>
+                {step > 1 && <button onClick={onBack} disabled={submitting} style={{ ...secondaryBtn, display: 'flex', alignItems: 'center', gap: 6 }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#f8fafc'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = '#fff'}>
+                    <ChevronLeft size={16} /> Back
                 </button>}
                 {step < 4 && <button onClick={onNext} disabled={!canGoNext}
-                    style={{ ...primaryBtn, display: 'flex', alignItems: 'center', gap: 6, opacity: canGoNext ? 1 : 0.5, cursor: canGoNext ? 'pointer' : 'not-allowed' }}>
-                    Next <ChevronRight size={14} />
+                    style={{ ...primaryBtn, display: 'flex', alignItems: 'center', gap: 6, opacity: canGoNext ? 1 : 0.5, cursor: canGoNext ? 'pointer' : 'not-allowed' }}
+                    onMouseEnter={(e) => { if(canGoNext) e.currentTarget.style.transform = 'translateY(-1px)'; }}
+                    onMouseLeave={(e) => e.currentTarget.style.transform = 'translateY(0)'}>
+                    Next Step <ChevronRight size={16} />
                 </button>}
                 {step === 4 && <button onClick={onSubmit} disabled={!canGoNext || submitting}
-                    style={{ ...primaryBtn, padding: '10px 22px', display: 'flex', alignItems: 'center', gap: 6, opacity: (canGoNext && !submitting) ? 1 : 0.6 }}>
-                    {submitting ? <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Creating…</> : <><Check size={14} /> Create BPA</>}
+                    style={{ ...primaryBtn, padding: '12px 28px', display: 'flex', alignItems: 'center', gap: 8, opacity: (canGoNext && !submitting) ? 1 : 0.6 }}
+                    onMouseEnter={(e) => { if(canGoNext && !submitting) e.currentTarget.style.transform = 'translateY(-1px)'; }}
+                    onMouseLeave={(e) => e.currentTarget.style.transform = 'translateY(0)'}>
+                    {submitting ? <><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Creating…</> : <><Check size={16} strokeWidth={3} /> Create BPA</>}
                 </button>}
             </div>
         </div>
@@ -420,8 +452,8 @@ function PartCard({ idx, part, patch, onRemove }: {
             </div>
 
             {/* Row 1 — part picker, auto-fills */}
-            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 14, marginBottom: 14 }}>
-                <Field label="Part" required hint="Search by MSN, part #, or description">
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: 14, marginBottom: 14 }}>
+                <Field label="Part No" required hint="Search by MSN, part #, or desc">
                     <PartAutocomplete
                         value={part.part_number}
                         onPick={(i) => patch({
@@ -439,20 +471,44 @@ function PartCard({ idx, part, patch, onRemove }: {
                         onChange={(e) => patch({ msn_code: e.target.value })}
                         style={{ ...inputStyle, fontFamily: 'monospace' }} />
                 </Field>
-                <Field label="Unit Price (USD)" required>
+                <Field label="Rev">
+                    <input type="text" value={part.drawing_revision || ''}
+                        onChange={(e) => patch({ drawing_revision: e.target.value })}
+                        style={{ ...inputStyle, fontFamily: 'monospace', textAlign: 'center' }} />
+                </Field>
+                <Field label="Unit Price" required>
                     <input type="number" step="0.0001" value={part.unit_price ?? ''}
                         onChange={(e) => patch({ unit_price: e.target.value === '' ? null : Number(e.target.value) })}
                         style={{ ...inputStyle, fontFamily: 'monospace' }} />
                 </Field>
             </div>
 
-            {/* Row 2 — commitment numbers */}
+            {/* Row 2 — Description */}
+            <div style={{ marginBottom: 14 }}>
+                <Field label="Complete Description">
+                    <input type="text" value={part.customer_description || ''}
+                        onChange={(e) => patch({ customer_description: e.target.value })}
+                        style={inputStyle} />
+                </Field>
+            </div>
+
+            {/* Row 3 — commitment numbers */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr', gap: 14 }}>
                 <NumField label="Blanket Qty" required value={part.blanket_quantity} onChange={(v) => patch({ blanket_quantity: v })} />
                 <NumField label="REL MULT"    required value={part.release_multiple} onChange={(v) => patch({ release_multiple: v })} />
                 <NumField label="MIN Stock"   value={part.min_warehouse_stock} onChange={(v) => patch({ min_warehouse_stock: v })} />
                 <NumField label="MAX Stock"   value={part.max_warehouse_stock} onChange={(v) => patch({ max_warehouse_stock: v })} />
                 <NumField label="AVG / Month" value={part.avg_monthly_demand}  onChange={(v) => patch({ avg_monthly_demand: v })} />
+            </div>
+
+            {/* Row 4 — Notes */}
+            <div style={{ marginTop: 14 }}>
+                <Field label="Notes">
+                    <input type="text" value={part.notes || ''}
+                        onChange={(e) => patch({ notes: e.target.value })}
+                        placeholder="Optional notes for this part"
+                        style={inputStyle} />
+                </Field>
             </div>
         </div>
     );
@@ -590,33 +646,37 @@ function NumField({ label, required, value, onChange }: { label: string; require
 // ============================================================================
 
 const backdropStyle: React.CSSProperties = {
-    position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', zIndex: 1000,
+    position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.4)', backdropFilter: 'blur(3px)', zIndex: 1000,
     display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
 };
 const modalStyle: React.CSSProperties = {
-    background: 'white', borderRadius: 14,
+    background: 'white', borderRadius: 24,
     width: '100%', maxWidth: 1100,
-    minHeight: 480, maxHeight: '88vh',
+    minHeight: 520, maxHeight: '88vh',
     display: 'flex', flexDirection: 'column', overflow: 'hidden',
-    boxShadow: '0 24px 70px rgba(0,0,0,0.3)',
+    boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
 };
 const inputStyle: React.CSSProperties = {
-    padding: '10px 12px', fontSize: 13, border: '1px solid var(--enterprise-gray-300)',
-    borderRadius: 8, outline: 'none', background: 'white', width: '100%', boxSizing: 'border-box',
+    padding: '12px 16px', fontSize: 14, border: '1px solid #e2e8f0', color: '#0f172a',
+    borderRadius: 12, outline: 'none', background: 'white', width: '100%', boxSizing: 'border-box',
+    boxShadow: '0 1px 2px rgba(0,0,0,0.05)', transition: 'all 0.2s',
 };
 const primaryBtn: React.CSSProperties = {
-    background: 'var(--enterprise-primary)', color: 'white', border: 'none',
-    padding: '9px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+    background: 'linear-gradient(135deg, #2563eb 0%, #1e3a8a 100%)', color: 'white', border: 'none',
+    padding: '12px 24px', borderRadius: '8px', fontSize: 14, fontWeight: 600, cursor: 'pointer',
+    boxShadow: '0 4px 12px rgba(37,99,235,0.25)', transition: 'all 0.2s',
 };
 const secondaryBtn: React.CSSProperties = {
-    background: 'white', color: 'var(--enterprise-gray-700)', border: '1px solid var(--enterprise-gray-300)',
-    padding: '9px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+    background: 'white', color: '#334155', border: '1px solid #cbd5e1',
+    padding: '12px 24px', borderRadius: '8px', fontSize: 14, fontWeight: 600, cursor: 'pointer',
+    boxShadow: '0 1px 2px rgba(0,0,0,0.05)', transition: 'all 0.2s',
 };
 const ghostBtn: React.CSSProperties = {
-    background: 'transparent', color: 'var(--enterprise-gray-600)', border: 'none',
-    padding: '9px 14px', fontSize: 13, cursor: 'pointer',
+    background: 'transparent', color: '#64748b', border: 'none',
+    padding: '12px 24px', fontSize: 14, fontWeight: 500, cursor: 'pointer', borderRadius: '8px',
+    transition: 'all 0.2s'
 };
 const closeBtnStyle: React.CSSProperties = {
-    border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--enterprise-gray-500)',
-    padding: 6, borderRadius: 6,
+    border: 'none', background: 'transparent', cursor: 'pointer', color: '#64748b',
+    padding: 8, borderRadius: '8px', transition: 'all 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center'
 };

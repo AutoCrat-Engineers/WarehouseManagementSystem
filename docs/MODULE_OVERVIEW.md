@@ -1,6 +1,6 @@
 # Module Overview
 
-> **Version:** 0.5.5 | **Last Updated:** 2026-04-25
+> **Version:** 0.5.6 | **Last Updated:** 2026-05-03
 
 ## Module Dependency Map
 
@@ -77,7 +77,9 @@ flowchart TD
 | BPA List | `bpa/BPAList.tsx` | Customer agreement portfolio with fulfillment dashboard, cancel, expiry alerts |
 | BPA Detail / Create / Amend | `bpa/BPADetail.tsx`, `BPACreate.tsx`, `BPAAmend.tsx` | Per-BPA detail with revisions, line-level edits, document upload |
 | Release List | `release/ReleaseList.tsx` | Drafted / Completed / Cancelled releases with sub-invoice progress |
-| Create Release | `release/CreateRelease.tsx` | Wizard: BPA pick → pallet selection → allocate-holds → sub-invoice |
+| Create Release | `release/CreateRelease.tsx` | Wizard: BPA pick → header → part & qty → **intelligent pallet allocation (0.5.6)** → review/submit. Auto-detects next sequence number. Step 4 drives subset-sum matcher with three render paths (exact match / round-up & round-down options / insufficient stock) plus manual override. |
+| Pallet Matcher | `release/palletMatcher.ts` | **Added 0.5.6.** Pure-TS subset-sum matcher (FIFO-prefix shortcut → 0/1 knapsack DP with parent-pointer recovery). Whole-pallet only. Returns exact match if reachable, plus closest reachable sums above and below the target. Client-side, no I/O, no dependencies. |
+| Release Prints | `release/releasePrints.ts` | **Added 0.5.6.** Two `window.open + auto-print` layouts: `printPickingList()` (warehouse pull, rack-sorted, ✓-checkbox, signature blocks) and `printAmendmentDraft()` (customer-facing, mirrors OPW's release-document format with diff'd quantities). |
 | Tariff Invoice Queue | `release/TariffInvoiceQueue.tsx` | Finance queue: DRAFT → SUBMITTED → CLAIMED → PAID |
 | Inbound Receiving | `rack-view/RackViewGrid.tsx`, `ReceiveShipmentScreen.tsx` | Per-MPL goods-receipt with discrepancy tracking |
 | Rack Storage | `RackView.tsx`, `rack-view/RackCellDrawer.tsx` | Visual rack-cell view with pallet back-chain |

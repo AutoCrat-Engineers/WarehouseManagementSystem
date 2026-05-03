@@ -19,12 +19,11 @@ import { calculatePalletImpactInternal } from '../_shared/palletImpact.ts';
 const DB_CODE_MAP: Record<string, string> = {
   'WH-PROD-FLOOR': 'PW',
   'WH-INTRANSIT': 'IT',
-  'WH-SNV-MAIN': 'SV',
   'WH-US-TRANSIT': 'US',
 };
 
 // Location codes that have internal warehouses in the DB
-const INTERNAL_LOCATIONS = new Set(['PW', 'IT', 'SV', 'US', 'PF']);
+const INTERNAL_LOCATIONS = new Set(['PW', 'IT', 'US', 'PF']);
 
 // ── Request body shape ──
 interface SubmitRequestBody {

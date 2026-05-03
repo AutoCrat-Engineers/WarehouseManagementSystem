@@ -10,7 +10,6 @@
 export type WarehouseCategory =
     | 'PRODUCTION'
     | 'IN_TRANSIT'
-    | 'SNV'
     | 'US_TRANSIT'
     | 'DISTRIBUTION'
     | 'RETURNS'
@@ -111,7 +110,6 @@ export interface ItemStockDashboard {
     netAvailableForCustomer: number;
 
     // Calculation breakdown
-    snvStock: number;
     usTransitStock: number;
     inTransitStock: number;
     reservedNextMonth: number;
@@ -150,12 +148,6 @@ export interface ItemStockDistribution {
     // In-Transit
     inTransitQty: number;
     inTransitAvailable: number;
-
-    // S&V Warehouse
-    snvOnHand: number;
-    snvAvailable: number;
-    snvReserved: number;
-    snvAllocated: number;
 
     // US Transit
     usTransitOnHand: number;

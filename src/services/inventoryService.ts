@@ -545,6 +545,69 @@ export async function getStockHealthSummary(): Promise<{
 }
 
 // ============================================================================
+// US WAREHOUSE — RELEASE HOLD BREAKDOWN
+// ============================================================================
+
+export interface ReleaseHoldRow {
+    releaseNumber: string;
+    quantity: number;
+}
+
+export interface USReleaseHolds {
+    allocated: ReleaseHoldRow[];
+    reserved: ReleaseHoldRow[];
+}
+
+let _usWarehouseIdCache: string | null = null;
+
+async function getUSWarehouseId(): Promise<string | null> {
+    if (_usWarehouseIdCache) return _usWarehouseIdCache;
+    const { data, error } = await supabase
+        .from('inv_warehouses')
+        .select('id')
+        .eq('warehouse_code', 'WH-US-TRANSIT')
+        .single();
+    if (error || !data) return null;
+    _usWarehouseIdCache = data.id;
+    return data.id;
+}
+
+/**
+ * Fetch per-release breakdown of ALLOCATED and RESERVED holds for a part
+ * at the US warehouse. Aggregated by release_number.
+ */
+export async function getUSReleaseHolds(partNumber: string): Promise<USReleaseHolds> {
+    const usId = await getUSWarehouseId();
+    if (!usId) return { allocated: [], reserved: [] };
+
+    const { data, error } = await supabase
+        .from('release_pallet_holds')
+        .select('quantity, hold_status, blanket_releases(release_number)')
+        .eq('part_number', partNumber)
+        .eq('warehouse_id', usId);
+
+    if (error) {
+        console.error('Error fetching US release holds:', error);
+        throw error;
+    }
+
+    const allocMap = new Map<string, number>();
+    const resMap = new Map<string, number>();
+    for (const row of (data || []) as any[]) {
+        const relNo = row.blanket_releases?.release_number ?? 'UNKNOWN';
+        const qty = row.quantity ?? 0;
+        const target = row.hold_status === 'ALLOCATED' ? allocMap : resMap;
+        target.set(relNo, (target.get(relNo) ?? 0) + qty);
+    }
+
+    const toRows = (m: Map<string, number>): ReleaseHoldRow[] =>
+        Array.from(m, ([releaseNumber, quantity]) => ({ releaseNumber, quantity }))
+             .sort((a, b) => b.quantity - a.quantity);
+
+    return { allocated: toRows(allocMap), reserved: toRows(resMap) };
+}
+
+// ============================================================================
 // EXPORT ALL
 // ============================================================================
 
@@ -584,6 +647,9 @@ export const inventoryService = {
     // Aggregates
     getTotalStockForItem,
     getStockHealthSummary,
+
+    // US warehouse drill-down
+    getUSReleaseHolds,
 };
 
 export default inventoryService;

@@ -12,7 +12,7 @@ The Stock Movement module manages all stock changes across the warehouse system.
 |------|-----------|---------|----------------|
 | `PRODUCTION_RECEIPT` | IN | Supervisor approval | Production → PW (FG Warehouse) |
 | `DISPATCH_TO_TRANSIT` | Internal | Proforma Invoice approval | PW → In-Transit |
-| `TRANSFER_TO_WAREHOUSE` | Internal | Dispatch | In-Transit → S&V / US Warehouse |
+| `TRANSFER_TO_WAREHOUSE` | Internal | Dispatch | In-Transit → US Warehouse |
 | `CUSTOMER_SALE` | OUT | Customer delivery | In-Transit → Customer |
 | `RETURN_TO_PRODUCTION` | Internal | Return | PW → Production |
 
@@ -35,7 +35,6 @@ FG Warehouse (PW)
        ▼ (DISPATCH_TO_TRANSIT)
 In-Transit (IT)
        │
-       ├──▶ S&V Warehouse (TRANSFER)
        ├──▶ US Warehouse (TRANSFER)
        └──▶ Customer (CUSTOMER_SALE)
 ```

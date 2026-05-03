@@ -59,6 +59,8 @@ export interface FulfillmentRowRich {
     fulfillment_pct:       number;
     pending_quantity:      number;
     release_multiple:      number;
+    agreement_revision?:   number;
+    part_revision?:        string;
 }
 
 export interface BPAListResponse {

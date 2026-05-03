@@ -20,7 +20,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, LoadingSpinner } from '../ui/EnterpriseUI';
 import { StickerPrint } from './StickerPrint';
-import { Printer } from 'lucide-react';
+import { Printer, ArrowDown, ArrowUp } from 'lucide-react';
 import QRCode from 'qrcode';
 import * as svc from './packingService';
 import {
@@ -51,6 +51,32 @@ export function PackingDetail({ requestId, userRole, onBack, currentUserName }: 
     const [stickerData, setStickerData] = useState<StickerData | null>(null);
     const [activeTab, setActiveTab] = useState<'stickers' | 'audit'>('stickers');
     const [showTransferConfirm, setShowTransferConfirm] = useState(false);
+    const [isScrolledDown, setIsScrolledDown] = useState(false);
+
+    useEffect(() => {
+        const mainEl = document.querySelector('.app-main');
+        if (!mainEl) return;
+
+        const handleScroll = () => {
+            // If scrolled down more than 100px, point UP. Otherwise, point DOWN.
+            setIsScrolledDown(mainEl.scrollTop > 100);
+        };
+
+        mainEl.addEventListener('scroll', handleScroll);
+        setTimeout(handleScroll, 100);
+        
+        return () => mainEl.removeEventListener('scroll', handleScroll);
+    }, [boxes.length, activeTab]);
+
+    const toggleScroll = () => {
+        const mainEl = document.querySelector('.app-main');
+        if (!mainEl) return;
+        if (isScrolledDown) {
+            mainEl.scrollTo({ top: 0, behavior: 'smooth' });
+        } else {
+            mainEl.scrollTo({ top: mainEl.scrollHeight, behavior: 'smooth' });
+        }
+    };
     // printQueue and isBatchPrinting removed — Print All now uses a single-window approach
 
     // ============================================================================
@@ -1043,6 +1069,47 @@ ${stickerPages}
 
             {/* Spinner CSS */}
             <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+            {/* FLOATING SCROLL BUTTON */}
+            {boxes.length > 5 && (
+                <button
+                    onClick={toggleScroll}
+                    style={{
+                        position: 'fixed',
+                        bottom: '40px',
+                        right: '40px',
+                        width: '52px',
+                        height: '52px',
+                        borderRadius: '26px',
+                        background: 'linear-gradient(135deg, #2563eb 0%, #1e3a8a 100%)',
+                        color: 'white',
+                        border: 'none',
+                        boxShadow: '0 4px 14px rgba(30, 58, 138, 0.4), 0 0 0 4px rgba(37, 99, 235, 0)',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        zIndex: 1000,
+                        transition: 'all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                    }}
+                    onMouseEnter={(e) => { 
+                        e.currentTarget.style.transform = 'translateY(-4px) scale(1.05)'; 
+                        e.currentTarget.style.boxShadow = '0 8px 24px rgba(30, 58, 138, 0.5), 0 0 0 4px rgba(37, 99, 235, 0.2)'; 
+                    }}
+                    onMouseLeave={(e) => { 
+                        e.currentTarget.style.transform = 'translateY(0) scale(1)'; 
+                        e.currentTarget.style.boxShadow = '0 4px 14px rgba(30, 58, 138, 0.4), 0 0 0 4px rgba(37, 99, 235, 0)'; 
+                    }}
+                >
+                    <div style={{ 
+                        transition: 'transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                        transform: isScrolledDown ? 'rotate(180deg)' : 'rotate(0deg)',
+                        display: 'flex'
+                    }}>
+                        <ArrowDown size={24} />
+                    </div>
+                </button>
+            )}
+
         </div>
     );
 }
