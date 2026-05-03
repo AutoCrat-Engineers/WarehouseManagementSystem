@@ -113,6 +113,8 @@ export interface AvailablePallet {
     agreement_id:           string | null;
     agreement_number:       string | null;
     packing_list_number:    string | null;
+    /** Shipment number sourced from goods_receipts.shipment_number (falls back to proforma's). */
+    shipment_number:        string | null;
     blanket_order_id:       string | null;
     blanket_order_number:   string | null;
     is_oldest_shipment:     boolean;

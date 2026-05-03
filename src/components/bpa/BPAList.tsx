@@ -61,12 +61,11 @@ export function BPAList({ userRole, userPerms = {}, onNavigate }: Props) {
 
     const [detailId, setDetailId] = useState<string | null>(null);
     const [detailInitialTab, setDetailInitialTab] = useState<'overview' | 'releases'>('overview');
+    const [detailFocusPart, setDetailFocusPart] = useState<string | undefined>(undefined);
     const [showCreate, setShowCreate] = useState(false);
     const [createReleaseData, setCreateReleaseData] = useState<BPAGetResponse | null>(null);
     const [showReleaseWizard, setShowReleaseWizard] = useState(false);
     const [releaseCandidates, setReleaseCandidates] = useState<{ agreement_id: string; agreement_number: string; customer_name: string; blanket_quantity: number; status: string }[]>([]);
-    const [loadingRelease, setLoadingRelease] = useState(false);
-
     const handleNewRelease = async (agreementId: string | null, candidates?: typeof releaseCandidates) => {
         if (!agreementId) {
             // Multiple BPAs — open wizard at Step 1 with candidate cards
@@ -74,14 +73,11 @@ export function BPAList({ userRole, userPerms = {}, onNavigate }: Props) {
             setShowReleaseWizard(true);
             return;
         }
-        setLoadingRelease(true);
         try {
             const bpaData = await getBPA({ agreement_id: agreementId });
             setCreateReleaseData(bpaData);
         } catch (e: any) {
             setError(e?.message ?? 'Failed to load BPA for release');
-        } finally {
-            setLoadingRelease(false);
         }
     };
 
@@ -322,9 +318,8 @@ export function BPAList({ userRole, userPerms = {}, onNavigate }: Props) {
                         <PartCard
                             key={g.part_number}
                             group={g}
-                            onOpenBPA={(aid) => { setDetailInitialTab('overview'); setDetailId(aid); }}
+                            onOpenBPA={(aid, partNumber) => { setDetailInitialTab('overview'); setDetailFocusPart(partNumber); setDetailId(aid); }}
                             onNewRelease={handleNewRelease}
-                            loadingRelease={loadingRelease}
                             onCancelled={fetchData}
                             onNavigate={onNavigate}
                         />
@@ -348,11 +343,12 @@ export function BPAList({ userRole, userPerms = {}, onNavigate }: Props) {
             {detailId && (
                 <BPADetail
                     agreementId={detailId}
-                    onClose={() => setDetailId(null)}
-                    onAmended={() => { setDetailId(null); fetchData(); }}
-                    onCancelled={() => { setDetailId(null); fetchData(); }}
+                    onClose={() => { setDetailId(null); setDetailFocusPart(undefined); }}
+                    onAmended={() => { setDetailId(null); setDetailFocusPart(undefined); fetchData(); }}
+                    onCancelled={() => { setDetailId(null); setDetailFocusPart(undefined); fetchData(); }}
                     canAmend={canAmend}
                     initialTab={detailInitialTab}
+                    focusPart={detailFocusPart}
                 />
             )}
             {showCreate && (
@@ -550,7 +546,8 @@ type PartGroup = {
     bpa_rows: FulfillmentRowRich[];
 };
 
-function PartCard({ group, onOpenBPA, onNewRelease, loadingRelease, onCancelled, onNavigate }: { group: PartGroup; onOpenBPA: (id: string) => void; onNewRelease: (id: string | null, candidates?: { agreement_id: string; agreement_number: string; customer_name: string; blanket_quantity: number; status: string }[]) => void; loadingRelease: boolean; onCancelled: () => void; onNavigate?: (view: string) => void }) {
+function PartCard({ group, onOpenBPA, onNewRelease, onCancelled, onNavigate }: { group: PartGroup; onOpenBPA: (id: string, partNumber?: string) => void; onNewRelease: (id: string | null, candidates?: { agreement_id: string; agreement_number: string; customer_name: string; blanket_quantity: number; status: string }[]) => Promise<void> | void; onCancelled: () => void; onNavigate?: (view: string) => void }) {
+    const [busy, setBusy] = useState(false);
     const [expanded, setExpanded] = useState(false);
     // Progress based on Delivered / Blanket
     const pct = group.total_blanket > 0 ? +((group.total_delivered / group.total_blanket) * 100).toFixed(1) : 0;
@@ -621,31 +618,37 @@ function PartCard({ group, onOpenBPA, onNewRelease, loadingRelease, onCancelled,
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'center' }}>
                             {group.bpa_rows.length > 0 && (
-                                <button 
-                                    onClick={(e) => {
+                                <button
+                                    onClick={async (e) => {
                                         e.stopPropagation();
-                                        const activeBpas = group.bpa_rows.filter(r => r.agreement_status === 'ACTIVE' || r.agreement_status === 'AMENDED');
-                                        if (activeBpas.length === 1) {
-                                            onNewRelease(activeBpas[0].agreement_id);
-                                        } else if (activeBpas.length === 0 && group.bpa_rows.length === 1) {
-                                            onNewRelease(group.bpa_rows[0].agreement_id);
-                                        } else {
-                                            // Multiple BPAs — pass them as candidates for Step 1
-                                            onNewRelease(null, activeBpas.map(r => ({
-                                                agreement_id: r.agreement_id,
-                                                agreement_number: r.agreement_number ?? '',
-                                                customer_name: r.customer_name ?? '',
-                                                blanket_quantity: Number(r.blanket_quantity ?? 0),
-                                                status: r.agreement_status ?? '',
-                                            })));
+                                        if (busy) return;
+                                        setBusy(true);
+                                        try {
+                                            const activeBpas = group.bpa_rows.filter(r => r.agreement_status === 'ACTIVE' || r.agreement_status === 'AMENDED');
+                                            if (activeBpas.length === 1) {
+                                                await onNewRelease(activeBpas[0].agreement_id);
+                                            } else if (activeBpas.length === 0 && group.bpa_rows.length === 1) {
+                                                await onNewRelease(group.bpa_rows[0].agreement_id);
+                                            } else {
+                                                // Multiple BPAs — pass them as candidates for Step 1
+                                                await onNewRelease(null, activeBpas.map(r => ({
+                                                    agreement_id: r.agreement_id,
+                                                    agreement_number: r.agreement_number ?? '',
+                                                    customer_name: r.customer_name ?? '',
+                                                    blanket_quantity: Number(r.blanket_quantity ?? 0),
+                                                    status: r.agreement_status ?? '',
+                                                })));
+                                            }
+                                        } finally {
+                                            setBusy(false);
                                         }
                                     }}
-                                    disabled={loadingRelease}
-                                    style={{ padding: '10px 24px', background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: loadingRelease ? 'wait' : 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 8px rgba(30,58,138,0.2)' }}
-                                    onMouseEnter={e => { if (!loadingRelease) e.currentTarget.style.transform = 'translateY(-1px)'; }}
+                                    disabled={busy}
+                                    style={{ padding: '10px 24px', background: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)', color: 'white', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: busy ? 'wait' : 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 8px rgba(30,58,138,0.2)' }}
+                                    onMouseEnter={e => { if (!busy) e.currentTarget.style.transform = 'translateY(-1px)'; }}
                                     onMouseLeave={e => e.currentTarget.style.transform = 'none'}
                                 >
-                                    {loadingRelease ? 'Loading…' : 'New Release'} <ArrowRight size={14} />
+                                    {busy ? 'Loading…' : 'New Release'} <ArrowRight size={14} />
                                 </button>
                             )}
                         </div>
@@ -671,7 +674,7 @@ function PartCard({ group, onOpenBPA, onNewRelease, loadingRelease, onCancelled,
                         </div>
                         {group.bpa_rows.map((r, i) => (
                             <BPAUnderPartRow key={r.agreement_id + '-' + i} row={r}
-                                onOpen={() => onOpenBPA(r.agreement_id)}
+                                onOpen={() => onOpenBPA(r.agreement_id, group.part_number)}
                                 onCancelled={onCancelled}
                                 onNavigate={onNavigate}
                             />

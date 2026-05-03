@@ -99,7 +99,7 @@ interface ReasonCode {
   description: string | null;
 }
 
-type LocationCode = 'PW' | 'IT' | 'SV' | 'US' | 'PF';
+type LocationCode = 'PW' | 'IT' | 'US' | 'PF';
 type ExternalEntity = 'PRODUCTION' | 'CUSTOMER';
 type Endpoint = LocationCode | ExternalEntity;
 type StockType = 'STOCK_IN' | 'REJECTION' | '';
@@ -135,7 +135,6 @@ interface WarehouseStock {
 const LOCATIONS: Record<LocationCode, { name: string; icon: React.ElementType; color: string }> = {
   PW: { name: 'FG Warehouse', icon: Warehouse, color: '#6366f1' },
   IT: { name: 'In-Transit', icon: Truck, color: '#f59e0b' },
-  SV: { name: 'S&V Warehouse', icon: MapPin, color: '#10b981' },
   US: { name: 'US Warehouse', icon: MapPin, color: '#3b82f6' },
   PF: { name: 'Production Floor', icon: ArrowDownCircle, color: '#dc2626' },
 };
@@ -144,9 +143,7 @@ const VALID_ROUTES: MovementRoute[] = [
   // Stock In: Only Production → FG Warehouse (positive flow)
   { from: 'PRODUCTION', to: 'PW', movementType: 'PRODUCTION_RECEIPT', flow: 'FORWARD', label: 'Production → FG Warehouse' },
   // Negative flows: ALL kept as-is from original
-  { from: 'CUSTOMER', to: 'SV', movementType: 'CUSTOMER_RETURN', flow: 'REVERSE', label: 'Customer → S&V' },
   { from: 'CUSTOMER', to: 'US', movementType: 'CUSTOMER_RETURN', flow: 'REVERSE', label: 'Customer → US' },
-  { from: 'SV', to: 'IT', movementType: 'RETURN_TO_PRODUCTION_FLOW', flow: 'REVERSE', label: 'S&V → In-Transit' },
   { from: 'US', to: 'IT', movementType: 'RETURN_TO_PRODUCTION_FLOW', flow: 'REVERSE', label: 'US → In-Transit' },
   { from: 'IT', to: 'PW', movementType: 'RETURN_TO_PRODUCTION_FLOW', flow: 'REVERSE', label: 'In-Transit → PW' },
   { from: 'PW', to: 'PRODUCTION', movementType: 'RETURN_TO_PRODUCTION', flow: 'REVERSE', label: 'PW → Production' },
@@ -175,7 +172,6 @@ const OUT_ONLY_MOVEMENT_TYPES = ['REJECTION_DISPOSAL'];
 const DB_CODE_MAP: Record<string, LocationCode> = {
   'WH-PROD-FLOOR': 'PW',
   'WH-INTRANSIT': 'IT',
-  'WH-SNV-MAIN': 'SV',
   'WH-US-TRANSIT': 'US',
 };
 

@@ -33,6 +33,8 @@ interface Props {
     onCancelled?: () => void;
     canAmend: boolean;
     initialTab?: Tab;
+    /** When set, Parts and Fulfillment tabs are filtered to this part_number. */
+    focusPart?: string;
 }
 
 type Tab = 'overview' | 'parts' | 'fulfillment' | 'releases' | 'amendments';
@@ -41,7 +43,9 @@ const fmtDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { d
 const fmtDateTime = (iso: string) => new Date(iso).toLocaleString(undefined, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 const fmtMoney = (n: number | null | undefined, cur = 'USD') => `${cur} ${Number(n ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
-export function BPADetail({ agreementId, onClose, onAmended, onCancelled, canAmend, initialTab }: Props) {
+export function BPADetail({ agreementId, onClose, onAmended, onCancelled, canAmend, initialTab, focusPart: focusPartProp }: Props) {
+    const [focusPart, setFocusPart] = useState<string | undefined>(focusPartProp);
+    useEffect(() => { setFocusPart(focusPartProp); }, [focusPartProp]);
     const [data, setData] = useState<BPAGetResponse | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -195,7 +199,7 @@ export function BPADetail({ agreementId, onClose, onAmended, onCancelled, canAme
 
                                 <TabButton active={tab === 'overview'} onClick={() => setTab('overview')} icon={<FileText size={14} />} label="Overview" />
                                 <TabButton active={tab === 'parts'} onClick={() => setTab('parts')} icon={<List size={14} />} label="Parts" count={data.parts.length} />
-                                <TabButton active={tab === 'fulfillment'} onClick={() => setTab('fulfillment')} icon={<TrendingUp size={14} />} label="Fulfillment" />
+                                <TabButton active={tab === 'fulfillment'} onClick={() => setTab('fulfillment')} icon={<TrendingUp size={14} />} label="Fulfillment" count={focusPart ? data.fulfillment.filter(f => f.part_number === focusPart).length : undefined} />
                                 <TabButton active={tab === 'releases'} onClick={() => setTab('releases')} icon={<Truck size={14} />} label="Releases" count={releaseCounts.total} />
                                 <TabButton active={tab === 'amendments'} onClick={() => setTab('amendments')} icon={<History size={14} />} label="Amendments" count={data.revisions.length} />
                             </div>
@@ -209,7 +213,7 @@ export function BPADetail({ agreementId, onClose, onAmended, onCancelled, canAme
                             <div style={{ padding: '32px' }}>
                                 {tab === 'overview' && <OverviewTab data={data} />}
                                 {tab === 'parts' && <PartsTab data={data} />}
-                                {tab === 'fulfillment' && <FulfillmentTab data={data} />}
+                                {tab === 'fulfillment' && <FulfillmentTab data={data} focusPart={focusPart} onClearFocus={() => setFocusPart(undefined)} />}
                                 {tab === 'releases' && <ReleasesTab data={data} onNewRelease={() => setShowCreateRelease(true)} />}
                                 {tab === 'amendments' && <AmendmentsTab data={data} />}
                             </div>
@@ -573,6 +577,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
 function PartsTab({ data }: { data: BPAGetResponse }) {
     const byPn = new Map(data.fulfillment.map(r => [r.part_number, r]));
     const a = data.agreement;
+    const visibleParts = data.parts;
 
     return (
         <div>
@@ -600,7 +605,7 @@ function PartsTab({ data }: { data: BPAGetResponse }) {
                     <div style={{ textAlign: 'center' }}>Fulfillment</div>
                 </div>
                 {/* Parts Grid Rows */}
-                {data.parts.map((p, idx) => {
+                {visibleParts.map((p, idx) => {
                     const f = byPn.get(p.part_number);
                     const pct = f?.fulfillment_pct ?? 0;
                     const barColor = pct >= 80 ? '#16a34a' : pct >= 40 ? '#f59e0b' : '#3b82f6';
@@ -648,7 +653,8 @@ function PartsTab({ data }: { data: BPAGetResponse }) {
 // ──────────────────────────────────────────────────────────────────────
 // Fulfillment Tab
 // ──────────────────────────────────────────────────────────────────────
-function FulfillmentTab({ data }: { data: BPAGetResponse }) {
+function FulfillmentTab({ data, focusPart, onClearFocus }: { data: BPAGetResponse; focusPart?: string; onClearFocus?: () => void }) {
+    const visibleRows = focusPart ? data.fulfillment.filter(f => f.part_number === focusPart) : data.fulfillment;
     if (data.fulfillment.length === 0) {
         return (
             <div style={{ padding: 40, textAlign: 'center', border: '1px dashed var(--enterprise-gray-300)', borderRadius: '8px', background: '#fafbfc' }}>
@@ -658,7 +664,20 @@ function FulfillmentTab({ data }: { data: BPAGetResponse }) {
             </div>
         );
     }
+    if (focusPart && visibleRows.length === 0) {
+        return (
+            <>
+                <FocusBanner part={focusPart} hidden={data.fulfillment.length} onClearFocus={onClearFocus} />
+                <div style={{ padding: 40, textAlign: 'center', border: '1px dashed var(--enterprise-gray-300)', borderRadius: '8px', background: '#fafbfc' }}>
+                    <Clock size={32} style={{ color: 'var(--enterprise-gray-400)', marginBottom: 8 }} />
+                    <p style={{ color: 'var(--enterprise-gray-600)', fontSize: '14px', margin: 0 }}>No fulfillment data for <strong style={{ fontFamily: 'monospace' }}>{focusPart}</strong> yet.</p>
+                </div>
+            </>
+        );
+    }
     return (
+        <>
+            {focusPart && <FocusBanner part={focusPart} hidden={data.fulfillment.length - visibleRows.length} onClearFocus={onClearFocus} />}
         <div style={{ overflowX: 'auto', background: '#fff', borderRadius: '16px', boxShadow: '0 4px 20px -10px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.04)' }}>
             {/* Fulfillment Header */}
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)', gap: 8, padding: '16px 12px', background: '#fafafa', fontSize: 11, fontWeight: 800, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
@@ -672,7 +691,7 @@ function FulfillmentTab({ data }: { data: BPAGetResponse }) {
                 <div style={{ textAlign: 'center' }}>Fulfillment</div>
             </div>
             {/* Fulfillment Rows */}
-            {data.fulfillment.map((f, idx) => {
+            {visibleRows.map((f, idx) => {
                 const pct = Number(f.fulfillment_pct ?? 0);
                 const barColor = pct >= 80 ? '#16a34a' : pct >= 40 ? '#f59e0b' : '#3b82f6';
                 const pending = Number(f.pending_quantity ?? 0);
@@ -694,6 +713,23 @@ function FulfillmentTab({ data }: { data: BPAGetResponse }) {
                     </div>
                 );
             })}
+        </div>
+        </>
+    );
+}
+
+function FocusBanner({ part, hidden, onClearFocus }: { part: string; hidden: number; onClearFocus?: () => void }) {
+    return (
+        <div style={{
+            marginBottom: '10px', padding: '8px 14px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px',
+            fontSize: '12px', color: '#1e3a8a', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', fontWeight: 500
+        }}>
+            <span>Filtered to part <strong style={{ fontFamily: 'monospace' }}>{part}</strong>{hidden > 0 ? ` · ${hidden} other part${hidden === 1 ? '' : 's'} hidden` : ''}</span>
+            {onClearFocus && (
+                <button onClick={onClearFocus} style={{ background: 'transparent', border: 'none', color: '#1e3a8a', fontWeight: 700, cursor: 'pointer', fontSize: 12 }}>
+                    Show all parts →
+                </button>
+            )}
         </div>
     );
 }
@@ -1026,7 +1062,7 @@ function ReleasesTab({ data, onNewRelease }: { data: BPAGetResponse; onNewReleas
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [rows, setRows] = useState<BlanketRelease[]>([]);
-    const [filter, setFilter] = useState<'ALL' | 'DRAFT' | 'FULFILLED' | 'CANCELLED'>('ALL');
+    const [filter, setFilter] = useState<'ALL' | 'OPEN' | 'FULFILLED' | 'CANCELLED'>('ALL');
 
     const fetchReleases = useCallback(async () => {
         setLoading(true); setError(null);
@@ -1081,7 +1117,7 @@ function ReleasesTab({ data, onNewRelease }: { data: BPAGetResponse; onNewReleas
             }}>
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                     <FilterBtn active={filter === 'ALL'} onClick={() => setFilter('ALL')} label="All" count={rows.length} />
-                    <FilterBtn active={filter === 'DRAFT'} onClick={() => setFilter('DRAFT')} label="Drafted" count={rows.filter(r => r.status === 'DRAFT').length} color="#3b82f6" />
+                    <FilterBtn active={filter === 'OPEN'} onClick={() => setFilter('OPEN')} label="Drafted" count={rows.filter(r => r.status === 'OPEN').length} color="#3b82f6" />
                     <FilterBtn active={filter === 'FULFILLED'} onClick={() => setFilter('FULFILLED')} label="Delivered" count={rows.filter(r => r.status === 'FULFILLED').length} color="#16a34a" />
                     <FilterBtn active={filter === 'CANCELLED'} onClick={() => setFilter('CANCELLED')} label="Cancelled" count={rows.filter(r => r.status === 'CANCELLED').length} color="#64748b" />
                 </div>

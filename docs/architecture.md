@@ -1,8 +1,10 @@
 # Architecture Overview
 
-> **Version:** 0.5.5 | **Last Updated:** 2026-04-25
+> **Version:** 0.5.6 | **Last Updated:** 2026-05-03
 >
-> **For the BPA / Release / Rack-Storage / Goods-Receipt subsystem (added in 0.5.4–0.5.5),** see [`docs/releases/IMPLEMENTATION_0.5.4_TO_0.5.5.md`](releases/IMPLEMENTATION_0.5.4_TO_0.5.5.md) for the full technical change log.
+> **For the BPA / Release / Rack-Storage / Goods-Receipt subsystem (added in 0.5.4–0.5.5),** see [`releases/IMPLEMENTATION_0.5.4_TO_0.5.5.md`](releases/IMPLEMENTATION_0.5.4_TO_0.5.5.md).
+>
+> **For the Intelligent Pallet Allocation matcher and print artefacts (added in 0.5.6),** see [`releases/IMPLEMENTATION_0.5.5_TO_0.5.6.md`](releases/IMPLEMENTATION_0.5.5_TO_0.5.6.md).
 
 ## System Architecture
 
@@ -66,7 +68,6 @@ Key table groups:
 flowchart LR
     A[Production Floor] -->|PRODUCTION_RECEIPT| B[FG Warehouse PW]
     B -->|DISPATCH_TO_TRANSIT| C[In-Transit IT]
-    C -->|TRANSFER_TO_WAREHOUSE| D["S&V Warehouse"]
     C -->|TRANSFER_TO_WAREHOUSE| E[US Warehouse]
     B -->|RETURN_TO_PRODUCTION| A
     C -->|CUSTOMER_SALE| F[Customer]
@@ -114,6 +115,40 @@ flowchart TD
     F -->|Approve| G[Stock Dispatched]
     G --> H[Movement to In-Transit]
 ```
+
+### Intelligent Pallet Allocation (added in 0.5.6)
+
+The New Blanket Release wizard auto-fits whole pallets to the customer's
+requested quantity using a subset-sum matcher. Whole-pallet only — no
+partial-pallet picks.
+
+```mermaid
+flowchart TD
+    A[Customer Asked Qty] --> B[matchPallets in palletMatcher.ts]
+    B --> C{Exact match?}
+    C -->|Yes, FIFO prefix| D[Auto-allocate · skip choice]
+    C -->|Yes, non-prefix subset| D
+    C -->|No| E{Stock sufficient?}
+    E -->|No| F[Insufficient · partial fulfilment option]
+    E -->|Yes| G[Two amendment options]
+    G --> G1[Round Up to N+]
+    G --> G2[Round Down to N-]
+    G1 --> H[Operator picks · adjustmentType=UP]
+    G2 --> H2[Operator picks · adjustmentType=DOWN]
+    D --> I[Step 5 Review]
+    H --> I
+    H2 --> I
+    F --> I
+    I --> J{Adjusted?}
+    J -->|Yes| K[Print Amendment Draft for customer]
+    J -->|—| L[Print Picking List]
+    K --> L
+    L --> M[Submit Release]
+```
+
+The matcher is a 0/1 knapsack DP with parent-pointer recovery, runs
+client-side on data already returned by `release_list_available_pallets`.
+See [`releases/IMPLEMENTATION_0.5.5_TO_0.5.6.md`](releases/IMPLEMENTATION_0.5.5_TO_0.5.6.md) §4 for the algorithm.
 
 ## Security Architecture
 

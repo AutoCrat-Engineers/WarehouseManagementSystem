@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { inventoryService } from '../services/inventoryService';
+import { inventoryService, type USReleaseHolds } from '../services/inventoryService';
 import type {
     ItemStockDashboard,
     ItemStockDistribution,
@@ -184,6 +184,39 @@ export function useItemStockDistribution(
     useEffect(() => {
         fetchData();
     }, [fetchData]);
+
+    return { data, loading, error, refetch: fetchData };
+}
+
+// ============================================================================
+// HOOK: useUSReleaseHolds
+// Per-release breakdown of ALLOCATED and RESERVED holds at US warehouse
+// ============================================================================
+
+export function useUSReleaseHolds(partNumber: string | null) {
+    const [data, setData] = useState<USReleaseHolds>({ allocated: [], reserved: [] });
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const fetchData = useCallback(async () => {
+        if (!partNumber) {
+            setData({ allocated: [], reserved: [] });
+            return;
+        }
+        setLoading(true);
+        setError(null);
+        try {
+            const result = await inventoryService.getUSReleaseHolds(partNumber);
+            setData(result);
+        } catch (err: any) {
+            console.error('useUSReleaseHolds error:', err);
+            setError(err.message || 'Failed to fetch US release holds');
+        } finally {
+            setLoading(false);
+        }
+    }, [partNumber]);
+
+    useEffect(() => { fetchData(); }, [fetchData]);
 
     return { data, loading, error, refetch: fetchData };
 }

@@ -25,14 +25,12 @@ const REVERSE_MOVEMENT_TYPES = [
 const DB_CODE_MAP: Record<string, string> = {
   'WH-PROD-FLOOR': 'PW',
   'WH-INTRANSIT': 'IT',
-  'WH-SNV-MAIN': 'SV',
   'WH-US-TRANSIT': 'US',
 };
 
 const LOCATION_NAMES: Record<string, string> = {
   PW: 'FG Warehouse',
   IT: 'In-Transit',
-  SV: 'S&V Warehouse',
   US: 'US Warehouse',
   PF: 'Production Floor',
 };
