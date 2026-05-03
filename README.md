@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/Version-0.5.5-blue?style=for-the-badge" alt="Version" /></a>
+  <a href="#"><img src="https://img.shields.io/badge/Version-0.5.6-blue?style=for-the-badge" alt="Version" /></a>
   <a href="#"><img src="https://img.shields.io/badge/Status-Active_Development-brightgreen?style=for-the-badge" alt="Status" /></a>
   <a href="#"><img src="https://img.shields.io/badge/License-Proprietary-red?style=for-the-badge" alt="License" /></a>
   <a href="#"><img src="https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=white" alt="React" /></a>
@@ -61,7 +61,7 @@ The **Warehouse Management System (WMS)** is a type-safe, real-time application 
 | :--- | :--- |
 | **Enterprise Dashboard** | Real-time KPIs, critical stock alerts, stock distribution, and operational summaries for warehouse managers. |
 | **Item Master** | Centralised catalogue of Finished Goods (FG) with part numbers, descriptions, and master serial numbers. |
-| **Multi-Warehouse Inventory** | Real-time stock tracking across multiple warehouse types (S&V, Production, In Transit, Distribution) with status monitoring (Healthy, Warning, Critical, Overstock). |
+| **Multi-Warehouse Inventory** | Real-time stock tracking across multiple warehouse types (Production, In Transit, Distribution) with status monitoring (Healthy, Warning, Critical, Overstock). |
 | **Stock Movements** | Full ledger-based transaction system with movement types (Inward, Outward, Transfer, Adjustment), approval workflows, and printed slips. Backed by dedicated `sm_*` Supabase Edge Functions for server-side validation and audit. |
 | **Packing Module** | End-to-end FG packing workflow — sticker generation with QR-coded barcodes, packing details management, box management. |
 | **Packing Engine** | Advanced container management, pallet state machine with automatic fill detection and adjustment box handling, rack view. |
@@ -75,6 +75,7 @@ The **Warehouse Management System (WMS)** is a type-safe, real-time application 
 | **Customer Agreements (BPA)** | Long-term blanket purchase agreements with multi-part lines, fulfillment dashboard, and amendment history. Supports SPOT, BPA, Informal-Borrow, and Synthesized scenarios. |
 | **Blanket Orders** | Operational mirror of customer agreements with running totals (released / delivered / in-rack quantity per line). |
 | **Blanket Releases** | Customer-PO release scheduling against an agreement with FIFO pallet selection and need-by-date prioritisation. |
+| **Intelligent Pallet Allocation** | Subset-sum matcher (added 0.5.6) auto-fits whole pallets to a customer's requested quantity exactly, or proposes the closest options above/below with auto-generated customer amendment artefacts. Whole-pallet only · FIFO-biased · client-side. |
 | **Release Allocation Holds** | Per-release pallet locks with `ALLOCATED` (earliest need-by wins) vs `RESERVED` (queued) buckets. Stock decrements only on delivery. |
 | **Inbound Receiving / Goods Receipt** | Per-MPL goods receipt with discrepancy tracking (missing / damaged / short / quality hold) and rack placement. |
 | **Rack Storage** | Visual rack-cell view at the 3PL warehouse with pallet back-chain (release → sub-invoice → MPL → invoice → BPA). |
@@ -199,7 +200,13 @@ WarehouseManagementSystem/
 │   │   └── 0001-edge-function-sm-prefix-and-jwt-auth.md
 │   ├── releases/                # Per-version release notes
 │   │   ├── CHANGES_0.5.3.md
-│   │   └── CHANGES_0.5.4.md
+│   │   ├── CHANGES_0.5.4.md
+│   │   ├── CHANGES_0.5.5.md
+│   │   ├── CHANGES_0.5.6.md
+│   │   ├── RELEASE_0.5.5.md
+│   │   ├── RELEASE_0.5.6.md
+│   │   ├── IMPLEMENTATION_0.5.4_TO_0.5.5.md
+│   │   └── IMPLEMENTATION_0.5.5_TO_0.5.6.md
 │   ├── reference/               # Reference documentation
 │   │   ├── rbac-database.md     # Granular RBAC system details
 │   │   ├── troubleshooting.md   # Common issues and fixes
@@ -681,13 +688,14 @@ MAJOR.MINOR.PATCH
 | **MINOR** | New features, backwards-compatible |
 | **PATCH** | Bug fixes and minor improvements |
 
-**Current Version:** `v0.5.5`
+**Current Version:** `v0.5.6`
 
 ### Version History
 
 | Version | Date | Type | Highlights |
 | :--- | :--- | :--- | :--- |
-| **0.5.5** | 2026-04-25 | Minor | Release allocation holds (`On-Hand / Allocated / Reserved / Available` per warehouse, delivery-gated stock-out, MPL-cancel cascade); historical data import (4 BPAs, 197 pallets, 30 releases, 31 tariff invoices); 3 new architecture docs |
+| **0.5.6** | 2026-05-03 | Minor | Intelligent Pallet Allocation in New Blanket Release wizard (subset-sum matcher, exact / round-up / round-down options, auto-amendment); two new industrial print artefacts (Picking List, Amendment Draft mirroring OPW format); S&V warehouse decommission (migration 059); historical `shipment_number` backfill (migration 060); BPA Detail per-part fulfilment focus + filter-pill bug fix; Inventory Hub UI polish |
+| 0.5.5 | 2026-04-25 | Minor | Release allocation holds (`On-Hand / Allocated / Reserved / Available` per warehouse, delivery-gated stock-out, MPL-cancel cascade); historical data import (4 BPAs, 197 pallets, 30 releases, 31 tariff invoices); 3 new architecture docs |
 | 0.5.4 | 2026-04-21 | Minor | Item Master edge functions (`im_*`), hard-cascade → soft delete, `item_code → part_number` schema migration groundwork (Phases 1–3a) |
 | 0.5.3 | 2026-04-18 | Patch | Edge function reorganization (`sm_*` prefix), JWT auth stabilization, per-function READMEs, ADR process, CODEOWNERS |
 | 0.5.2 | 2026-04-11 | Patch | Branch alignment, security hardening, deploy artifact isolation |
@@ -706,6 +714,50 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
 ---
 
 ## Recent Changes
+
+### v0.5.6 — Intelligent Pallet Allocation, S&V Decommission & Print Artefacts (2026-05-03)
+
+This minor release rebuilds the New Blanket Release wizard around an intelligent pallet matcher and ships two industrial-grade print documents. Bundled fixes retire the S&V warehouse and backfill historical shipment numbers.
+
+#### Intelligent Pallet Allocation
+- New [`palletMatcher.ts`](src/components/release/palletMatcher.ts) module — pure-TS subset-sum matcher with two-stage strategy: FIFO-prefix shortcut → 0/1-knapsack DP with parent-pointer recovery. Whole-pallet only, FIFO-biased, zero dependencies, runs client-side
+- Step 4 of [`CreateRelease.tsx`](src/components/release/CreateRelease.tsx) rebuilt with three render paths driven by `MatcherResult`:
+  - **Exact match** — green hero, auto-applied
+  - **No exact match** — two stacked option cards (Round Up ▲ / Round Down ▼), each with pallet list + auto-generated customer amendment message + Copy button
+  - **Insufficient stock** — red hero with partial-fulfilment path
+- Manual override preserved as `Step4Manual` for power users
+- Step 3 softens REL MULT to a hint (actual pallet outer-quantities vary per shipment); captures `customerRequestedQuantity` separately so the customer's original ask survives any amendment
+- Step 5 surfaces amendments via a top banner, header pill (`▲ AMENDED UP` / `▼ AMENDED DOWN` / `✎ MANUAL`), and a diff'd quantity grid (Customer Asked vs Releasing)
+
+#### Industrial-grade print artefacts
+- New [`releasePrints.ts`](src/components/release/releasePrints.ts) module exporting `printPickingList()` and `printAmendmentDraft()`
+- **Picking List** — internal warehouse pull document with rack-sorted rows, ✓-checkbox per pallet, signature blocks for picker and verifier, discrepancy notes, standing-instructions footer
+- **Amendment Draft** — customer-facing document mirroring OPW's release-document format (3-column top band, two-row commercial strip, items table with diff'd Quantity and Extended Price cells, 24-hour acknowledgement banner, two-column signature panel)
+- Both share an A4 portrait, 6mm margin, 1.5px outer-border layout consistent with the existing PROFORMA INVOICE and PACKING LIST prints
+
+#### S&V Warehouse decommission (DB migration 059)
+- Frontend types, UI cards, movement routes, and edge-function code-mappings purged of S&V references
+- Migration 059 deletes all S&V data from `release_pallet_holds`, `inv_warehouse_stock`, `inv_movement_*`, `inv_stock_movements`, and finally `inv_warehouses`; rebuilds `vw_item_stock_distribution` (and dependents) without `snv_*` columns
+- ⚠ Destructive and irreversible — recovery requires a backup snapshot
+
+#### Historical `shipment_number` backfill (DB migration 060)
+- Populates `shipment_number` on the 27 historical goods-receipts and 29 historical proformas seeded with NULL by migration 051
+- Numbering scheme: `SHIP-2025-NNN` based on year extracted from `proforma_number`, sequenced by `proforma_number` order
+- Result: 100% coverage on both tables; the wizard's Review step now shows real shipment numbers everywhere
+- Companion: `release_list_available_pallets` edge function modified to expose `shipment_number` (with `goods_receipts → pack_proforma_invoices` fallback)
+
+#### UI polish bundled
+- BPA Detail Fulfilment tab can be filtered to a single part when opened from a per-part card
+- BPA Detail "Drafted" filter pill bug fixed (`'DRAFT'` → `'OPEN'`)
+- BPA List "New Release" buttons no longer all spin together (per-card loading state)
+- Release wizard auto-detects next sequence (`{BPA}-{maxSeq+1}`) with green AUTO chip and reset link
+- Inventory Hub US Warehouse card recoloured (red → teal) and rebuilt with hero Available-to-Promise tile, KPI chips, stacked utilisation bar, and per-release breakdown with mini progress bars
+- In-Transit card mislabelled "Allocated" row corrected to "Reserved"
+
+#### Documentation
+- [`docs/releases/CHANGES_0.5.6.md`](docs/releases/CHANGES_0.5.6.md) — release notes
+- [`docs/releases/RELEASE_0.5.6.md`](docs/releases/RELEASE_0.5.6.md) — executive release report
+- [`docs/releases/IMPLEMENTATION_0.5.5_TO_0.5.6.md`](docs/releases/IMPLEMENTATION_0.5.5_TO_0.5.6.md) — full technical change log (architecture, algorithm, UI, prints, DB, edge fn, files manifest, verification recipes, rollback recipe, follow-ups)
 
 ### v0.5.5 — Release Allocation Holds & Historical Data Import (2026-04-25)
 

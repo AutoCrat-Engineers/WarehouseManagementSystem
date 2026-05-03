@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Unified Item Details Module
  *
  * Merges the Item Master (CRUD) and Inventory (stock + warehouse details) into a single view.
@@ -36,7 +36,7 @@ import {
 import * as itemsApi from '../utils/api/itemsSupabase';
 import { fetchWithAuth } from '../utils/supabase/auth';
 import { getEdgeFunctionUrl } from '../utils/supabase/info';
-import { useItemStockDistribution } from '../hooks/useInventory';
+import { useItemStockDistribution, useUSReleaseHolds } from '../hooks/useInventory';
 import type { ItemStockDashboard } from '../types/inventory';
 
 // ============================================================================
@@ -424,10 +424,10 @@ function BlanketOrderRow({ order }: BlanketOrderRowProps) {
               <p style={upperLabelStyle}>Status</p>
               <div style={{ display: 'flex', alignItems: 'center', minHeight: '22px' }}>
                 <Badge variant={
-                  order.agreement_status === 'ACTIVE'    ? 'success' :
-                  order.agreement_status === 'AMENDED'   ? 'warning' :
-                  order.agreement_status === 'DRAFT'     ? 'info'    :
-                  order.agreement_status === 'CANCELLED' ? 'danger'  : 'neutral'
+                  order.agreement_status === 'ACTIVE' ? 'success' :
+                    order.agreement_status === 'AMENDED' ? 'warning' :
+                      order.agreement_status === 'DRAFT' ? 'info' :
+                        order.agreement_status === 'CANCELLED' ? 'danger' : 'neutral'
                 } style={{ fontWeight: 700, fontSize: '11px', letterSpacing: '0.5px' }}>
                   {order.agreement_status === 'UNKNOWN' ? '—' : order.agreement_status}
                 </Badge>
@@ -507,6 +507,9 @@ function ItemViewModal({ isOpen, onClose, item }: {
   const { data: distribution, loading: loadingDistribution } = useItemStockDistribution(
     isOpen && item ? item.part_number : null
   );
+  const { data: usHolds } = useUSReleaseHolds(
+    isOpen && item ? item.part_number : null
+  );
 
   useEffect(() => { if (!isOpen) { setBlanketSearch(''); setActiveTab('details'); } }, [isOpen]);
 
@@ -536,38 +539,38 @@ function ItemViewModal({ isOpen, onClose, item }: {
       // Transform: one BlanketOrder per agreement_part (each part belongs
       // to exactly one agreement). Line-config supplies running totals.
       const agreementParts = (json.agreements || []) as any[];
-      const lineConfigs    = (json.line_configs || []) as any[];
+      const lineConfigs = (json.line_configs || []) as any[];
       const nextReleaseByAgr = (json.next_release_by_agreement || {}) as Record<string, string>;
       const lineByAgr = new Map<string, any>();
       for (const lc of lineConfigs) lineByAgr.set(lc.agreement_id, lc);
 
       const transformed: BlanketOrder[] = agreementParts.map((p: any) => {
         const agr = p.agreement || {};
-        const lc  = lineByAgr.get(p.agreement_id) ?? {};
-        const blanketQty   = Number(p.blanket_quantity ?? 0);
-        const releasedQty  = Number(lc.released_quantity ?? 0);
-        const fulfillPct   = lc.fulfillment_pct != null
-            ? Number(lc.fulfillment_pct)
-            : (blanketQty > 0 ? (releasedQty / blanketQty) * 100 : 0);
+        const lc = lineByAgr.get(p.agreement_id) ?? {};
+        const blanketQty = Number(p.blanket_quantity ?? 0);
+        const releasedQty = Number(lc.released_quantity ?? 0);
+        const fulfillPct = lc.fulfillment_pct != null
+          ? Number(lc.fulfillment_pct)
+          : (blanketQty > 0 ? (releasedQty / blanketQty) * 100 : 0);
         return {
-          id:                  p.id,
-          bpa_number:          agr.agreement_number || '—',
-          master_serial_no:    p.msn_code || '—',
-          part_number:         p.part_number || '—',
-          customer_name:       agr.customer_name || '—',
-          blanket_order_qty:   blanketQty,
+          id: p.id,
+          bpa_number: agr.agreement_number || '—',
+          master_serial_no: p.msn_code || '—',
+          part_number: p.part_number || '—',
+          customer_name: agr.customer_name || '—',
+          blanket_order_qty: blanketQty,
           blanket_order_start: agr.effective_start_date || '',
-          blanket_order_end:   agr.effective_end_date   || '',
-          monthly_usage:       Number(p.avg_monthly_demand ?? 0),
-          next_delivery:       nextReleaseByAgr[p.agreement_id] ?? '',
-          release_multiple:    p.release_multiple ?? 1,
-          min_stock:           p.min_warehouse_stock ?? 0,
-          max_stock:           p.max_warehouse_stock ?? 0,
-          safety_stock:        p.safety_stock ?? 0,
-          agreement_status:    (agr.status || 'UNKNOWN') as BlanketOrder['agreement_status'],
-          agreement_revision:  Number(agr.agreement_revision ?? 0),
-          released_quantity:   releasedQty,
-          fulfillment_pct:     Math.round(fulfillPct * 10) / 10,
+          blanket_order_end: agr.effective_end_date || '',
+          monthly_usage: Number(p.avg_monthly_demand ?? 0),
+          next_delivery: nextReleaseByAgr[p.agreement_id] ?? '',
+          release_multiple: p.release_multiple ?? 1,
+          min_stock: p.min_warehouse_stock ?? 0,
+          max_stock: p.max_warehouse_stock ?? 0,
+          safety_stock: p.safety_stock ?? 0,
+          agreement_status: (agr.status || 'UNKNOWN') as BlanketOrder['agreement_status'],
+          agreement_revision: Number(agr.agreement_revision ?? 0),
+          released_quantity: releasedQty,
+          fulfillment_pct: Math.round(fulfillPct * 10) / 10,
         };
       });
       setBlanketOrders(transformed);
@@ -646,7 +649,7 @@ function ItemViewModal({ isOpen, onClose, item }: {
           </div>
           {/* Row 4: Unit Price | Standard Cost */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-            <DetailField label="Unit Price" value={item.unit_price != null ? `Γé╣${item.unit_price.toLocaleString()}` : '-'} />
+            <DetailField label="Unit Price" value={item.unit_price != null ? `₹${item.unit_price.toLocaleString()}` : '-'} />
             <DetailField label="Standard Cost" value={item.standard_cost != null ? `$${item.standard_cost.toLocaleString()}` : '-'} />
           </div>
           {/* Row 5: Lead Time | Status */}
@@ -718,46 +721,160 @@ function ItemViewModal({ isOpen, onClose, item }: {
                   <span style={{ fontWeight: 600, color: 'var(--enterprise-info)' }}>{(distribution as any)?.inTransitQty ?? 0}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
-                  <span style={{ color: 'var(--enterprise-gray-500)' }}>Allocated</span>
+                  <span style={{ color: 'var(--enterprise-gray-500)' }}>Reserved</span>
                   <span style={{ fontWeight: 600, color: 'var(--enterprise-warning)' }}>{(distribution as any)?.blanketNextMonthReserved ?? 0}</span>
                 </div>
               </div>
-              {/* ≡ƒƒ⌐ S & V */}
-              <div style={{ background: 'white', padding: '16px', borderRadius: '10px', border: '1px solid var(--enterprise-gray-200)', borderTop: '3px solid var(--enterprise-secondary, #6366f1)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px', fontSize: '13px', fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>
-                  <Package size={16} style={{ color: 'var(--enterprise-secondary)' }} /> S & V
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px', marginBottom: '8px' }}>
-                  <span style={{ color: 'var(--enterprise-gray-500)' }}>On Hand</span>
-                  <span style={{ fontWeight: 600, color: 'var(--enterprise-secondary)' }}>{(distribution as any)?.snvOnHand ?? 0}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
-                  <span style={{ color: 'var(--enterprise-gray-500)' }}>Reserved</span>
-                  <span style={{ fontWeight: 600, color: 'var(--enterprise-warning)' }}>0</span>
-                </div>
-              </div>
-              {/* ≡ƒƒÑ US Warehouse */}
-              <div style={{ background: 'white', padding: '16px', borderRadius: '10px', border: '1px solid var(--enterprise-gray-200)', borderTop: '3px solid #ef4444' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px', fontSize: '13px', fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>
-                  <Package size={16} style={{ color: '#ef4444' }} /> US Warehouse
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px', marginBottom: '6px' }}>
-                  <span style={{ color: 'var(--enterprise-gray-500)' }}>On Hand</span>
-                  <span style={{ fontWeight: 600, color: '#6366f1' }}>{(distribution as any)?.usTransitOnHand ?? 0}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px', marginBottom: '6px' }}>
-                  <span style={{ color: 'var(--enterprise-gray-500)' }}>Allocated</span>
-                  <span style={{ fontWeight: 600, color: 'var(--enterprise-error)' }}>{(distribution as any)?.usTransitAllocated ?? 0}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px', marginBottom: '6px' }}>
-                  <span style={{ color: 'var(--enterprise-gray-500)' }}>Reserved</span>
-                  <span style={{ fontWeight: 600, color: 'var(--enterprise-warning)' }}>{(distribution as any)?.usTransitReserved ?? 0}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
-                  <span style={{ color: 'var(--enterprise-gray-500)' }}>Available</span>
-                  <span style={{ fontWeight: 700, color: 'var(--enterprise-success)' }}>{(distribution as any)?.usTransitAvailable ?? 0}</span>
-                </div>
-              </div>
+              {/* US Warehouse — full-width with visual release breakdown */}
+              {(() => {
+                const onHand     = (distribution as any)?.usTransitOnHand ?? 0;
+                const allocated  = (distribution as any)?.usTransitAllocated ?? 0;
+                const reserved   = (distribution as any)?.usTransitReserved ?? 0;
+                const available  = (distribution as any)?.usTransitAvailable ?? 0;
+                const denom      = onHand > 0 ? onHand : 1;
+                const pctAlloc   = (allocated / denom) * 100;
+                const pctRes     = (reserved  / denom) * 100;
+                const pctAvail   = (available / denom) * 100;
+                const utilization = pctAlloc + pctRes;
+                const health =
+                  utilization >= 90 ? { label: 'Critical', bg: '#fef2f2', fg: '#b91c1c', dot: '#dc2626' } :
+                  utilization >= 70 ? { label: 'Tight',    bg: '#fffbeb', fg: '#b45309', dot: '#f59e0b' } :
+                                      { label: 'Healthy',  bg: '#f0fdf4', fg: '#15803d', dot: '#16a34a' };
+                const allocTotal = usHolds.allocated.reduce((s, r) => s + r.quantity, 0) || 1;
+                const resTotal   = usHolds.reserved.reduce((s, r)  => s + r.quantity, 0) || 1;
+
+                return (
+                  <div style={{ gridColumn: '1 / -1', background: 'linear-gradient(180deg, #fff 0%, #f8fafc 100%)', padding: '20px', borderRadius: '12px', border: '1px solid var(--enterprise-gray-200)', borderTop: '3px solid #0d9488', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+                    {/* Header: title + health pill */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <Package size={16} color="white" />
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--enterprise-gray-800)', lineHeight: 1.1 }}>US Warehouse</div>
+                          <div style={{ fontSize: '11px', color: 'var(--enterprise-gray-500)', marginTop: '2px' }}>WH-US-TRANSIT</div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '4px 10px', borderRadius: '999px', background: health.bg, color: health.fg, fontSize: '11px', fontWeight: 700, letterSpacing: '0.3px' }}>
+                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: health.dot }} />
+                        {health.label.toUpperCase()} · {utilization.toFixed(0)}% UTIL
+                      </div>
+                    </div>
+
+                    {/* Hero row: Available big number + KPI chips */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 2fr', gap: '20px', marginBottom: '16px', alignItems: 'stretch' }}>
+                      <div style={{ background: 'white', border: '1px solid var(--enterprise-gray-100)', borderRadius: '10px', padding: '14px 16px' }}>
+                        <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.8px', color: 'var(--enterprise-gray-500)', textTransform: 'uppercase' }}>Available to Promise</div>
+                        <div style={{ fontSize: '28px', fontWeight: 800, color: '#16a34a', lineHeight: 1.1, marginTop: '4px', fontVariantNumeric: 'tabular-nums' }}>
+                          {available.toLocaleString()}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--enterprise-gray-500)', marginTop: '2px' }}>
+                          {pctAvail.toFixed(1)}% of on-hand
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                        {[
+                          { label: 'On Hand',   value: onHand,    color: '#6366f1', tint: '#eef2ff' },
+                          { label: 'Allocated', value: allocated, color: '#dc2626', tint: '#fef2f2' },
+                          { label: 'Reserved',  value: reserved,  color: '#d97706', tint: '#fffbeb' },
+                        ].map(k => (
+                          <div key={k.label} style={{ background: 'white', border: '1px solid var(--enterprise-gray-100)', borderLeft: `3px solid ${k.color}`, borderRadius: '8px', padding: '10px 12px' }}>
+                            <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.5px', color: 'var(--enterprise-gray-500)', textTransform: 'uppercase' }}>{k.label}</div>
+                            <div style={{ fontSize: '18px', fontWeight: 700, color: k.color, marginTop: '2px', fontVariantNumeric: 'tabular-nums' }}>
+                              {k.value.toLocaleString()}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Stacked utilization bar */}
+                    <div style={{ marginBottom: '18px' }}>
+                      <div style={{ display: 'flex', height: '10px', borderRadius: '999px', overflow: 'hidden', background: 'var(--enterprise-gray-100)' }}>
+                        {pctAlloc > 0 && <div title={`Allocated ${allocated.toLocaleString()}`} style={{ width: `${pctAlloc}%`, background: 'linear-gradient(90deg, #ef4444, #dc2626)' }} />}
+                        {pctRes   > 0 && <div title={`Reserved ${reserved.toLocaleString()}`}  style={{ width: `${pctRes}%`,   background: 'linear-gradient(90deg, #f59e0b, #d97706)' }} />}
+                        {pctAvail > 0 && <div title={`Available ${available.toLocaleString()}`} style={{ width: `${pctAvail}%`, background: 'linear-gradient(90deg, #22c55e, #16a34a)' }} />}
+                      </div>
+                      <div style={{ display: 'flex', gap: '14px', marginTop: '8px', fontSize: '11px', color: 'var(--enterprise-gray-600)' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}><span style={{ width: '8px', height: '8px', borderRadius: '2px', background: '#dc2626' }} />Allocated {pctAlloc.toFixed(1)}%</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}><span style={{ width: '8px', height: '8px', borderRadius: '2px', background: '#d97706' }} />Reserved {pctRes.toFixed(1)}%</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}><span style={{ width: '8px', height: '8px', borderRadius: '2px', background: '#16a34a' }} />Available {pctAvail.toFixed(1)}%</span>
+                      </div>
+                    </div>
+
+                    {/* Per-release breakdown — visual rows */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                      {/* Allocated */}
+                      <div style={{ background: 'white', border: '1px solid var(--enterprise-gray-100)', borderRadius: '10px', padding: '12px 14px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 700, color: '#dc2626', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
+                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#dc2626' }} /> Allocated · {usHolds.allocated.length} {usHolds.allocated.length === 1 ? 'release' : 'releases'}
+                          </div>
+                          <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--enterprise-gray-600)', fontVariantNumeric: 'tabular-nums' }}>{allocated.toLocaleString()}</span>
+                        </div>
+                        {usHolds.allocated.length === 0 ? (
+                          <div style={{ fontSize: '12px', color: 'var(--enterprise-gray-400)', fontStyle: 'italic', padding: '8px 0' }}>No allocated releases</div>
+                        ) : (
+                          <div style={{ maxHeight: '160px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {usHolds.allocated.map(r => {
+                              const share = (r.quantity / allocTotal) * 100;
+                              return (
+                                <div key={`alloc-${r.releaseNumber}`}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: '12px', marginBottom: '4px' }}>
+                                    <span style={{ color: 'var(--enterprise-gray-700)', fontFamily: 'ui-monospace, SFMono-Regular, monospace', fontSize: '11.5px' }}>{r.releaseNumber}</span>
+                                    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: '6px' }}>
+                                      <span style={{ fontSize: '10px', color: 'var(--enterprise-gray-400)' }}>{share.toFixed(0)}%</span>
+                                      <span style={{ fontWeight: 700, color: '#dc2626', fontVariantNumeric: 'tabular-nums' }}>{r.quantity.toLocaleString()}</span>
+                                    </span>
+                                  </div>
+                                  <div style={{ height: '4px', background: '#fef2f2', borderRadius: '999px', overflow: 'hidden' }}>
+                                    <div style={{ width: `${share}%`, height: '100%', background: 'linear-gradient(90deg, #ef4444, #dc2626)', borderRadius: '999px' }} />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Reserved */}
+                      <div style={{ background: 'white', border: '1px solid var(--enterprise-gray-100)', borderRadius: '10px', padding: '12px 14px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 700, color: '#d97706', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
+                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#d97706' }} /> Reserved · {usHolds.reserved.length} {usHolds.reserved.length === 1 ? 'release' : 'releases'}
+                          </div>
+                          <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--enterprise-gray-600)', fontVariantNumeric: 'tabular-nums' }}>{reserved.toLocaleString()}</span>
+                        </div>
+                        {usHolds.reserved.length === 0 ? (
+                          <div style={{ fontSize: '12px', color: 'var(--enterprise-gray-400)', fontStyle: 'italic', padding: '8px 0' }}>No reserved releases</div>
+                        ) : (
+                          <div style={{ maxHeight: '160px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {usHolds.reserved.map(r => {
+                              const share = (r.quantity / resTotal) * 100;
+                              return (
+                                <div key={`res-${r.releaseNumber}`}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: '12px', marginBottom: '4px' }}>
+                                    <span style={{ color: 'var(--enterprise-gray-700)', fontFamily: 'ui-monospace, SFMono-Regular, monospace', fontSize: '11.5px' }}>{r.releaseNumber}</span>
+                                    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: '6px' }}>
+                                      <span style={{ fontSize: '10px', color: 'var(--enterprise-gray-400)' }}>{share.toFixed(0)}%</span>
+                                      <span style={{ fontWeight: 700, color: '#d97706', fontVariantNumeric: 'tabular-nums' }}>{r.quantity.toLocaleString()}</span>
+                                    </span>
+                                  </div>
+                                  <div style={{ height: '4px', background: '#fffbeb', borderRadius: '999px', overflow: 'hidden' }}>
+                                    <div style={{ width: `${share}%`, height: '100%', background: 'linear-gradient(90deg, #f59e0b, #d97706)', borderRadius: '999px' }} />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>
@@ -836,11 +953,11 @@ function ItemViewModal({ isOpen, onClose, item }: {
 // ItemReleaseSections — two-bucket card layout for the Blanket Release tab
 // ============================================================================
 
-const DRAFT_STATUSES    = ['DRAFT', 'CONFIRMED', 'AWAITING_PICKUP'];
+const DRAFT_STATUSES = ['DRAFT', 'CONFIRMED', 'AWAITING_PICKUP'];
 const DELIVERED_STATUSES = ['PICKED_UP', 'DELIVERED'];
 
 function ItemReleaseSections({ lines }: { lines: any[] }) {
-  const drafted   = lines.filter(l => DRAFT_STATUSES.includes(l.sub_invoice?.status));
+  const drafted = lines.filter(l => DRAFT_STATUSES.includes(l.sub_invoice?.status));
   const delivered = lines.filter(l => DELIVERED_STATUSES.includes(l.sub_invoice?.status));
   const cancelled = lines.filter(l => l.sub_invoice?.status === 'CANCELLED');
 
@@ -931,9 +1048,9 @@ function ItemReleaseSection({
 function ItemReleaseCard({ line, emphasis }: { line: any; emphasis: 'open' | 'done' | 'muted' }) {
   const [expanded, setExpanded] = useState(false);
   const si = line.sub_invoice || {};
-  const done      = DELIVERED_STATUSES.includes(si.status);
+  const done = DELIVERED_STATUSES.includes(si.status);
   const cancelled = si.status === 'CANCELLED';
-  const accent    = done ? '#16a34a' : cancelled ? '#6b7280' : 'var(--enterprise-primary)';
+  const accent = done ? '#16a34a' : cancelled ? '#6b7280' : 'var(--enterprise-primary)';
   const releaseNo = si.customer_po_number ?? si.sub_invoice_number ?? '—';
 
   return (
@@ -987,10 +1104,10 @@ function ItemReleaseCard({ line, emphasis }: { line: any; emphasis: 'open' | 'do
         <div style={{ background: 'linear-gradient(180deg, rgba(30,58,138,0.03) 0%, rgba(30,58,138,0.01) 100%)', borderTop: '1px solid var(--enterprise-gray-200)', padding: '14px 48px' }}>
           <p style={{ fontSize: 10, fontWeight: 700, color: accent, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '10px' }}>Release Details</p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
-            <MiniDetailCard label="Sub-Invoice #"  value={si.sub_invoice_number ?? '—'} mono />
-            <MiniDetailCard label="Total Pallets"  value={String(si.total_pallets ?? line.pallet_count ?? 0)} />
-            <MiniDetailCard label="Total Qty"      value={Number(si.total_quantity ?? line.quantity ?? 0).toLocaleString()} />
-            <MiniDetailCard label="Currency"       value={si.currency_code ?? 'USD'} />
+            <MiniDetailCard label="Sub-Invoice #" value={si.sub_invoice_number ?? '—'} mono />
+            <MiniDetailCard label="Total Pallets" value={String(si.total_pallets ?? line.pallet_count ?? 0)} />
+            <MiniDetailCard label="Total Qty" value={Number(si.total_quantity ?? line.quantity ?? 0).toLocaleString()} />
+            <MiniDetailCard label="Currency" value={si.currency_code ?? 'USD'} />
           </div>
         </div>
       )}
@@ -1508,7 +1625,7 @@ export function UnifiedItemMaster({ userRole, userPerms = {} }: UnifiedItemMaste
                 </div>
                 {/* Row 4: Unit Price | Standard Cost (equal) */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-                  <div><Label>Unit Price (Γé╣)</Label><Input type="text" value={unitPriceStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setUnitPriceStr(v); }} placeholder="0.00" /></div>
+                  <div><Label>Unit Price (₹)</Label><Input type="text" value={unitPriceStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setUnitPriceStr(v); }} placeholder="0.00" /></div>
                   <div><Label>Standard Cost ($)</Label><Input type="text" value={standardCostStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setStandardCostStr(v); }} placeholder="0.00" /></div>
                 </div>
                 {/* Row 5: Lead Time | Status (equal) */}
@@ -1560,7 +1677,7 @@ export function UnifiedItemMaster({ userRole, userPerms = {} }: UnifiedItemMaste
                 </div>
                 {/* Row 4: Unit Price | Standard Cost (equal) */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                  <div><Label>Unit Price (Γé╣)</Label><Input type="text" value={unitPriceStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setUnitPriceStr(v); }} placeholder="0.00" /></div>
+                  <div><Label>Unit Price (₹)</Label><Input type="text" value={unitPriceStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setUnitPriceStr(v); }} placeholder="0.00" /></div>
                   <div><Label>Standard Cost ($)</Label><Input type="text" value={standardCostStr} onChange={(e) => { const v = e.target.value; if (v === '' || /^\d*\.?\d*$/.test(v)) setStandardCostStr(v); }} placeholder="0.00" /></div>
                 </div>
               </>
@@ -1569,7 +1686,7 @@ export function UnifiedItemMaster({ userRole, userPerms = {} }: UnifiedItemMaste
 
           {/* Action Buttons */}
           <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
-            <Button type="submit" variant="primary" fullWidth disabled={editingItem ? !hasFormChanges() : false} style={{ padding: '12px 24px', fontWeight: 'var(--font-weight-semibold)', opacity: (editingItem && !hasFormChanges()) ? 0.5 : 1 }}>{editingItem ? 'Γ£ô Update Item' : '+ Create Item'}</Button>
+            <Button type="submit" variant="primary" fullWidth disabled={editingItem ? !hasFormChanges() : false} style={{ padding: '12px 24px', fontWeight: 'var(--font-weight-semibold)', opacity: (editingItem && !hasFormChanges()) ? 0.5 : 1 }}>{editingItem ? '✓ Update Item' : '+ Create Item'}</Button>
             <Button type="button" variant="tertiary" fullWidth onClick={handleCloseModal} style={{ padding: '12px 24px' }}>Cancel</Button>
           </div>
         </form>
