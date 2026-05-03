@@ -28,6 +28,7 @@ import type { Allocation } from './releaseService';
 import type { AvailablePallet } from './types';
 import { matchPallets, type MatcherResult } from './palletMatcher';
 import { printPickingList, printAmendmentDraft } from './releasePrints';
+import { generateIdempotencyKey } from '../../utils/idempotency';
 
 // ============================================================================
 // Types
@@ -164,7 +165,7 @@ export function CreateRelease({ onClose, onCreated, prefilledBpa, prefilledParts
                 customer_po_number: release.release_number,
                 buyer_name:         state.buyerName.trim(),
                 sub_invoice_date:   state.orderDate,
-                idempotency_key:    crypto.randomUUID(),
+                idempotency_key:    generateIdempotencyKey(),
             });
 
             onCreated({
