@@ -611,11 +611,25 @@ ${itemRows}
 <script>window.onload=function(){window.print();}<\/script></body></html>`;
 
         // ── Generate QR codes for each pallet ──
+        // Payload v2: line-delimited tokens. PALLET:<uuid> is the first line so it
+        // survives scanner truncation. Edge function `pallet_resolve_qr` parses this.
+        // Legacy pipe format (`mpl|pn|name|msn|qty`) is still resolvable server-side
+        // by best-effort field match for stickers printed before this change.
         const containerTrace = bt.containerTrace || [];
         const barcodeMap: Record<string, string> = {};
         for (const d of details) {
             const palletId = d.pallet_id || d.id || '';
-            const qrData = `${mpl.mpl_number}|${d.part_number || ''}|${d.item_name || d.item_code || ''}|${d.master_serial_no || ''}|${d.qty_per_pallet || 0}`;
+            const palletNumber = d.pallet_number || '';
+            const qrData = [
+                `PALLET:${palletId}`,
+                `MPL:${mpl.mpl_number}`,
+                `PN:${palletNumber}`,
+                `PART:${d.part_number || ''}`,
+                `ITEM:${d.item_name || d.item_code || ''}`,
+                `MSN:${d.master_serial_no || ''}`,
+                `QTY:${d.qty_per_pallet || 0}`,
+                `V:2`,
+            ].join('\n');
             try {
                 barcodeMap[palletId] = await QRCode.toDataURL(qrData, {
                     width: 150,
