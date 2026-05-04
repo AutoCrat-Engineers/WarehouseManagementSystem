@@ -1505,14 +1505,19 @@ function Step5Review({ state, onSubmit, submitting, error }: {
     const unitPrice = Number(part?.unit_price ?? 0);
     const extendedPrice = state.requestedQuantity * unitPrice;
     const selectedPallets = pallets.filter(p => state.selectedPallets.has(p.pallet_id));
-    const invoiceBreakdown = new Map<string, { qty: number; shipment_number: string | null }>();
+    const invoiceBreakdown = new Map<string, { qty: number; shipment_number: string | null; unit_price: number | null }>();
     for (const [pid, qty] of state.selectedPallets) {
         const p = pallets.find(x => x.pallet_id === pid);
         if (!p) continue;
         const k = p.parent_invoice_number ?? '(unlinked)';
         const shipmentStr = p.shipment_number || p.packing_list_number || null;
-        const prev = invoiceBreakdown.get(k) ?? { qty: 0, shipment_number: shipmentStr };
-        invoiceBreakdown.set(k, { qty: prev.qty + qty, shipment_number: prev.shipment_number || shipmentStr });
+        const palletPrice = p.parent_unit_price != null ? Number(p.parent_unit_price) : null;
+        const prev = invoiceBreakdown.get(k) ?? { qty: 0, shipment_number: shipmentStr, unit_price: palletPrice };
+        invoiceBreakdown.set(k, {
+            qty: prev.qty + qty,
+            shipment_number: prev.shipment_number || shipmentStr,
+            unit_price: prev.unit_price ?? palletPrice,
+        });
     }
 
     const adjustment = state.adjustmentType;
@@ -1600,9 +1605,8 @@ function Step5Review({ state, onSubmit, submitting, error }: {
                     <KeyVal label="Need By"     value={state.needByDate ? new Date(state.needByDate).toLocaleDateString() : '—'} />
                     <KeyVal label="Part"        value={state.partNumber} mono />
                     <KeyVal label="MSN"         value={part?.msn_code ?? '—'} />
-                    <KeyVal label={adjusted ? 'Customer Asked' : 'Quantity'}    value={(adjusted ? customerAsk : state.requestedQuantity).toLocaleString()} bold />
-                    {adjusted && <KeyVal label="Releasing" value={`${state.requestedQuantity.toLocaleString()} pcs`} bold accent />}
-                    {!adjusted && <KeyVal label="Unit Price"  value={`$${unitPrice.toFixed(4)}`} />}
+                    <KeyVal label="Quantity"    value={`${state.requestedQuantity.toLocaleString()} pcs`} bold accent />
+                    <KeyVal label="Unit Price"  value={`$${unitPrice.toFixed(4)}`} />
                     <KeyVal label="Release Value" value={`$${extendedPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} bold />
                 </div>
 
@@ -1617,7 +1621,7 @@ function Step5Review({ state, onSubmit, submitting, error }: {
                     )}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         {Array.from(invoiceBreakdown.entries()).map(([inv, data]) => (
-                            <div key={inv} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', fontSize: 13, padding: '12px 16px', background: 'white', borderRadius: 8, border: '1px solid var(--enterprise-gray-200)', alignItems: 'center' }}>
+                            <div key={inv} style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', fontSize: 13, padding: '12px 16px', background: 'white', borderRadius: 8, border: '1px solid var(--enterprise-gray-200)', alignItems: 'center', gap: 8 }}>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                                     <span style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Shipment Number</span>
                                     <span style={{ fontFamily: 'monospace', color: 'var(--enterprise-gray-900)', fontWeight: 600 }}>{data.shipment_number ?? '—'}</span>
@@ -1625,6 +1629,10 @@ function Step5Review({ state, onSubmit, submitting, error }: {
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                                     <span style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Invoice Number</span>
                                     <span style={{ fontFamily: 'monospace', color: 'var(--enterprise-gray-900)', fontWeight: 600 }}>{inv}</span>
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                    <span style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Unit Price</span>
+                                    <span style={{ color: 'var(--enterprise-gray-900)', fontWeight: 600 }}>{data.unit_price != null ? `$${data.unit_price.toFixed(4)}` : '—'}</span>
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
                                     <span style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Release Qty</span>
