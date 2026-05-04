@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.8] — 2026-05-04
+
+### Release Type: Patch — Mobile polish, Pallet Back-Chain & Release Review fixes
+
+### Changed
+
+- **Rack Storage (mobile)** — header redesigned for phones:
+  compact 4-up KPI strip (Racks · Locations · Items · Qty) replaces the
+  oversized 2×2 SummaryCards; rack tabs use `flex: 1` so all racks fit
+  without a horizontal scrollbar; Move / Add Stock buttons are now a
+  balanced 44px pair (equal flex, full width); Add Locs / Reduce
+  stretch full-width with a 40px touch target.
+- **Pallet Back-Chain drawer** —
+  - Removed the **Packing List** section entirely.
+  - Renamed *Inner Boxes* → **Inner Packing IDs**, switched the ID
+    source from `container_number` to `packing_boxes.packing_id`,
+    rendered as a compact 2-col (mobile) / 3-col (desktop) chip grid
+    with internal scroll (max 280 px) so 60+ rows no longer hijack the
+    drawer.
+  - PALLET section's Shipment # now falls back to
+    `shipment.shipment_number` when `pallet.shipment_sequence` is null
+    (was always `—`).
+  - Renamed `OH:` → `On-Hand:` with a tooltip explaining the value
+    (US-warehouse total for that MSN across all racks). Mapping
+    promoted to `usTransitOnHand → totalOnHand → usTransitStock` so
+    the field actually populates from the dashboard view.
+- **Blanket Release · Step 5 Review & Submit** —
+  - Removed the *Customer Asked* row from the upper card.
+  - Upper card now always shows **Quantity** (releasing qty) +
+    **Unit Price** (from BPA) + **Release Value**.
+  - Lower **Pallet Allocation** grid is now 4 columns: Shipment # ·
+    Invoice # · **Unit Price** · Release Qty. Unit price comes from
+    that invoice line's `parent_unit_price` (the MPL price), not from
+    the BPA.
+
+### Fixed
+
+- Rack tabs no longer leak a grey horizontal scrollbar on phones.
+- Move / Add Stock buttons no longer render at different sizes on
+  mobile (the wrapped `ActionButton` was ignoring the `flex: 1`
+  parent).
+- Pallet Back-Chain drawer's Inner Boxes list no longer overflows the
+  drawer height on pallets with many cartons.
+
+---
+
 ## [0.5.7] — 2026-05-04
 
 ### Release Type: Minor — Inbound Receiving redesign (scan-driven, per-pallet)
