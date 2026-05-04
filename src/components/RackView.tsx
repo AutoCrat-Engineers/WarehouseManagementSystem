@@ -20,6 +20,7 @@ import { getSupabaseClient } from '../utils/supabase/client';
 import { useAllItemsStockDashboard } from '../hooks/useInventory';
 import { fetchWithAuth } from '../utils/supabase/auth';
 import { getEdgeFunctionUrl } from '../utils/supabase/info';
+import { useViewport } from './rack-view/useViewport';
 
 type UserRole = 'L1' | 'L2' | 'L3' | null;
 
@@ -94,7 +95,104 @@ function BackChainRow({ label, value }: { label: string; value: React.ReactNode 
     );
 }
 
+/** Mobile bottom-sheet content for a selected rack cell. Shares logic with
+ *  the desktop side panel above but lays out for narrow viewports + thumb. */
+function RackCellSheetInner({ selectedLoc, selEntries, color, ohMap, onClose, onMove, onDelete, onPalletDetail, canEdit, canDelete }: {
+    selectedLoc: string;
+    selEntries: RackEntry[];
+    color: { border: string; text: string; fill: string; fb: string; bg: string };
+    ohMap: Map<string, number>;
+    onClose: () => void;
+    onMove: (entry: RackEntry) => void;
+    onDelete: (entry: RackEntry) => void;
+    onPalletDetail: (id: string) => void;
+    canEdit: boolean;
+    canDelete: boolean;
+}) {
+    const c = color;
+    const total = selEntries.reduce((s, e) => s + e.qty, 0);
+    return (
+        <>
+            <div style={{ padding: '8px 14px 12px', borderBottom: '1px solid var(--enterprise-gray-100)', display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span style={{ width: 40, height: 40, borderRadius: 10, background: c.fill, border: `1.5px solid ${c.fb}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 13, fontFamily: 'monospace', color: c.text, flexShrink: 0 }}>{selectedLoc}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--enterprise-gray-800)' }}>Rack {selectedLoc.charAt(0)}</div>
+                    <div style={{ fontSize: 12, color: 'var(--enterprise-gray-500)' }}>{selEntries.length} item{selEntries.length !== 1 ? 's' : ''} · {total.toLocaleString()} pcs</div>
+                </div>
+                <button onClick={onClose} aria-label="Close" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--enterprise-gray-500)', padding: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6 }}>
+                    <X size={20} />
+                </button>
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto' }}>
+                {selEntries.map((entry, idx) => {
+                    const oh = ohMap.get(entry.msn);
+                    const isPalletUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry.id);
+                    return (
+                        <div key={entry.id}
+                            onClick={() => isPalletUuid && onPalletDetail(entry.id)}
+                            style={{
+                                padding: '12px 14px',
+                                borderBottom: idx < selEntries.length - 1 ? '1px solid var(--enterprise-gray-50)' : 'none',
+                                cursor: isPalletUuid ? 'pointer' : 'default',
+                                display: 'flex', flexDirection: 'column', gap: 8,
+                            }}
+                        >
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                                <div style={{ width: 36, height: 36, borderRadius: 8, background: c.fill, border: `1px solid ${c.fb}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                    <Package size={16} style={{ color: c.text }} />
+                                </div>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--enterprise-gray-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        {entry.itemName || entry.msn}
+                                    </div>
+                                    <div style={{ fontSize: 11, color: 'var(--enterprise-gray-500)', marginTop: 2 }}>
+                                        {entry.msn}{entry.partNumber ? ` · ${entry.partNumber}` : ''}
+                                    </div>
+                                    <div style={{ fontSize: 12, marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                                        <span style={{ color: c.text, fontWeight: 700 }}>{entry.qty.toLocaleString()} pcs</span>
+                                        {oh !== undefined && <span style={{ color: 'var(--enterprise-gray-400)' }}>OH {oh.toLocaleString()}</span>}
+                                        {isPalletUuid && <span style={{ color: 'var(--enterprise-primary)', fontSize: 10, fontWeight: 700 }}>▸ details</span>}
+                                    </div>
+                                </div>
+                            </div>
+                            {(canEdit || canDelete) && (
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                    {canEdit && (
+                                        <button onClick={(e) => { e.stopPropagation(); onMove(entry); }} style={{
+                                            flex: 1, minHeight: 40,
+                                            background: 'white', color: 'var(--enterprise-gray-700)',
+                                            border: '1px solid var(--enterprise-gray-200)', borderRadius: 8,
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                                            fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                                        }}>
+                                            <ArrowRightLeft size={14} /> Move
+                                        </button>
+                                    )}
+                                    {canDelete && (
+                                        <button onClick={(e) => { e.stopPropagation(); onDelete(entry); }} style={{
+                                            flex: 1, minHeight: 40,
+                                            background: 'white', color: '#b91c1c',
+                                            border: '1px solid #fecaca', borderRadius: 8,
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                                            fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                                        }}>
+                                            <Trash2 size={14} /> Remove
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+        </>
+    );
+}
+
 export function RackView({ userRole, userPerms = {}, grNumber, onGrPlacementDone }: RackViewProps) {
+    const viewport = useViewport();
+    const isMobile = viewport.isMobile;
+
     // RBAC helpers — granular permissions with role-based fallback
     const hasPerms = Object.keys(userPerms).length > 0;
     const canCreate = userRole === 'L3' || (hasPerms ? userPerms['rack-view.create'] === true : userRole === 'L2');
@@ -390,43 +488,57 @@ export function RackView({ userRole, userPerms = {}, grNumber, onGrPlacementDone
     const c = rc(activeRack); const rs = stats.rack[activeRack];
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: isMobile ? 12 : 20, padding: isMobile ? 12 : 0 }}>
             {/* GR PUTAWAY BANNER */}
             {grMode && grHeader && (
                 <Card style={{ padding: 0, background: 'linear-gradient(135deg, #eff6ff, #dbeafe)', border: '2px solid #2563eb', overflow: 'hidden' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 20px' }}>
-                        <div style={{ flexShrink: 0, width: 44, height: 44, borderRadius: 12, background: '#2563eb', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                            <Truck size={22} />
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: isMobile ? 'column' : 'row',
+                        alignItems: isMobile ? 'stretch' : 'center',
+                        gap: isMobile ? 10 : 16,
+                        padding: isMobile ? 12 : '14px 20px',
+                    }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 10 : 16, minWidth: 0, flex: 1 }}>
+                            <div style={{ flexShrink: 0, width: isMobile ? 36 : 44, height: isMobile ? 36 : 44, borderRadius: 10, background: '#2563eb', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <Truck size={isMobile ? 18 : 22} />
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: 10, fontWeight: 800, color: '#1e3a8a', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                                    Placing from {grHeader.gr_number}
+                                </div>
+                                <div style={{ fontSize: isMobile ? 13 : 14, fontWeight: 700, color: '#111827', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: isMobile ? 'normal' : 'nowrap' }}>
+                                    {currentGrLine ? (
+                                        <>
+                                            <span style={{ color: '#1e3a8a', fontFamily: 'monospace' }}>{currentGrLine.pallet_number ?? '—'}</span>
+                                            {' · '}<strong>{currentGrLine.received_qty.toLocaleString()}</strong> pcs
+                                            <span style={{ marginLeft: 8, color: '#6b7280', fontWeight: 500, fontSize: isMobile ? 11 : 12 }}>
+                                                {grIdx + 1} / {grPending.length}
+                                            </span>
+                                        </>
+                                    ) : 'All pallets placed'}
+                                </div>
+                                {!isMobile && (
+                                    <div style={{ fontSize: 12, color: '#475569', marginTop: 3 }}>
+                                        Click an <strong>empty cell</strong> on the grid below to place. Ref: {grHeader.proforma_number ?? ''}
+                                    </div>
+                                )}
+                                {isMobile && (
+                                    <div style={{ fontSize: 11, color: '#475569', marginTop: 3 }}>
+                                        Tap an empty cell below
+                                    </div>
+                                )}
+                            </div>
                         </div>
-                        <div style={{ flex: 1 }}>
-                            <div style={{ fontSize: 11, fontWeight: 700, color: '#1e3a8a', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                                Placing pallets from {grHeader.gr_number}
-                            </div>
-                            <div style={{ fontSize: 14, fontWeight: 600, color: '#111827', marginTop: 2 }}>
-                                {currentGrLine ? (
-                                    <>
-                                        <span style={{ color: '#1e3a8a', fontFamily: 'monospace' }}>{currentGrLine.pallet_number ?? '—'}</span>
-                                        {' · '}{currentGrLine.msn_code ?? '—'}
-                                        {' · '}<strong>{currentGrLine.received_qty.toLocaleString()}</strong> pcs
-                                        <span style={{ marginLeft: 10, color: '#6b7280', fontWeight: 500 }}>
-                                            {grIdx + 1} of {grPending.length}
-                                        </span>
-                                    </>
-                                ) : 'All pallets placed'}
-                            </div>
-                            <div style={{ fontSize: 12, color: '#475569', marginTop: 3 }}>
-                                Click an <strong>empty cell</strong> on the grid below to place. Ref: {grHeader.proforma_number ?? ''}
-                            </div>
-                        </div>
-                        <div style={{ display: 'flex', gap: 8 }}>
+                        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
                             {currentGrLine && (
-                                <ActionButton label="Skip" icon={<SkipForward size={14} />} onClick={skipCurrentGrLine} disabled={grPlacing} />
+                                <ActionButton label={isMobile ? 'Skip' : 'Skip'} icon={<SkipForward size={14} />} onClick={skipCurrentGrLine} disabled={grPlacing} />
                             )}
-                            <ActionButton label="Exit GR mode" icon={<X size={14} />} onClick={() => onGrPlacementDone?.()} variant="secondary" />
+                            <ActionButton label={isMobile ? 'Exit' : 'Exit GR mode'} icon={<X size={14} />} onClick={() => onGrPlacementDone?.()} variant="secondary" />
                         </div>
                     </div>
                     {grErr && (
-                        <div style={{ padding: '8px 20px', background: '#fef2f2', color: '#991b1b', fontSize: 13, borderTop: '1px solid #fecaca' }}>
+                        <div style={{ padding: isMobile ? '8px 12px' : '8px 20px', background: '#fef2f2', color: '#991b1b', fontSize: 12, borderTop: '1px solid #fecaca' }}>
                             ⚠ {grErr}
                         </div>
                     )}
@@ -469,78 +581,149 @@ export function RackView({ userRole, userPerms = {}, grNumber, onGrPlacementDone
             {searchDist && searchDist.length === 0 && globalSearch && <div style={{ fontSize: '13px', color: 'var(--enterprise-gray-500)' }}>No results for "{globalSearch}"</div>}
 
             {/* MAIN */}
-            <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+                display: 'flex',
+                flexDirection: isMobile ? 'column' : 'row',
+                gap: isMobile ? 12 : 20,
+                alignItems: 'flex-start',
+            }}>
+                <div style={{ flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined }}>
                     <Card style={{ padding: 0, overflow: 'hidden' }}>
-                        {/* TABS */}
+                        {/* TABS — tighter padding on mobile so more racks fit */}
                         <div style={{ display: 'flex', borderBottom: '2px solid var(--enterprise-gray-200)', background: 'var(--enterprise-gray-50)', overflowX: 'auto' }}>
                             {rackKeys.map(r => {
                                 const act = activeRack === r; const cl = rc(r); const hasHits = searchDist ? searchDist.some(d => d.rack === r) : false; return (
                                     <button key={r} onClick={() => { setActiveRack(r); setSelectedLoc(null); }}
-                                        style={{ padding: '14px 28px', border: 'none', borderBottom: act ? `3px solid ${cl.border}` : '3px solid transparent', background: act ? cl.bg : 'transparent', color: act ? cl.text : 'var(--enterprise-gray-500)', cursor: 'pointer', fontWeight: act ? 700 : 500, fontSize: '14px', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '10px', whiteSpace: 'nowrap' }}
-                                        onMouseEnter={e => { if (!act) e.currentTarget.style.background = 'var(--enterprise-gray-100)'; }}
-                                        onMouseLeave={e => { if (!act) e.currentTarget.style.background = 'transparent'; }}
+                                        style={{
+                                            padding: isMobile ? '10px 14px' : '14px 28px',
+                                            border: 'none',
+                                            borderBottom: act ? `3px solid ${cl.border}` : '3px solid transparent',
+                                            background: act ? cl.bg : 'transparent',
+                                            color: act ? cl.text : 'var(--enterprise-gray-500)',
+                                            cursor: 'pointer',
+                                            fontWeight: act ? 700 : 500,
+                                            fontSize: isMobile ? 12 : 14,
+                                            transition: 'all 0.2s',
+                                            display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 10,
+                                            whiteSpace: 'nowrap',
+                                        }}
                                     >
                                         <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: act ? cl.border : (hasHits && globalSearch ? cl.border : 'var(--enterprise-gray-300)') }} />
                                         Rack {r}
-                                        <span style={{ background: act ? cl.border : 'var(--enterprise-gray-300)', color: 'white', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '10px' }}>{locCounts[r] || 0}</span>
+                                        <span style={{ background: act ? cl.border : 'var(--enterprise-gray-300)', color: 'white', fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10 }}>{locCounts[r] || 0}</span>
                                     </button>
                                 );
                             })}
                         </div>
                         {/* SUB-HEADER */}
-                        <div style={{ padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', borderBottom: '1px solid var(--enterprise-gray-100)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: c.text }}>Rack {activeRack}</h3>
-                                <span style={{ fontSize: '13px', color: 'var(--enterprise-gray-500)' }}>{locCounts[activeRack] || 0} locations · {rs?.occ || 0} occupied · {(rs?.qty || 0).toLocaleString()} pcs</span>
+                        <div style={{
+                            padding: isMobile ? '10px 14px' : '14px 20px',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: isMobile ? 'flex-start' : 'center',
+                            flexDirection: isMobile ? 'column' : 'row',
+                            flexWrap: 'wrap',
+                            gap: isMobile ? 10 : 10,
+                            borderBottom: '1px solid var(--enterprise-gray-100)',
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
+                                <h3 style={{ margin: 0, fontSize: isMobile ? 14 : 16, fontWeight: 700, color: c.text }}>Rack {activeRack}</h3>
+                                <span style={{ fontSize: isMobile ? 11 : 13, color: 'var(--enterprise-gray-500)' }}>{locCounts[activeRack] || 0} loc · {rs?.occ || 0} occ · {(rs?.qty || 0).toLocaleString()} pcs</span>
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                {canEdit && <button onClick={() => { setScaleMode('add'); setScaleCount(''); setScaleError(''); setShowScaleModal(true); }} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '6px', border: `1px solid ${c.fb}`, background: c.fill, color: c.text, cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}><Plus size={13} /> Add Locs</button>}
-                                {canEdit && <button onClick={() => { setScaleMode('reduce'); setScaleCount(''); setScaleError(''); setShowScaleModal(true); }} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 12px', borderRadius: '6px', border: '1px solid var(--enterprise-gray-300)', background: 'white', color: 'var(--enterprise-gray-600)', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}><Minus size={13} /> Reduce</button>}
-                                <div style={{ width: '1px', height: '20px', background: 'var(--enterprise-gray-200)', margin: '0 4px' }} />
-                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: 'var(--enterprise-gray-400)' }}><span style={{ width: '12px', height: '12px', borderRadius: '6px', background: c.fill, border: `1.5px solid ${c.fb}`, display: 'inline-block' }} /> Occupied</span>
-                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: 'var(--enterprise-gray-400)' }}><span style={{ width: '12px', height: '12px', borderRadius: '6px', background: 'var(--enterprise-gray-50)', border: '1.5px dashed var(--enterprise-gray-300)', display: 'inline-block' }} /> Empty</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                {canEdit && <button onClick={() => { setScaleMode('add'); setScaleCount(''); setScaleError(''); setShowScaleModal(true); }} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: isMobile ? '6px 10px' : '5px 12px', borderRadius: 6, border: `1px solid ${c.fb}`, background: c.fill, color: c.text, cursor: 'pointer', fontSize: 12, fontWeight: 600, minHeight: isMobile ? 36 : undefined }}><Plus size={13} /> Add Locs</button>}
+                                {canEdit && <button onClick={() => { setScaleMode('reduce'); setScaleCount(''); setScaleError(''); setShowScaleModal(true); }} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: isMobile ? '6px 10px' : '5px 12px', borderRadius: 6, border: '1px solid var(--enterprise-gray-300)', background: 'white', color: 'var(--enterprise-gray-600)', cursor: 'pointer', fontSize: 12, fontWeight: 600, minHeight: isMobile ? 36 : undefined }}><Minus size={13} /> Reduce</button>}
+                                {/* Hide legend on mobile — saves a row */}
+                                {!isMobile && (
+                                    <>
+                                        <div style={{ width: 1, height: 20, background: 'var(--enterprise-gray-200)', margin: '0 4px' }} />
+                                        <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--enterprise-gray-400)' }}><span style={{ width: 12, height: 12, borderRadius: 6, background: c.fill, border: `1.5px solid ${c.fb}`, display: 'inline-block' }} /> Occupied</span>
+                                        <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--enterprise-gray-400)' }}><span style={{ width: 12, height: 12, borderRadius: 6, background: 'var(--enterprise-gray-50)', border: '1.5px dashed var(--enterprise-gray-300)', display: 'inline-block' }} /> Empty</span>
+                                    </>
+                                )}
                             </div>
                         </div>
-                        {/* GRID */}
-                        <div style={{ padding: '20px', minHeight: '200px', maxHeight: '520px', overflowY: 'auto' }}>
+                        {/* GRID — smaller cells on mobile so more fit per row */}
+                        <div style={{ padding: isMobile ? 12 : 20, minHeight: 200, maxHeight: isMobile ? 'none' : 520, overflowY: isMobile ? 'visible' : 'auto' }}>
                             {allLocs.length === 0 ? <EmptyState icon={<MapPin size={48} style={{ color: c.border, opacity: 0.5 }} />} title="No Locations" description={`Rack ${activeRack} has 0 locations.`} /> : (
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(auto-fill, minmax(64px, 1fr))' : 'repeat(auto-fill, minmax(78px, 78px))', gap: 8 }}>
                                     {allLocs.map(({ loc, entries, match }) => {
                                         const occ = entries.length > 0; const multi = entries.length > 1; const tq = entries.reduce((s, e) => s + e.qty, 0);
                                         const sel = selectedLoc === loc; const dim = globalSearch && !match;
                                         return (
                                             <div key={loc} onClick={() => {
-                                                // GR putaway mode: click an EMPTY cell to place current pallet
                                                 if (grMode && !occ && currentGrLine && !grPlacing) {
                                                     placeCurrentGrLineAt(loc);
                                                     return;
                                                 }
                                                 if (occ) setSelectedLoc(sel ? null : loc);
                                             }}
-                                                style={{ width: '78px', height: '78px', borderRadius: '12px', background: dim ? 'var(--enterprise-gray-50)' : sel ? `${c.border}18` : occ ? c.fill : 'white', border: dim ? '1.5px dashed var(--enterprise-gray-200)' : sel ? `2.5px solid ${c.border}` : occ ? `1.5px solid ${c.fb}` : (grMode && !occ ? `2px solid ${c.border}` : '1.5px dashed #d1d5db'), display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: (occ || (grMode && !occ)) ? 'pointer' : 'default', transition: 'all 0.15s', position: 'relative', opacity: dim ? 0.3 : 1, boxShadow: sel ? `0 0 10px ${c.border}30` : (grMode && !occ ? `0 0 0 2px ${c.border}22` : 'none') }}
-                                                onMouseEnter={e => { if ((occ && !sel) || (grMode && !occ)) { e.currentTarget.style.transform = 'scale(1.05)'; e.currentTarget.style.boxShadow = `0 3px 10px ${c.fb}`; } }}
-                                                onMouseLeave={e => { if ((occ && !sel) || (grMode && !occ)) { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = grMode && !occ ? `0 0 0 2px ${c.border}22` : 'none'; } }}
+                                                style={{
+                                                    aspectRatio: '1 / 1',
+                                                    minHeight: isMobile ? 64 : 78,
+                                                    borderRadius: isMobile ? 10 : 12,
+                                                    background: dim ? 'var(--enterprise-gray-50)' : sel ? `${c.border}18` : occ ? c.fill : 'white',
+                                                    border: dim ? '1.5px dashed var(--enterprise-gray-200)' : sel ? `2.5px solid ${c.border}` : occ ? `1.5px solid ${c.fb}` : (grMode && !occ ? `2px solid ${c.border}` : '1.5px dashed #d1d5db'),
+                                                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                                                    cursor: (occ || (grMode && !occ)) ? 'pointer' : 'default',
+                                                    transition: 'all 0.15s', position: 'relative',
+                                                    opacity: dim ? 0.3 : 1,
+                                                    boxShadow: sel ? `0 0 10px ${c.border}30` : (grMode && !occ ? `0 0 0 2px ${c.border}22` : 'none'),
+                                                }}
+                                                onMouseEnter={e => { if (!isMobile && ((occ && !sel) || (grMode && !occ))) { e.currentTarget.style.transform = 'scale(1.05)'; e.currentTarget.style.boxShadow = `0 3px 10px ${c.fb}`; } }}
+                                                onMouseLeave={e => { if (!isMobile && ((occ && !sel) || (grMode && !occ))) { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = grMode && !occ ? `0 0 0 2px ${c.border}22` : 'none'; } }}
                                             >
-                                                <span style={{ fontSize: '12px', fontWeight: occ ? 700 : 500, color: occ ? c.text : 'var(--enterprise-gray-400)', fontFamily: 'monospace' }}>{loc}</span>
-                                                {occ && <span style={{ fontSize: '10px', color: 'var(--enterprise-gray-500)', marginTop: '2px' }}>{tq.toLocaleString()}</span>}
-                                                {sel && <CheckCircle size={10} style={{ position: 'absolute', bottom: '4px', color: c.border }} />}
-                                                {multi && <span style={{ position: 'absolute', top: '-5px', right: '-5px', background: c.border, color: 'white', fontSize: '8px', fontWeight: 700, width: '17px', height: '17px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid white' }}>+{entries.length}</span>}
+                                                <span style={{ fontSize: isMobile ? 11 : 12, fontWeight: occ ? 700 : 500, color: occ ? c.text : 'var(--enterprise-gray-400)', fontFamily: 'monospace' }}>{loc}</span>
+                                                {occ && <span style={{ fontSize: isMobile ? 9 : 10, color: 'var(--enterprise-gray-500)', marginTop: 2 }}>{tq.toLocaleString()}</span>}
+                                                {sel && <CheckCircle size={10} style={{ position: 'absolute', bottom: 4, color: c.border }} />}
+                                                {multi && <span style={{ position: 'absolute', top: -5, right: -5, background: c.border, color: 'white', fontSize: 8, fontWeight: 700, width: 16, height: 16, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid white' }}>+{entries.length}</span>}
                                             </div>
                                         );
                                     })}
                                 </div>
                             )}
                         </div>
-                        <div style={{ padding: '10px 20px', borderTop: '1px solid var(--enterprise-gray-100)', display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: 'var(--enterprise-gray-500)' }}>
-                            <span>{locCounts[activeRack] || 0} total · {rs?.occ || 0} occupied{globalSearch ? ' (search active)' : ''}</span>
+                        <div style={{ padding: isMobile ? '8px 14px' : '10px 20px', borderTop: '1px solid var(--enterprise-gray-100)', display: 'flex', justifyContent: 'space-between', fontSize: isMobile ? 11 : 12, color: 'var(--enterprise-gray-500)' }}>
+                            <span>{locCounts[activeRack] || 0} total · {rs?.occ || 0} occupied</span>
                             <span>Stock: <strong style={{ color: c.text }}>{(rs?.qty || 0).toLocaleString()}</strong> pcs</span>
                         </div>
                     </Card>
                 </div>
 
-                {/* SIDE PANEL */}
+                {/* SIDE PANEL — desktop sticky right; mobile bottom sheet */}
                 {selectedLoc && selEntries.length > 0 && (
+                    isMobile ? (
+                        <>
+                            {/* Backdrop */}
+                            <div onClick={() => setSelectedLoc(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', zIndex: 1090 }} />
+                            {/* Bottom sheet */}
+                            <div style={{
+                                position: 'fixed',
+                                left: 0, right: 0, bottom: 0,
+                                maxHeight: '80vh',
+                                background: 'white',
+                                borderTopLeftRadius: 16, borderTopRightRadius: 16,
+                                boxShadow: '0 -10px 30px rgba(0,0,0,0.18)',
+                                zIndex: 1091,
+                                display: 'flex', flexDirection: 'column',
+                                paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+                            }}>
+                                <div style={{ width: 36, height: 4, borderRadius: 2, background: '#cbd5e1', margin: '8px auto 4px' }} />
+                                <RackCellSheetInner
+                                    selectedLoc={selectedLoc}
+                                    selEntries={selEntries}
+                                    color={c}
+                                    ohMap={ohMap}
+                                    onClose={() => setSelectedLoc(null)}
+                                    onMove={(entry) => { setMoveSrc(entry); setMoveDst(''); setMoveQty(entry.qty); setMoveErr(''); setMoveOk(''); setShowMoveModal(true); }}
+                                    onDelete={(entry) => setDeleteTarget(entry)}
+                                    onPalletDetail={(id) => setPalletDetailId(id)}
+                                    canEdit={canEdit}
+                                    canDelete={canDelete}
+                                />
+                            </div>
+                        </>
+                    ) : (
                     <div style={{ width: '320px', flexShrink: 0, position: 'sticky', top: '20px' }}>
                         <Card style={{ padding: 0, overflow: 'hidden' }}>
                             <div style={{ padding: '16px 18px', borderBottom: '1px solid var(--enterprise-gray-100)', display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -592,21 +775,32 @@ export function RackView({ userRole, userPerms = {}, grNumber, onGrPlacementDone
                             </div>
                         </Card>
                     </div>
+                    )
                 )}
             </div>
 
-            {/* INFO */}
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '14px 18px', background: 'rgba(30,58,138,0.04)', border: '1px solid rgba(30,58,138,0.1)', borderRadius: '8px', fontSize: '13px', color: 'var(--enterprise-gray-600)' }}>
-                <Info size={16} style={{ color: 'var(--enterprise-primary)', flexShrink: 0, marginTop: '2px' }} />
-                <div><strong>Rules:</strong> Multiple pallets per cell allowed. Click a cell → pallet list. Click a pallet → full back-chain (Invoice · BPA · Shipment · GR).</div>
-            </div>
+            {/* INFO — desktop only; the explainer eats valuable space on phones */}
+            {!isMobile && (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '14px 18px', background: 'rgba(30,58,138,0.04)', border: '1px solid rgba(30,58,138,0.1)', borderRadius: '8px', fontSize: '13px', color: 'var(--enterprise-gray-600)' }}>
+                    <Info size={16} style={{ color: 'var(--enterprise-primary)', flexShrink: 0, marginTop: '2px' }} />
+                    <div><strong>Rules:</strong> Multiple pallets per cell allowed. Click a cell → pallet list. Click a pallet → full back-chain (Invoice · BPA · Shipment · GR).</div>
+                </div>
+            )}
 
-            {/* PALLET BACK-CHAIN DRAWER */}
+            {/* PALLET BACK-CHAIN DRAWER — right-side panel on desktop, full-screen on mobile */}
             {palletDetailId && (
                 <div onClick={() => setPalletDetailId(null)}
-                    style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                    style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 1100, display: 'flex', alignItems: isMobile ? 'stretch' : 'center', justifyContent: 'flex-end' }}>
                     <div onClick={(e) => e.stopPropagation()}
-                        style={{ width: 520, maxWidth: '96vw', height: '100%', background: 'white', boxShadow: '-4px 0 16px rgba(0,0,0,0.12)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                        style={{
+                            width: isMobile ? '100%' : 520,
+                            maxWidth: isMobile ? '100%' : '96vw',
+                            height: '100%',
+                            background: 'white',
+                            boxShadow: '-4px 0 16px rgba(0,0,0,0.12)',
+                            display: 'flex', flexDirection: 'column', overflow: 'hidden',
+                            paddingTop: isMobile ? 'env(safe-area-inset-top, 0px)' : 0,
+                        }}>
                         <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--enterprise-gray-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
                             <div>
                                 <h3 style={{ fontSize: 15, fontWeight: 700, margin: 0, color: '#111827' }}>Pallet Back-Chain</h3>
