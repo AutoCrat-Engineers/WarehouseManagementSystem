@@ -1,0 +1,25 @@
+{
+  "name": "Autocrat Engineers — Warehouse",
+  "short_name": "AE Warehouse",
+  "description": "Warehouse Management System for Autocrat Engineers — inbound receiving, racking, packing & dispatch.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#1e3a8a",
+  "icons": [
+    {
+      "src": "/a-logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/a-logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

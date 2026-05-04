@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.7] — 2026-05-04
+
+### Release Type: Minor — Inbound Receiving redesign (scan-driven, per-pallet)
+
+### Added
+
+- **Scan & Verify** flow replaces the MPL list. Receivers scan one
+  pallet at a time, pick status, then **Verify · Place Now** or
+  **Verify · Place Later**. Per-MPL Goods Receipts auto-commit in the
+  background as their pallets are verified.
+- **`pallet_resolve_qr`** edge function — resolves a scanned QR (v2
+  UUID-first or legacy v1 pipe) to a pallet record + receive context.
+- **`gr_drafts`** table + **`gr_draft_save / load / discard`** edge
+  functions for per-(user, proforma, MPL) draft autosave with optimistic
+  versioning.
+- **`gr_inbound_overview`** edge function — today-focused KPIs +
+  caller's resumable drafts + per-shipment draft activity.
+- **RF-gun wedge listener** (`useWedgeScanner`) — global keydown capture
+  with median-gap human-vs-wedge detection, multiline-payload tolerant.
+- **Camera scanner** (`CameraScanner`) — native `BarcodeDetector` first,
+  `@zxing/browser` fallback for iOS Safari, torch toggle, auto-close on
+  decode.
+- **Audit-grade exception capture** for damaged pallets — reason codes,
+  required note, photo upload to private `gr-exception-photos` bucket.
+  New columns on `goods_receipt_lines`: `reason_code`, `photo_paths`.
+- **Mobile-first responsive shell** — full-viewport on phones, 44px
+  touch targets, safe-area honored.
+- **PWA shell** — `manifest.webmanifest`, hand-rolled service worker
+  (`public/sw.js`) with network-first navigation + cache-first assets.
+- **Offline scan queue** — IndexedDB-backed (`scanQueue.ts`) with
+  auto-replay on reconnect.
+- **Inbound dashboard** — clickable filter cards (BPA-style), FIFO sort,
+  per-card Receive CTA on the oldest eligible card, search +
+  Refresh + Receive Shipment unified into one toolbar, MY DRAFT / IN
+  PROGRESS badges.
+- **Quick-pick** on SEARCH step — top-2 oldest receivable shipments
+  shown as one-tap cards above the manual search.
+- **Step sidebar** (desktop) — 3-stage progress indicator (Match
+  Shipment / Scan & Verify / Done).
+
+### Changed
+
+- **Pallet QR payload** upgraded to v2 (line-delimited tokens with
+  `PALLET:<uuid>` first). Legacy v1 stickers continue to resolve via
+  best-effort match in the resolver.
+- **Receive flow** simplified from 5 steps to 3 (SEARCH → SCAN_PALLETS →
+  DONE). MPL picker, per-MPL verify table, and exceptions-review
+  interstitial removed in favor of the unified scan-driven screen.
+- **DONE step** is a clean shipment summary — no putaway label print
+  (pallets already carry QR), no frontend GRN print.
+- **Per-pallet `received_qty` input** removed. Verification is by pallet
+  presence, not by quantity.
+- **`confirm_goods_receipt` RPC** body reissued (CREATE OR REPLACE) to
+  populate `reason_code` and `photo_paths` on each line. Signature
+  unchanged; backwards-compatible.
+
+### Removed
+
+- `ShipmentStep`, `MPLCard`, `VerifyMplStep`, `ExceptionsReviewStep`,
+  `BottomNav`, the print-buttons `DoneStep`, the per-pallet quantity
+  input, and the receive screen's separate filter-chip row.
+
+### Migrations
+
+- `061_gr_drafts.sql` — autosave drafts table with RLS and optimistic
+  version column.
+- `062_gr_exception_capture.sql` — adds `reason_code` and `photo_paths`
+  to `goods_receipt_lines`, creates the private
+  `gr-exception-photos` storage bucket, replaces the
+  `confirm_goods_receipt` RPC body to persist the new fields.
+
+See [`docs/releases/CHANGES_0.5.7.md`](docs/releases/CHANGES_0.5.7.md)
+and [`docs/releases/RELEASE_0.5.7.md`](docs/releases/RELEASE_0.5.7.md)
+for the full breakdown.
+
+---
+
+## [0.5.6] — 2026-05-03
+
+### Release Type: Minor — Intelligent Pallet Allocation + S&V decommission
+
+See [`docs/releases/CHANGES_0.5.6.md`](docs/releases/CHANGES_0.5.6.md)
+and [`docs/releases/RELEASE_0.5.6.md`](docs/releases/RELEASE_0.5.6.md).
+
+---
+
 ## [0.5.5] — 2026-04-25
 
 ### Release Type: Minor — Release Allocation Holds + Historical Data Import
