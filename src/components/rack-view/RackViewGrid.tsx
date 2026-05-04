@@ -20,6 +20,7 @@ import { Card, LoadingSpinner, ModuleLoader } from '../ui/EnterpriseUI';
 import { fetchWithAuth } from '../../utils/supabase/auth';
 import { getEdgeFunctionUrl } from '../../utils/supabase/info';
 import { ReceiveShipmentScreen } from './ReceiveShipmentScreen';
+import { useViewport } from './useViewport';
 
 // ============================================================================
 // Types + fetchers
@@ -147,6 +148,8 @@ interface Props {
 }
 
 export function RackViewGrid({ userRole, userPerms = {}, onGrConfirmed }: Props) {
+    const viewport = useViewport();
+    const isMobile = viewport.isMobile;
     const hasPerms = Object.keys(userPerms).length > 0;
     const canReceive = userRole === 'L3' || userRole === 'ADMIN' || userRole === 'THIRD_PARTY_USER'
         || (hasPerms ? userPerms['rack-view.receive'] === true : userRole === 'L2');
@@ -211,72 +214,125 @@ export function RackViewGrid({ userRole, userPerms = {}, onGrConfirmed }: Props)
     }
 
     return (
-        <div style={{ padding: '20px 24px', maxWidth: 1400, margin: '0 auto' }}>
+        <div style={{
+            padding: isMobile ? '12px' : '20px 24px',
+            maxWidth: 1400, margin: '0 auto',
+        }}>
 
             {/* Pending Placement queue (only shown when not empty) */}
-            <PendingPlacementSection onPlaced={fetchData} />
+            <PendingPlacementSection onPlaced={fetchData} isMobile={isMobile} />
 
-            {/* Summary cards — clickable filters. Active card ringed in its accent
-                colour; tapping the active card again clears back to ALL. Replaces
-                the previous separate KPI strip + filter-chip row (BPA-style). */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 14, marginBottom: 18 }}>
-                <UnifiedKPICard
-                    icon={<Truck size={16} />} iconBg="#eff6ff" iconColor="#2563eb"
-                    label="In Transit" value={counts.in_transit} sub="awaiting verify"
-                    isActive={filter === 'IN_TRANSIT'}
-                    onClick={() => setFilter(filter === 'IN_TRANSIT' ? 'ALL' : 'IN_TRANSIT')}
-                />
-                <UnifiedKPICard
-                    icon={<Layers size={16} />} iconBg="#fef3c7" iconColor="#d97706"
-                    label="Partial" value={counts.partial} sub="some MPLs verified"
-                    isActive={filter === 'PARTIAL'}
-                    onClick={() => setFilter(filter === 'PARTIAL' ? 'ALL' : 'PARTIAL')}
-                />
-                <UnifiedKPICard
-                    icon={<CheckCircle2 size={16} />} iconBg="#f0fdf4" iconColor="#16a34a"
-                    label="Complete" value={counts.complete} sub="all verified"
-                    isActive={filter === 'COMPLETE'}
-                    onClick={() => setFilter(filter === 'COMPLETE' ? 'ALL' : 'COMPLETE')}
-                />
-                <UnifiedKPICard
-                    icon={<AlertTriangle size={16} />} iconBg="#fee2e2" iconColor="#dc2626"
-                    label="Discrepancy" value={counts.discrepancy} sub="missing / damaged"
-                    isActive={filter === 'DISCREPANCY'}
-                    onClick={() => setFilter(filter === 'DISCREPANCY' ? 'ALL' : 'DISCREPANCY')}
-                    alert={counts.discrepancy > 0}
-                />
-                <UnifiedKPICard
-                    icon={<FileText size={16} />} iconBg="#f3f4f6" iconColor="#374151"
-                    label="All shipments" value={counts.total} sub="total in-flight"
-                    isActive={filter === 'ALL'}
-                    onClick={() => setFilter('ALL')}
-                />
-            </div>
-
-            {/* Search + actions toolbar — search on the left, Refresh + primary
-                CTA on the right. One row so the action affordances are always
-                visible without scrolling back to the header. */}
-            <div style={{ display: 'flex', gap: 10, marginBottom: 18, alignItems: 'stretch' }}>
-                <div style={{ position: 'relative', flex: 1 }}>
-                    <Search size={16} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'var(--enterprise-gray-400)' }} />
-                    <input
-                        type="text" value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        placeholder="Search by proforma #, shipment #, or customer…"
-                        style={{ width: '100%', padding: '12px 14px 12px 42px', fontSize: 13, border: '1px solid var(--enterprise-gray-200)', borderRadius: 10, outline: 'none', background: 'white', boxShadow: '0 1px 2px rgba(0,0,0,0.02)' }}
-                        onFocus={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-primary)'}
-                        onBlur={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-gray-200)'}
-                    />
+            {/* Summary cards — clickable filters.
+                Mobile: horizontal snap-scroll, 1 card per viewport-quarter so
+                receivers can see 2-3 at once with their thumb on the screen.
+                Desktop: 5-column grid (BPA-style). */}
+            {isMobile ? (
+                <div style={{
+                    display: 'flex', gap: 10,
+                    overflowX: 'auto', overflowY: 'hidden',
+                    marginBottom: 14,
+                    paddingBottom: 4,
+                    scrollSnapType: 'x mandatory',
+                    scrollbarWidth: 'none',
+                    WebkitOverflowScrolling: 'touch',
+                }}>
+                    <UnifiedKPICard mobile icon={<Truck size={14} />} iconBg="#eff6ff" iconColor="#2563eb"
+                        label="In Transit" value={counts.in_transit} sub="awaiting verify"
+                        isActive={filter === 'IN_TRANSIT'} onClick={() => setFilter(filter === 'IN_TRANSIT' ? 'ALL' : 'IN_TRANSIT')} />
+                    <UnifiedKPICard mobile icon={<Layers size={14} />} iconBg="#fef3c7" iconColor="#d97706"
+                        label="Partial" value={counts.partial} sub="some verified"
+                        isActive={filter === 'PARTIAL'} onClick={() => setFilter(filter === 'PARTIAL' ? 'ALL' : 'PARTIAL')} />
+                    <UnifiedKPICard mobile icon={<CheckCircle2 size={14} />} iconBg="#f0fdf4" iconColor="#16a34a"
+                        label="Complete" value={counts.complete} sub="all verified"
+                        isActive={filter === 'COMPLETE'} onClick={() => setFilter(filter === 'COMPLETE' ? 'ALL' : 'COMPLETE')} />
+                    <UnifiedKPICard mobile icon={<AlertTriangle size={14} />} iconBg="#fee2e2" iconColor="#dc2626"
+                        label="Discrepancy" value={counts.discrepancy} sub="issues"
+                        isActive={filter === 'DISCREPANCY'} onClick={() => setFilter(filter === 'DISCREPANCY' ? 'ALL' : 'DISCREPANCY')}
+                        alert={counts.discrepancy > 0} />
+                    <UnifiedKPICard mobile icon={<FileText size={14} />} iconBg="#f3f4f6" iconColor="#374151"
+                        label="All" value={counts.total} sub="in-flight"
+                        isActive={filter === 'ALL'} onClick={() => setFilter('ALL')} />
                 </div>
-                <button onClick={fetchData} disabled={loading} style={{ ...ghostBtnStyle, padding: '0 16px' }}>
-                    <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : undefined }} /> Refresh
-                </button>
-                {canReceive && (
-                    <button onClick={() => setReceiveCtx({ mode: 'fresh' })} style={{ ...primaryBtnStyle, padding: '0 18px' }}>
-                        <Truck size={13} /> Receive Shipment
+            ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 14, marginBottom: 18 }}>
+                    <UnifiedKPICard icon={<Truck size={16} />} iconBg="#eff6ff" iconColor="#2563eb"
+                        label="In Transit" value={counts.in_transit} sub="awaiting verify"
+                        isActive={filter === 'IN_TRANSIT'} onClick={() => setFilter(filter === 'IN_TRANSIT' ? 'ALL' : 'IN_TRANSIT')} />
+                    <UnifiedKPICard icon={<Layers size={16} />} iconBg="#fef3c7" iconColor="#d97706"
+                        label="Partial" value={counts.partial} sub="some MPLs verified"
+                        isActive={filter === 'PARTIAL'} onClick={() => setFilter(filter === 'PARTIAL' ? 'ALL' : 'PARTIAL')} />
+                    <UnifiedKPICard icon={<CheckCircle2 size={16} />} iconBg="#f0fdf4" iconColor="#16a34a"
+                        label="Complete" value={counts.complete} sub="all verified"
+                        isActive={filter === 'COMPLETE'} onClick={() => setFilter(filter === 'COMPLETE' ? 'ALL' : 'COMPLETE')} />
+                    <UnifiedKPICard icon={<AlertTriangle size={16} />} iconBg="#fee2e2" iconColor="#dc2626"
+                        label="Discrepancy" value={counts.discrepancy} sub="missing / damaged"
+                        isActive={filter === 'DISCREPANCY'} onClick={() => setFilter(filter === 'DISCREPANCY' ? 'ALL' : 'DISCREPANCY')}
+                        alert={counts.discrepancy > 0} />
+                    <UnifiedKPICard icon={<FileText size={16} />} iconBg="#f3f4f6" iconColor="#374151"
+                        label="All shipments" value={counts.total} sub="total in-flight"
+                        isActive={filter === 'ALL'} onClick={() => setFilter('ALL')} />
+                </div>
+            )}
+
+            {/* Toolbar — search + Refresh + Receive Shipment.
+                Mobile: search full-width on its own row; Refresh + Receive on a
+                second row, primary takes flex-1 so it dominates as the main CTA.
+                Desktop: single row, search flex-1 on the left. */}
+            {isMobile ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+                    <div style={{ position: 'relative' }}>
+                        <Search size={16} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'var(--enterprise-gray-400)' }} />
+                        <input
+                            type="text" value={search} onChange={(e) => setSearch(e.target.value)}
+                            placeholder="Search proforma · shipment · customer"
+                            style={{ width: '100%', padding: '12px 14px 12px 42px', fontSize: 14, border: '1px solid var(--enterprise-gray-200)', borderRadius: 10, outline: 'none', background: 'white', boxSizing: 'border-box' }}
+                        />
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                        <button onClick={fetchData} disabled={loading} style={{
+                            flexShrink: 0, padding: '0 14px', minHeight: 44,
+                            background: 'white', color: 'var(--enterprise-gray-700)',
+                            border: '1px solid var(--enterprise-gray-200)', borderRadius: 10,
+                            display: 'flex', alignItems: 'center', gap: 6,
+                            fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                        }}>
+                            <RefreshCw size={14} style={{ animation: loading ? 'spin 1s linear infinite' : undefined }} />
+                        </button>
+                        {canReceive && (
+                            <button onClick={() => setReceiveCtx({ mode: 'fresh' })} style={{
+                                flex: 1, padding: '0 14px', minHeight: 44,
+                                background: 'var(--enterprise-primary)', color: 'white',
+                                border: 'none', borderRadius: 10,
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                                fontSize: 14, fontWeight: 700, cursor: 'pointer',
+                            }}>
+                                <Truck size={16} /> Receive Shipment
+                            </button>
+                        )}
+                    </div>
+                </div>
+            ) : (
+                <div style={{ display: 'flex', gap: 10, marginBottom: 18, alignItems: 'stretch' }}>
+                    <div style={{ position: 'relative', flex: 1 }}>
+                        <Search size={16} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'var(--enterprise-gray-400)' }} />
+                        <input
+                            type="text" value={search} onChange={(e) => setSearch(e.target.value)}
+                            placeholder="Search by proforma #, shipment #, or customer…"
+                            style={{ width: '100%', padding: '12px 14px 12px 42px', fontSize: 13, border: '1px solid var(--enterprise-gray-200)', borderRadius: 10, outline: 'none', background: 'white', boxShadow: '0 1px 2px rgba(0,0,0,0.02)' }}
+                            onFocus={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-primary)'}
+                            onBlur={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-gray-200)'}
+                        />
+                    </div>
+                    <button onClick={fetchData} disabled={loading} style={{ ...ghostBtnStyle, padding: '0 16px' }}>
+                        <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : undefined }} /> Refresh
                     </button>
-                )}
-            </div>
+                    {canReceive && (
+                        <button onClick={() => setReceiveCtx({ mode: 'fresh' })} style={{ ...primaryBtnStyle, padding: '0 18px' }}>
+                            <Truck size={13} /> Receive Shipment
+                        </button>
+                    )}
+                </div>
+            )}
 
             {/* Error */}
             {error && (
@@ -322,6 +378,7 @@ export function RackViewGrid({ userRole, userPerms = {}, onGrConfirmed }: Props)
                                 draftActivity={overview?.active_drafts_by_pi[s.id]}
                                 showReceiveCta={canReceive && s.id === firstReceivableId}
                                 onReceive={() => setReceiveCtx({ mode: 'deep', proformaId: s.id })}
+                                isMobile={isMobile}
                             />
                         ))}
                     </div>
@@ -374,11 +431,45 @@ export function RackViewGrid({ userRole, userPerms = {}, onGrConfirmed }: Props)
 // Active card gets a colored border + soft glow ring; tapping clears filter.
 // ============================================================================
 
-function UnifiedKPICard({ icon, iconBg, iconColor, label, value, sub, isActive, onClick, alert }: {
+function UnifiedKPICard({ icon, iconBg, iconColor, label, value, sub, isActive, onClick, alert, mobile }: {
     icon: React.ReactNode; iconBg: string; iconColor: string;
     label: string; value: number; sub: string;
     isActive?: boolean; onClick?: () => void; alert?: boolean;
+    /** Compact horizontal-scroll variant for mobile dashboards. */
+    mobile?: boolean;
 }) {
+    if (mobile) {
+        return (
+            <div
+                onClick={onClick}
+                style={{
+                    flexShrink: 0,
+                    minWidth: 130,
+                    scrollSnapAlign: 'start',
+                    background: 'white',
+                    border: isActive ? `2px solid ${iconColor}` : '1px solid var(--enterprise-gray-200)',
+                    borderRadius: 12, padding: '10px 12px',
+                    boxShadow: isActive ? `0 0 0 3px ${iconBg}` : '0 1px 2px rgba(0,0,0,0.02)',
+                    transition: 'all 0.2s ease',
+                    cursor: onClick ? 'pointer' : 'default',
+                    display: 'flex', flexDirection: 'column', gap: 4,
+                }}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                        {label}
+                    </span>
+                    <span style={{ width: 22, height: 22, borderRadius: 6, background: iconBg, color: iconColor, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        {icon}
+                    </span>
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: alert ? '#dc2626' : 'var(--enterprise-gray-900)', lineHeight: 1.05, fontVariantNumeric: 'tabular-nums' }}>
+                    {value}
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', fontWeight: 500 }}>{sub}</div>
+            </div>
+        );
+    }
     return (
         <div
             onClick={onClick}
@@ -449,13 +540,14 @@ async function fetchShipmentDetail(proformaId: string): Promise<ShipmentDetail> 
     return json;
 }
 
-function ShipmentCard({ shipment, onOpen, draftActivity, showReceiveCta, onReceive }: {
+function ShipmentCard({ shipment, onOpen, draftActivity, showReceiveCta, onReceive, isMobile }: {
     shipment: Shipment;
     onOpen: () => void;
     draftActivity?: { total_drafts: number; my_drafts: number; other_users: number; latest_at: string };
     /** Show the inline "Receive Shipment" CTA. Only the FIFO-first card sets this. */
     showReceiveCta?: boolean;
     onReceive?: () => void;
+    isMobile?: boolean;
 }) {
     const accent = STATUS_COLOR[shipment.status];
     const total = shipment.pallets_expected;
@@ -463,6 +555,122 @@ function ShipmentCard({ shipment, onOpen, draftActivity, showReceiveCta, onRecei
     const pct = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0;
     const hasMyDraft    = (draftActivity?.my_drafts   ?? 0) > 0;
     const hasOtherDraft = (draftActivity?.other_users ?? 0) > 0;
+    const issues = shipment.pallets_missing + shipment.pallets_damaged;
+
+    if (isMobile) {
+        // Mobile layout — denser, single column. Title on its own row so PI &
+        // shipment# don't clash with the status pill / receive button.
+        return (
+            <div
+                onClick={onOpen}
+                style={{
+                    background: 'white',
+                    border: '1px solid var(--enterprise-gray-200)',
+                    borderRadius: 12,
+                    overflow: 'hidden',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
+                    display: 'flex',
+                    cursor: 'pointer',
+                }}
+            >
+                <div style={{ width: 4, background: accent, flexShrink: 0 }} />
+                <div style={{ flex: 1, minWidth: 0, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {/* Row 1 — IDs + status + chevron */}
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ fontFamily: 'monospace', fontSize: 14, fontWeight: 800, color: 'var(--enterprise-gray-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {shipment.shipment_number ?? shipment.proforma_number}
+                            </div>
+                            {shipment.shipment_number && (
+                                <div style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 700, color: 'var(--enterprise-gray-700)', marginTop: 2 }}>
+                                    {shipment.proforma_number}
+                                </div>
+                            )}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                            <StatusBadge status={shipment.status} />
+                            <ChevronRight size={16} style={{ color: 'var(--enterprise-gray-400)' }} />
+                        </div>
+                    </div>
+
+                    {/* Draft badges — separate row so they wrap naturally */}
+                    {(hasMyDraft || hasOtherDraft) && (
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {hasMyDraft && (
+                                <span style={draftBadgeMine}>
+                                    <PlayCircle size={11} /> My draft
+                                </span>
+                            )}
+                            {hasOtherDraft && !hasMyDraft && (
+                                <span style={draftBadgeOther}>
+                                    <Users size={11} /> In progress
+                                </span>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Row 2 — 4-up KPIs (drop "GR" tile to fit) */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+                        <Inline label="MPLs"     value={shipment.mpl_count.toString()} />
+                        <Inline label="Expected" value={shipment.pallets_expected.toString()} />
+                        <Inline label="Received" value={shipment.pallets_received.toString()} accent={received > 0 ? 'success' : undefined} />
+                        <Inline label="Issues"   value={String(issues)} accent={issues > 0 ? 'warning' : undefined} />
+                    </div>
+
+                    {/* Row 3 — progress + dispatched date (single row, compact) */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: pct === 100 ? '#16a34a' : 'var(--enterprise-gray-700)', fontVariantNumeric: 'tabular-nums', minWidth: 32 }}>
+                            {pct}%
+                        </span>
+                        <div style={{ flex: 1, height: 5, background: 'var(--enterprise-gray-200)', borderRadius: 3, overflow: 'hidden' }}>
+                            <div style={{ width: `${pct}%`, height: '100%', background: pct === 100 ? '#16a34a' : accent }} />
+                        </div>
+                        <span style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', whiteSpace: 'nowrap' }}>
+                            {shipment.dispatched_at
+                                ? new Date(shipment.dispatched_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
+                                : '—'}
+                        </span>
+                    </div>
+
+                    {/* Row 4 — full-width primary CTA (FIFO card only).
+                        Big thumb-target so the receiver doesn't have to aim. */}
+                    {showReceiveCta && (
+                        <button
+                            onClick={(e) => { e.stopPropagation(); onReceive?.(); }}
+                            style={{
+                                marginTop: 2,
+                                width: '100%',
+                                minHeight: 44,
+                                background: 'var(--enterprise-primary)', color: 'white',
+                                border: 'none', borderRadius: 10,
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                                fontSize: 14, fontWeight: 700, cursor: 'pointer',
+                                boxShadow: '0 1px 3px rgba(30,58,138,0.25)',
+                            }}
+                        >
+                            <Truck size={16} /> Receive shipment
+                        </button>
+                    )}
+
+                    {/* GR number footer (when issued) — separate line so the
+                        receive CTA doesn't share space. */}
+                    {!showReceiveCta && shipment.gr_numbers.length > 0 && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--enterprise-gray-500)' }}>
+                            <FileText size={11} />
+                            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>
+                                {shipment.gr_numbers[0]}
+                            </span>
+                            {shipment.gr_numbers.length > 1 && (
+                                <span style={{ fontSize: 10, fontWeight: 600 }}>
+                                    +{shipment.gr_numbers.length - 1}
+                                </span>
+                            )}
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div
@@ -596,6 +804,8 @@ function Inline({ label, value, icon, accent }: { label: string; value: string; 
 }
 
 function ShipmentDetailPage({ shipment, onBack }: { shipment: Shipment; onBack: () => void }) {
+    const viewport = useViewport();
+    const isMobile = viewport.isMobile;
     const [detail, setDetail] = useState<ShipmentDetail | null>(null);
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState<string | null>(null);
@@ -639,43 +849,83 @@ function ShipmentDetailPage({ shipment, onBack }: { shipment: Shipment; onBack: 
             );
     }, [detail, query]);
 
+    const totalExpected = detail?.mpls.reduce((s, m) => s + m.pallet_count, 0) ?? 0;
+    const totalReceived = detail?.mpls.reduce((s, m) => s + (m.gr?.total_pallets_received ?? 0), 0) ?? 0;
+    const totalIssues   = detail?.mpls.reduce((s, m) => s + (m.gr?.total_pallets_missing ?? 0) + (m.gr?.total_pallets_damaged ?? 0), 0) ?? 0;
+    const totalPlaced   = detail?.mpls.flatMap(m => m.pallets).filter(p => !!p.rack_location_code).length ?? 0;
+
     return (
-        <div style={{ padding: '20px 24px', maxWidth: 1400, margin: '0 auto' }}>
+        <div style={{ padding: isMobile ? '12px' : '20px 24px', maxWidth: 1400, margin: '0 auto' }}>
             {/* Back + title */}
-            <button onClick={onBack} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--enterprise-gray-600)', fontSize: 12, fontWeight: 600, padding: '4px 8px 4px 0', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <button onClick={onBack} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--enterprise-gray-600)', fontSize: 12, fontWeight: 600, padding: '4px 8px 4px 0', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 4 }}>
                 ← Back to Shipments
             </button>
 
             {/* Header card */}
-            <div style={{ background: 'white', border: '1px solid var(--enterprise-gray-200)', borderRadius: 12, overflow: 'hidden', marginBottom: 18, boxShadow: '0 1px 2px rgba(0,0,0,0.03)', display: 'flex' }}>
+            <div style={{ background: 'white', border: '1px solid var(--enterprise-gray-200)', borderRadius: 12, overflow: 'hidden', marginBottom: isMobile ? 12 : 18, boxShadow: '0 1px 2px rgba(0,0,0,0.03)', display: 'flex' }}>
                 <div style={{ width: 4, background: accent }} />
-                <div style={{ flex: 1, padding: '18px 22px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-                            <span style={{ fontFamily: 'monospace', fontSize: 22, fontWeight: 800, color: 'var(--enterprise-gray-900)' }}>
-                                {shipment.shipment_number ?? shipment.proforma_number}
-                            </span>
-                            {shipment.shipment_number && (
-                                <span style={{ fontSize: 12, color: 'var(--enterprise-gray-500)' }}>PI {shipment.proforma_number}</span>
+                <div style={{ flex: 1, padding: isMobile ? '14px' : '18px 22px', minWidth: 0 }}>
+                    {isMobile ? (
+                        <>
+                            {/* Mobile header — IDs stack, status pill on its own row */}
+                            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+                                <div style={{ minWidth: 0, flex: 1 }}>
+                                    <div style={{ fontFamily: 'monospace', fontSize: 16, fontWeight: 800, color: 'var(--enterprise-gray-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                        {shipment.shipment_number ?? shipment.proforma_number}
+                                    </div>
+                                    {shipment.shipment_number && (
+                                        <div style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 700, color: 'var(--enterprise-gray-700)', marginTop: 3 }}>
+                                            {shipment.proforma_number}
+                                        </div>
+                                    )}
+                                </div>
+                                <StatusBadge status={shipment.status} />
+                            </div>
+                            <div style={{ fontSize: 11, color: 'var(--enterprise-gray-500)', display: 'flex', alignItems: 'center', gap: 4, marginBottom: 12 }}>
+                                <Calendar size={11} />
+                                {shipment.dispatched_at ? new Date(shipment.dispatched_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Not yet dispatched'}
+                            </div>
+                            {/* Customer-name / single-part description omitted — shipments
+                                may mix parts and the field has been unreliable. */}
+                            {detail && (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
+                                    <MiniTile label="MPLs"     value={`${detail.mpls.filter(m => m.gr).length} / ${detail.mpls.length}`} sub="verified" />
+                                    <MiniTile label="Expected" value={totalExpected} sub="pallets" />
+                                    <MiniTile label="Received" value={totalReceived} sub="pallets" accent="success" />
+                                    <MiniTile label="Issues"   value={totalIssues}   sub="missing / damaged" accent={totalIssues > 0 ? 'warning' : undefined} />
+                                    <MiniTile label="Placed"   value={`${totalPlaced} / ${totalExpected}`} sub="in rack" />
+                                </div>
                             )}
-                            <StatusBadge status={shipment.status} />
-                        </div>
-                        <div style={{ fontSize: 12, color: 'var(--enterprise-gray-600)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <Calendar size={12} />
-                            {shipment.dispatched_at ? `Dispatched ${new Date(shipment.dispatched_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}` : 'Not yet dispatched'}
-                        </div>
-                    </div>
-                    <div style={{ fontSize: 14, color: 'var(--enterprise-gray-800)', fontWeight: 600, marginBottom: 14 }}>{shipment.customer_name}</div>
+                        </>
+                    ) : (
+                        <>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+                                    <span style={{ fontFamily: 'monospace', fontSize: 22, fontWeight: 800, color: 'var(--enterprise-gray-900)' }}>
+                                        {shipment.shipment_number ?? shipment.proforma_number}
+                                    </span>
+                                    {shipment.shipment_number && (
+                                        <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 700, color: 'var(--enterprise-gray-700)' }}>{shipment.proforma_number}</span>
+                                    )}
+                                    <StatusBadge status={shipment.status} />
+                                </div>
+                                <div style={{ fontSize: 12, color: 'var(--enterprise-gray-600)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <Calendar size={12} />
+                                    {shipment.dispatched_at ? `Dispatched ${new Date(shipment.dispatched_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}` : 'Not yet dispatched'}
+                                </div>
+                            </div>
+                            <div style={{ fontSize: 14, color: 'var(--enterprise-gray-800)', fontWeight: 600, marginBottom: 14 }}>{shipment.customer_name}</div>
 
-                    {/* Rollup tiles */}
-                    {detail && (
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
-                            <MiniTile label="MPLs"        value={`${detail.mpls.filter(m => m.gr).length} / ${detail.mpls.length}`} sub="verified" />
-                            <MiniTile label="Expected"    value={detail.mpls.reduce((s, m) => s + m.pallet_count, 0)} sub="pallets" />
-                            <MiniTile label="Received"    value={detail.mpls.reduce((s, m) => s + (m.gr?.total_pallets_received ?? 0), 0)} sub="pallets" accent="success" />
-                            <MiniTile label="Discrepancy" value={detail.mpls.reduce((s, m) => s + (m.gr?.total_pallets_missing ?? 0) + (m.gr?.total_pallets_damaged ?? 0), 0)} sub="missing / damaged" accent="warning" />
-                            <MiniTile label="Placed"      value={`${detail.mpls.flatMap(m => m.pallets).filter(p => !!p.rack_location_code).length} / ${detail.mpls.reduce((s, m) => s + m.pallet_count, 0)}`} sub="in rack" />
-                        </div>
+                            {detail && (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
+                                    <MiniTile label="MPLs"        value={`${detail.mpls.filter(m => m.gr).length} / ${detail.mpls.length}`} sub="verified" />
+                                    <MiniTile label="Expected"    value={totalExpected} sub="pallets" />
+                                    <MiniTile label="Received"    value={totalReceived} sub="pallets" accent="success" />
+                                    <MiniTile label="Discrepancy" value={totalIssues}   sub="missing / damaged" accent="warning" />
+                                    <MiniTile label="Placed"      value={`${totalPlaced} / ${totalExpected}`} sub="in rack" />
+                                </div>
+                            )}
+                        </>
                     )}
                 </div>
             </div>
@@ -685,7 +935,7 @@ function ShipmentDetailPage({ shipment, onBack }: { shipment: Shipment; onBack: 
                 <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--enterprise-gray-400)' }} />
                 <input type="text" value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Filter by part #, MSN, pallet #, MPL, invoice, BPA, or rack…"
+                    placeholder={isMobile ? 'Filter by part · pallet · rack…' : 'Filter by part #, MSN, pallet #, MPL, invoice, BPA, or rack…'}
                     style={{ width: '100%', padding: '10px 12px 10px 38px', fontSize: 13, border: '1px solid var(--enterprise-gray-200)', borderRadius: 8, outline: 'none', background: 'white', boxSizing: 'border-box' }}
                     onFocus={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-primary)'}
                     onBlur={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-gray-200)'} />
@@ -714,7 +964,7 @@ function ShipmentDetailPage({ shipment, onBack }: { shipment: Shipment; onBack: 
 
             {/* MPL blocks */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {filteredMpls.map(m => <MplBlock key={m.mpl_id} mpl={m} defaultOpen={filteredMpls.length === 1} />)}
+                {filteredMpls.map(m => <MplBlock key={m.mpl_id} mpl={m} defaultOpen={filteredMpls.length === 1} isMobile={isMobile} />)}
             </div>
         </div>
     );
@@ -789,56 +1039,181 @@ function _UnusedExpandedSummary({ shipment }: { shipment: Shipment }) {
     );
 }
 
-function MplBlock({ mpl, defaultOpen = false }: { mpl: ShipmentDetail['mpls'][number]; defaultOpen?: boolean }) {
+function MplBlock({ mpl, defaultOpen = false, isMobile }: { mpl: ShipmentDetail['mpls'][number]; defaultOpen?: boolean; isMobile?: boolean }) {
     const verified = !!mpl.gr;
     const placed = mpl.pallets.filter(p => !!p.rack_location_code).length;
     const hasDiscrepancy = verified && ((mpl.gr!.total_pallets_missing + mpl.gr!.total_pallets_damaged) > 0);
     const accent = hasDiscrepancy ? '#dc2626' : verified ? '#16a34a' : '#2563eb';
     const [open, setOpen] = useState(defaultOpen);
+    const issues = verified ? (mpl.gr!.total_pallets_missing + mpl.gr!.total_pallets_damaged) : 0;
 
     return (
         <div style={{ border: '1px solid var(--enterprise-gray-200)', borderRadius: 10, background: 'white', overflow: 'hidden' }}>
-            <div onClick={() => setOpen(v => !v)} style={{ display: 'grid', gridTemplateColumns: '4px 1fr 90px 90px 90px 90px 24px', alignItems: 'center', cursor: 'pointer' }}>
-                <div style={{ height: '100%', background: accent, minHeight: 48 }} />
-                <div style={{ padding: '10px 16px', minWidth: 0 }}>
-                    <div style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 12, color: 'var(--enterprise-gray-900)' }}>{mpl.mpl_number}</div>
-                    <div style={{ fontSize: 11, color: 'var(--enterprise-gray-600)', marginTop: 2, display: 'flex', gap: 8 }}>
-                        {mpl.invoice_number && <span>INV <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{mpl.invoice_number}</span></span>}
-                        {mpl.bpa_number && <span>· BPA <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{mpl.bpa_number}</span></span>}
+            {isMobile ? (
+                /* Mobile MPL header — stacked. IDs on top, KPIs as a 4-tile grid below. */
+                <div onClick={() => setOpen(v => !v)} style={{ display: 'flex', cursor: 'pointer' }}>
+                    <div style={{ width: 4, background: accent, flexShrink: 0 }} />
+                    <div style={{ flex: 1, padding: '12px 14px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                                <div style={{ fontFamily: 'monospace', fontWeight: 800, fontSize: 13, color: 'var(--enterprise-gray-900)' }}>
+                                    {mpl.mpl_number}
+                                </div>
+                                <div style={{ fontSize: 10, color: 'var(--enterprise-gray-600)', marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                                    {mpl.invoice_number && (
+                                        <span><span style={{ color: 'var(--enterprise-gray-400)' }}>INV </span><span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{mpl.invoice_number}</span></span>
+                                    )}
+                                    {mpl.bpa_number && (
+                                        <span><span style={{ color: 'var(--enterprise-gray-400)' }}>BPA </span><span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>{mpl.bpa_number}</span></span>
+                                    )}
+                                </div>
+                            </div>
+                            <ChevronRight size={14} style={{ color: 'var(--enterprise-gray-400)', transform: open ? 'rotate(90deg)' : 'rotate(0)', transition: 'transform 0.2s ease', flexShrink: 0, marginTop: 4 }} />
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+                            <CompactStat label="Expected" value={String(mpl.pallet_count)} />
+                            <CompactStat label="Received" value={verified ? String(mpl.gr!.total_pallets_received) : '—'} accent={verified ? 'success' : undefined} />
+                            <CompactStat label="Issues"   value={verified ? String(issues) : '—'} accent={hasDiscrepancy ? 'warning' : undefined} />
+                            <CompactStat label="Placed"   value={verified ? `${placed}/${mpl.pallet_count}` : '—'} />
+                        </div>
                     </div>
                 </div>
-                <TileInline label="Expected"    value={String(mpl.pallet_count)} />
-                <TileInline label="Received"    value={verified ? String(mpl.gr!.total_pallets_received) : '—'} accent={verified ? 'success' : undefined} />
-                <TileInline label="Issues"      value={verified ? String(mpl.gr!.total_pallets_missing + mpl.gr!.total_pallets_damaged) : '—'} accent={hasDiscrepancy ? 'warning' : undefined} />
-                <TileInline label="Placed"      value={verified ? `${placed} / ${mpl.pallet_count}` : '—'} />
-                <ChevronRight size={14} style={{ color: 'var(--enterprise-gray-400)', transform: open ? 'rotate(90deg)' : 'rotate(0)', transition: 'transform 0.2s ease', marginRight: 12 }} />
-            </div>
+            ) : (
+                <div onClick={() => setOpen(v => !v)} style={{ display: 'grid', gridTemplateColumns: '4px 1fr 90px 90px 90px 90px 24px', alignItems: 'center', cursor: 'pointer' }}>
+                    <div style={{ height: '100%', background: accent, minHeight: 48 }} />
+                    <div style={{ padding: '10px 16px', minWidth: 0 }}>
+                        <div style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 12, color: 'var(--enterprise-gray-900)' }}>{mpl.mpl_number}</div>
+                        <div style={{ fontSize: 11, color: 'var(--enterprise-gray-600)', marginTop: 2, display: 'flex', gap: 8 }}>
+                            {mpl.invoice_number && <span>INV <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{mpl.invoice_number}</span></span>}
+                            {mpl.bpa_number && <span>· BPA <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{mpl.bpa_number}</span></span>}
+                        </div>
+                    </div>
+                    <TileInline label="Expected"    value={String(mpl.pallet_count)} />
+                    <TileInline label="Received"    value={verified ? String(mpl.gr!.total_pallets_received) : '—'} accent={verified ? 'success' : undefined} />
+                    <TileInline label="Issues"      value={verified ? String(issues) : '—'} accent={hasDiscrepancy ? 'warning' : undefined} />
+                    <TileInline label="Placed"      value={verified ? `${placed} / ${mpl.pallet_count}` : '—'} />
+                    <ChevronRight size={14} style={{ color: 'var(--enterprise-gray-400)', transform: open ? 'rotate(90deg)' : 'rotate(0)', transition: 'transform 0.2s ease', marginRight: 12 }} />
+                </div>
+            )}
 
             {open && (
                 <div style={{ borderTop: '1px solid var(--enterprise-gray-100)', background: 'rgba(15,23,42,0.02)' }}>
                     {/* GR meta */}
                     {verified && (
-                        <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--enterprise-gray-100)', fontSize: 12, color: 'var(--enterprise-gray-700)', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                            <CheckCircle2 size={13} style={{ color: '#16a34a' }} />
+                        <div style={{ padding: isMobile ? '10px 12px' : '10px 16px', borderBottom: '1px solid var(--enterprise-gray-100)', fontSize: 11, color: 'var(--enterprise-gray-700)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <CheckCircle2 size={12} style={{ color: '#16a34a' }} />
                             <span>Sub-GRN</span>
                             <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--enterprise-gray-900)' }}>{mpl.gr!.gr_number}</span>
-                            <span>· issued {new Date(mpl.gr!.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
-                            {mpl.gr!.placement_completed_at && <span>· placed {new Date(mpl.gr!.placement_completed_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>}
+                            <span>· {new Date(mpl.gr!.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+                            {mpl.gr!.placement_completed_at && <span>· placed {new Date(mpl.gr!.placement_completed_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</span>}
                         </div>
                     )}
 
-                    {/* Pallet rows */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 0.6fr 0.7fr 0.8fr 0.8fr 1.4fr', gap: 8, padding: '8px 16px', background: 'rgba(15,23,42,0.03)', fontSize: 10, fontWeight: 700, color: 'var(--enterprise-gray-500)', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
-                        <div>Part / Pallet</div>
-                        <div style={{ textAlign: 'right' }}>Qty</div>
-                        <div>Status</div>
-                        <div>Rack</div>
-                        <div>Placed</div>
-                        <div>Notes</div>
-                    </div>
-                    {mpl.pallets.map(p => <PalletDetailRow key={p.pallet_id} pallet={p} />)}
+                    {/* Pallet rows — table on desktop, card stack on mobile */}
+                    {isMobile ? (
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            {mpl.pallets.map(p => <PalletDetailRowMobile key={p.pallet_id} pallet={p} />)}
+                        </div>
+                    ) : (
+                        <>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 0.6fr 0.7fr 0.8fr 0.8fr 1.4fr', gap: 8, padding: '8px 16px', background: 'rgba(15,23,42,0.03)', fontSize: 10, fontWeight: 700, color: 'var(--enterprise-gray-500)', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
+                                <div>Part / Pallet</div>
+                                <div style={{ textAlign: 'right' }}>Qty</div>
+                                <div>Status</div>
+                                <div>Rack</div>
+                                <div>Placed</div>
+                                <div>Notes</div>
+                            </div>
+                            {mpl.pallets.map(p => <PalletDetailRow key={p.pallet_id} pallet={p} />)}
+                        </>
+                    )}
                 </div>
             )}
+        </div>
+    );
+}
+
+/** Mobile pallet row — stacked, pallet ID first, status pill on right. */
+function PalletDetailRowMobile({ pallet }: { pallet: ShipmentDetail['mpls'][number]['pallets'][number] }) {
+    const st = pallet.gr_line_status;
+    const color =
+        st === 'RECEIVED'     ? '#16a34a' :
+        st === 'MISSING'      ? '#dc2626' :
+        st === 'DAMAGED'      ? '#d97706' :
+        st === 'SHORT'        ? '#d97706' :
+        st === 'QUALITY_HOLD' ? '#7c3aed' :
+        'var(--enterprise-gray-400)';
+    const bg =
+        st === 'RECEIVED'     ? '#dcfce7' :
+        st === 'MISSING'      ? '#fee2e2' :
+        st === 'DAMAGED'      ? '#fef3c7' :
+        st === 'SHORT'        ? '#fef3c7' :
+        st === 'QUALITY_HOLD' ? '#ede9fe' :
+        'var(--enterprise-gray-100)';
+    return (
+        <div style={{
+            padding: '10px 12px',
+            borderTop: '1px solid var(--enterprise-gray-100)',
+            display: 'flex', flexDirection: 'column', gap: 6,
+            background: 'white',
+        }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 800, color: 'var(--enterprise-gray-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {pallet.pallet_number ?? '—'}
+                    </div>
+                    <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        {pallet.part_number && (
+                            <span style={{ fontFamily: 'monospace', fontSize: 11, fontWeight: 700, color: 'var(--enterprise-info, #3b82f6)', padding: '1px 6px', background: 'rgba(59,130,246,0.1)', borderRadius: 4 }}>
+                                {pallet.part_number}
+                            </span>
+                        )}
+                        {pallet.msn_code && (
+                            <span style={{ fontSize: 10, color: 'var(--enterprise-gray-600)' }}>{pallet.msn_code}</span>
+                        )}
+                        <span style={{ fontSize: 10, fontFamily: 'monospace', fontWeight: 700, color: 'var(--enterprise-gray-700)' }}>
+                            {Number(pallet.quantity).toLocaleString()} pcs
+                        </span>
+                    </div>
+                </div>
+                <span style={{
+                    fontSize: 9, fontWeight: 800, color, background: bg,
+                    padding: '3px 7px', borderRadius: 4, letterSpacing: '0.4px',
+                    flexShrink: 0, whiteSpace: 'nowrap',
+                }}>
+                    {st ? st.replace('_', ' ') : 'AWAITING'}
+                </span>
+            </div>
+            {(pallet.rack_location_code || pallet.discrepancy_note) && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, fontSize: 10, color: 'var(--enterprise-gray-600)' }}>
+                    {pallet.rack_location_code && (
+                        <span>
+                            <span style={{ color: 'var(--enterprise-gray-400)' }}>RACK </span>
+                            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--enterprise-primary)' }}>{pallet.rack_location_code}</span>
+                            {pallet.rack_placed_at && <span style={{ color: 'var(--enterprise-gray-400)' }}> · {new Date(pallet.rack_placed_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</span>}
+                        </span>
+                    )}
+                    {pallet.discrepancy_note && (
+                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={pallet.discrepancy_note}>
+                            <span style={{ color: 'var(--enterprise-gray-400)' }}>NOTE </span>{pallet.discrepancy_note}
+                        </span>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
+/** Mobile-friendly compact KPI tile used inside the MPL header on phones. */
+function CompactStat({ label, value, accent }: { label: string; value: string; accent?: 'success' | 'warning' }) {
+    const color =
+        accent === 'success' ? 'var(--enterprise-success)' :
+        accent === 'warning' ? '#d97706' :
+        'var(--enterprise-gray-900)';
+    return (
+        <div style={{ background: 'var(--enterprise-gray-50, #f8fafc)', borderRadius: 6, padding: '6px 8px' }}>
+            <div style={{ fontSize: 8, fontWeight: 700, color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>{label}</div>
+            <div style={{ fontSize: 13, fontWeight: 800, color, fontVariantNumeric: 'tabular-nums', marginTop: 1 }}>{value}</div>
         </div>
     );
 }
@@ -971,11 +1346,11 @@ function EmptyState({ search, filter }: { search: string; filter: Filter }) {
 // Pending Placement section (top of dashboard)
 // ============================================================================
 
-function PendingPlacementSection({ onPlaced }: { onPlaced: () => void }) {
+function PendingPlacementSection({ onPlaced, isMobile }: { onPlaced: () => void; isMobile?: boolean }) {
     const [lines, setLines] = useState<PendingLine[]>([]);
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState<string | null>(null);
-    const [open, setOpen] = useState(true);
+    const [open, setOpen] = useState(!isMobile);   // collapsed by default on mobile to save scroll
     const [placingFor, setPlacingFor] = useState<PendingLine | null>(null);
 
     const load = useCallback(async () => {
@@ -995,20 +1370,20 @@ function PendingPlacementSection({ onPlaced }: { onPlaced: () => void }) {
     if (!loading && lines.length === 0 && !err) return null;
 
     return (
-        <div style={{ marginBottom: 16, border: '1px solid #fcd34d', background: 'linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)', borderRadius: 12, overflow: 'hidden' }}>
-            <div onClick={() => setOpen(v => !v)} style={{ padding: '12px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ width: 32, height: 32, borderRadius: 8, background: '#fef3c7', color: '#92400e', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ marginBottom: isMobile ? 12 : 16, border: '1px solid #fcd34d', background: 'linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)', borderRadius: 12, overflow: 'hidden' }}>
+            <div onClick={() => setOpen(v => !v)} style={{ padding: isMobile ? '10px 14px' : '12px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: '#fef3c7', color: '#92400e', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                         <Package size={16} />
                     </div>
-                    <div>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: '#78350f' }}>Pending Placement</div>
+                    <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: isMobile ? 13 : 14, fontWeight: 700, color: '#78350f' }}>Pending Placement</div>
                         <div style={{ fontSize: 11, color: '#92400e', marginTop: 1 }}>
-                            {lines.length} pallet{lines.length !== 1 ? 's' : ''} verified but not yet in rack
+                            {lines.length} pallet{lines.length !== 1 ? 's' : ''} verified but not in rack
                         </div>
                     </div>
                 </div>
-                <ChevronRight size={16} style={{ color: '#92400e', transform: open ? 'rotate(90deg)' : 'rotate(0)', transition: 'transform 0.2s ease' }} />
+                <ChevronRight size={16} style={{ color: '#92400e', transform: open ? 'rotate(90deg)' : 'rotate(0)', transition: 'transform 0.2s ease', flexShrink: 0 }} />
             </div>
 
             {open && (
@@ -1018,18 +1393,31 @@ function PendingPlacementSection({ onPlaced }: { onPlaced: () => void }) {
                             <AlertCircle size={12} /> {err}
                         </div>
                     )}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 0.8fr 0.9fr 1.1fr 0.9fr 110px', gap: 10, padding: '8px 18px', background: 'rgba(15,23,42,0.03)', fontSize: 10, fontWeight: 700, color: 'var(--enterprise-gray-500)', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
-                        <div>Part / Pallet</div>
-                        <div>GR / MPL</div>
-                        <div style={{ textAlign: 'right' }}>Qty</div>
-                        <div>Status</div>
-                        <div>Shipment</div>
-                        <div>Received</div>
-                        <div />
-                    </div>
-                    {lines.map(l => (
-                        <PendingRow key={l.line_id} line={l} onPlace={() => setPlacingFor(l)} />
-                    ))}
+
+                    {/* Desktop: dense table. Mobile: vertical card list — the
+                        7-column grid was unreadable in a 360px viewport. */}
+                    {isMobile ? (
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            {lines.map(l => (
+                                <PendingRowMobile key={l.line_id} line={l} onPlace={() => setPlacingFor(l)} />
+                            ))}
+                        </div>
+                    ) : (
+                        <>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 0.8fr 0.9fr 1.1fr 0.9fr 110px', gap: 10, padding: '8px 18px', background: 'rgba(15,23,42,0.03)', fontSize: 10, fontWeight: 700, color: 'var(--enterprise-gray-500)', letterSpacing: '0.5px', textTransform: 'uppercase' }}>
+                                <div>Part / Pallet</div>
+                                <div>GR / MPL</div>
+                                <div style={{ textAlign: 'right' }}>Qty</div>
+                                <div>Status</div>
+                                <div>Shipment</div>
+                                <div>Received</div>
+                                <div />
+                            </div>
+                            {lines.map(l => (
+                                <PendingRow key={l.line_id} line={l} onPlace={() => setPlacingFor(l)} />
+                            ))}
+                        </>
+                    )}
                 </div>
             )}
 
@@ -1044,6 +1432,95 @@ function PendingPlacementSection({ onPlaced }: { onPlaced: () => void }) {
                     }}
                 />
             )}
+        </div>
+    );
+}
+
+// Mobile card variant — flat list, identity stacked on the left, Place CTA
+// full-width below to give the receiver a comfortable thumb target.
+function PendingRowMobile({ line, onPlace }: { line: PendingLine; onPlace: () => void }) {
+    const statusColor =
+        line.line_status === 'RECEIVED'     ? '#16a34a' :
+        line.line_status === 'DAMAGED'      ? '#d97706' :
+        line.line_status === 'SHORT'        ? '#d97706' :
+        line.line_status === 'QUALITY_HOLD' ? '#7c3aed' :
+        '#6b7280';
+    const statusBg =
+        line.line_status === 'RECEIVED'     ? '#dcfce7' :
+        line.line_status === 'DAMAGED'      ? '#fef3c7' :
+        line.line_status === 'SHORT'        ? '#fef3c7' :
+        line.line_status === 'QUALITY_HOLD' ? '#ede9fe' :
+        '#f3f4f6';
+    return (
+        <div style={{
+            padding: '12px 14px',
+            borderTop: '1px solid var(--enterprise-gray-100)',
+            display: 'flex', flexDirection: 'column', gap: 10,
+            background: 'white',
+        }}>
+            {/* Identity row — pallet number first (what the QR shows),
+                part chip + MSN inline below */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 800, color: 'var(--enterprise-gray-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {line.pallet_number ?? '—'}
+                    </div>
+                    <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        {line.part_number && (
+                            <span style={{ fontFamily: 'monospace', fontSize: 11, fontWeight: 700, color: 'var(--enterprise-info, #3b82f6)', padding: '1px 6px', background: 'rgba(59,130,246,0.1)', borderRadius: 4 }}>
+                                {line.part_number}
+                            </span>
+                        )}
+                        {line.msn_code && (
+                            <span style={{ fontSize: 10, color: 'var(--enterprise-gray-600)' }}>{line.msn_code}</span>
+                        )}
+                        <span style={{ fontSize: 10, fontFamily: 'monospace', fontWeight: 700, color: 'var(--enterprise-gray-700)' }}>
+                            {Number(line.received_qty).toLocaleString()} pcs
+                        </span>
+                    </div>
+                </div>
+                <span style={{ fontSize: 10, fontWeight: 800, color: statusColor, background: statusBg, padding: '3px 8px', borderRadius: 4, letterSpacing: '0.3px', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                    {line.line_status.replace('_', ' ')}
+                </span>
+            </div>
+
+            {/* Meta row — small captions for shipment + GR + received-at */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: 10, color: 'var(--enterprise-gray-600)' }}>
+                {(line.shipment_number || line.proforma_number) && (
+                    <span>
+                        <span style={{ color: 'var(--enterprise-gray-400)' }}>SHIP </span>
+                        <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>
+                            {line.shipment_number ?? line.proforma_number}
+                        </span>
+                    </span>
+                )}
+                {line.gr_number && (
+                    <span>
+                        <span style={{ color: 'var(--enterprise-gray-400)' }}>GR </span>
+                        <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--enterprise-gray-800)' }}>
+                            {line.gr_number}
+                        </span>
+                    </span>
+                )}
+                {line.received_at && (
+                    <span>
+                        <span style={{ color: 'var(--enterprise-gray-400)' }}>RX </span>
+                        {new Date(line.received_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                    </span>
+                )}
+            </div>
+
+            {/* Place CTA — full-width thumb target */}
+            <button onClick={onPlace}
+                style={{
+                    width: '100%', minHeight: 44,
+                    background: 'var(--enterprise-primary)', color: 'white',
+                    border: 'none', borderRadius: 8,
+                    fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                }}>
+                Place in rack <ChevronRight size={14} />
+            </button>
         </div>
     );
 }

@@ -1529,16 +1529,17 @@ export default function App() {
         }}>
           {/* TOP BAR */}
           <header className="app-topbar" style={{
-            height: '70px',
+            height: isMobile ? '54px' : '70px',
             backgroundColor: 'var(--card-background)',
             borderBottom: '1px solid var(--border-color)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: '0 32px',
+            padding: isMobile ? '0 12px' : '0 32px',
             boxShadow: 'var(--shadow-sm)',
+            gap: isMobile ? 8 : 16,
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 16, minWidth: 0, flex: 1 }}>
               {/* Mobile: hamburger menu button */}
               {isMobile && (
                 <button
@@ -1554,13 +1555,7 @@ export default function App() {
                     borderRadius: 'var(--border-radius-md)',
                     color: 'var(--enterprise-gray-600)',
                     cursor: 'pointer',
-                    transition: 'all 200ms ease',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = 'var(--enterprise-gray-100)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = 'transparent';
+                    flexShrink: 0,
                   }}
                 >
                   {isSidebarOpen ? <ChevronLeft size={20} /> : <Menu size={20} />}
@@ -1568,27 +1563,34 @@ export default function App() {
               )}
 
               {currentMenuItem && (
-                <div>
+                <div style={{ minWidth: 0 }}>
                   <h1 style={{
-                    fontSize: '20px',
-                    fontWeight: '600',
+                    fontSize: isMobile ? '15px' : '20px',
+                    fontWeight: '700',
                     color: 'var(--enterprise-gray-900)',
                     margin: 0,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    lineHeight: isMobile ? 1.2 : undefined,
                   }}>
                     {currentMenuItem.label}
                   </h1>
-                  <p style={{
-                    fontSize: '13px',
-                    color: 'var(--enterprise-gray-500)',
-                    margin: 0,
-                  }}>
-                    {currentMenuItem.description}
-                  </p>
+                  {/* Subtitle hidden on mobile — too cramped, label says enough */}
+                  {!isMobile && (
+                    <p style={{
+                      fontSize: '13px',
+                      color: 'var(--enterprise-gray-500)',
+                      margin: 0,
+                    }}>
+                      {currentMenuItem.description}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 4 : 12, flexShrink: 0 }}>
               {/* Notification Bell */}
               {user?.id && (
                 <NotificationBell
@@ -1599,18 +1601,22 @@ export default function App() {
                 />
               )}
 
-              <div style={{
-                padding: '6px 12px',
-                backgroundColor: '#dcfce7',
-                borderRadius: 'var(--border-radius-md)',
-                fontSize: '11px',
-                fontWeight: '600',
-                color: '#15803d',
-                textTransform: 'uppercase',
-                letterSpacing: '0.5px',
-              }}>
-                ✓ Authenticated
-              </div>
+              {/* Authenticated badge — hidden on mobile to free horizontal
+                  space. The notification bell + lock icon already imply auth. */}
+              {!isMobile && (
+                <div style={{
+                  padding: '6px 12px',
+                  backgroundColor: '#dcfce7',
+                  borderRadius: 'var(--border-radius-md)',
+                  fontSize: '11px',
+                  fontWeight: '600',
+                  color: '#15803d',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
+                }}>
+                  ✓ Authenticated
+                </div>
+              )}
             </div>
           </header>
 
