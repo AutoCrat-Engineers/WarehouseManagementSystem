@@ -14,6 +14,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     Truck, Search, RefreshCw, AlertCircle, ChevronRight, CheckCircle2,
     Clock, Package, Layers, AlertTriangle, FileText, Calendar, Loader2,
+    PlayCircle, Users,
 } from 'lucide-react';
 import { Card, LoadingSpinner, ModuleLoader } from '../ui/EnterpriseUI';
 import { fetchWithAuth } from '../../utils/supabase/auth';
@@ -101,6 +102,40 @@ async function fetchShipments(input: { status_filter: Filter; search_term?: stri
     return json;
 }
 
+interface InboundOverview {
+    kpis: {
+        trucks_today:       number;
+        in_progress:        number;
+        done_today:         number;
+        discrepancies_open: number;
+    };
+    my_drafts: Array<{
+        proforma_invoice_id: string;
+        mpl_id:              string;
+        updated_at:          string;
+        version:             number;
+        proforma_number:     string | null;
+        shipment_number:     string | null;
+        mpl_number:          string | null;
+    }>;
+    active_drafts_by_pi: Record<string, {
+        total_drafts: number; my_drafts: number; other_users: number; latest_at: string;
+    }>;
+}
+
+async function fetchOverview(): Promise<InboundOverview | null> {
+    try {
+        const res = await fetchWithAuth(getEdgeFunctionUrl('gr_inbound_overview'), {
+            method: 'POST', body: '{}',
+        });
+        const json = await res.json();
+        if (!res.ok || json?.error) return null;
+        return json as InboundOverview;
+    } catch {
+        return null;
+    }
+}
+
 // ============================================================================
 // Component
 // ============================================================================
@@ -122,15 +157,30 @@ export function RackViewGrid({ userRole, userPerms = {}, onGrConfirmed }: Props)
     const [error, setError] = useState<string | null>(null);
     const [filter, setFilter] = useState<Filter>('IN_TRANSIT');
     const [search, setSearch] = useState('');
-    const [showReceive, setShowReceive] = useState(false);
     const [selectedShipment, setSelectedShipment] = useState<Shipment | null>(null);
+
+    // Receive screen launch context — `null` = closed; otherwise the modal is
+    // open in either fresh-search mode or deep-linked into a specific PI / MPL.
+    const [receiveCtx, setReceiveCtx] = useState<
+        | null
+        | { mode: 'fresh' }
+        | { mode: 'deep'; proformaId: string; mplId?: string }
+    >(null);
+
+    // Today-focused overview (KPIs + my drafts + per-PI draft activity).
+    // Refreshed alongside the main list — small queries; not worth memoizing.
+    const [overview, setOverview] = useState<InboundOverview | null>(null);
 
     const fetchData = useCallback(async () => {
         setLoading(true); setError(null);
         try {
-            const r = await fetchShipments({ status_filter: filter, search_term: search || undefined, page_size: 100 });
+            const [r, ov] = await Promise.all([
+                fetchShipments({ status_filter: filter, search_term: search || undefined, page_size: 100 }),
+                fetchOverview(),
+            ]);
             setShipments(r.shipments);
             setCounts(r.counts);
+            setOverview(ov);
         } catch (e: any) {
             setError(e?.message ?? 'Failed to load shipments');
         } finally {
@@ -162,54 +212,70 @@ export function RackViewGrid({ userRole, userPerms = {}, onGrConfirmed }: Props)
 
     return (
         <div style={{ padding: '20px 24px', maxWidth: 1400, margin: '0 auto' }}>
-            {/* Header */}
-            <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-                <div>
-                    <h1 style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--enterprise-gray-900)', margin: 0 }}>
-                        Inbound Receiving — Milano 3PL
-                    </h1>
-                    <p style={{ fontSize: '13px', color: 'var(--enterprise-gray-600)', margin: '4px 0 0' }}>
-                        Incoming shipments from the factory. Verify, issue Goods Receipts, and place pallets.
-                    </p>
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={fetchData} style={ghostBtnStyle} disabled={loading}>
-                        <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : undefined }} /> Refresh
-                    </button>
-                    {canReceive && (
-                        <button onClick={() => setShowReceive(true)} style={primaryBtnStyle}>
-                            <Truck size={13} /> Receive Shipment
-                        </button>
-                    )}
-                </div>
-            </div>
 
             {/* Pending Placement queue (only shown when not empty) */}
             <PendingPlacementSection onPlaced={fetchData} />
 
-            {/* KPI strip */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 16 }}>
-                <KPICard icon={<Truck size={16} />}        iconBg="#eff6ff" iconColor="#2563eb" label="In Transit"  value={counts.in_transit}  sub="awaiting verify" />
-                <KPICard icon={<Layers size={16} />}       iconBg="#fef3c7" iconColor="#d97706" label="Partial"     value={counts.partial}     sub="some MPLs verified" />
-                <KPICard icon={<CheckCircle2 size={16} />} iconBg="#f0fdf4" iconColor="#16a34a" label="Complete"    value={counts.complete}    sub="all verified" />
-                <KPICard icon={<AlertTriangle size={16} />}iconBg="#fee2e2" iconColor="#dc2626" label="Discrepancy" value={counts.discrepancy} sub="missing / damaged" />
-                <KPICard icon={<FileText size={16} />}     iconBg="#f3f4f6" iconColor="#374151" label="Total"       value={counts.total}       sub="all shipments" />
+            {/* Summary cards — clickable filters. Active card ringed in its accent
+                colour; tapping the active card again clears back to ALL. Replaces
+                the previous separate KPI strip + filter-chip row (BPA-style). */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 14, marginBottom: 18 }}>
+                <UnifiedKPICard
+                    icon={<Truck size={16} />} iconBg="#eff6ff" iconColor="#2563eb"
+                    label="In Transit" value={counts.in_transit} sub="awaiting verify"
+                    isActive={filter === 'IN_TRANSIT'}
+                    onClick={() => setFilter(filter === 'IN_TRANSIT' ? 'ALL' : 'IN_TRANSIT')}
+                />
+                <UnifiedKPICard
+                    icon={<Layers size={16} />} iconBg="#fef3c7" iconColor="#d97706"
+                    label="Partial" value={counts.partial} sub="some MPLs verified"
+                    isActive={filter === 'PARTIAL'}
+                    onClick={() => setFilter(filter === 'PARTIAL' ? 'ALL' : 'PARTIAL')}
+                />
+                <UnifiedKPICard
+                    icon={<CheckCircle2 size={16} />} iconBg="#f0fdf4" iconColor="#16a34a"
+                    label="Complete" value={counts.complete} sub="all verified"
+                    isActive={filter === 'COMPLETE'}
+                    onClick={() => setFilter(filter === 'COMPLETE' ? 'ALL' : 'COMPLETE')}
+                />
+                <UnifiedKPICard
+                    icon={<AlertTriangle size={16} />} iconBg="#fee2e2" iconColor="#dc2626"
+                    label="Discrepancy" value={counts.discrepancy} sub="missing / damaged"
+                    isActive={filter === 'DISCREPANCY'}
+                    onClick={() => setFilter(filter === 'DISCREPANCY' ? 'ALL' : 'DISCREPANCY')}
+                    alert={counts.discrepancy > 0}
+                />
+                <UnifiedKPICard
+                    icon={<FileText size={16} />} iconBg="#f3f4f6" iconColor="#374151"
+                    label="All shipments" value={counts.total} sub="total in-flight"
+                    isActive={filter === 'ALL'}
+                    onClick={() => setFilter('ALL')}
+                />
             </div>
 
-            {/* Filter chips */}
-            <FilterChips filter={filter} onChange={(f) => setFilter(f)} counts={counts} />
-
-            {/* Search */}
-            <div style={{ position: 'relative', marginBottom: 18 }}>
-                <Search size={16} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'var(--enterprise-gray-400)' }} />
-                <input
-                    type="text" value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search by proforma #, shipment #, or customer…"
-                    style={{ width: '100%', padding: '12px 14px 12px 42px', fontSize: 13, border: '1px solid var(--enterprise-gray-200)', borderRadius: 10, outline: 'none', background: 'white', boxShadow: '0 1px 2px rgba(0,0,0,0.02)' }}
-                    onFocus={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-primary)'}
-                    onBlur={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-gray-200)'}
-                />
+            {/* Search + actions toolbar — search on the left, Refresh + primary
+                CTA on the right. One row so the action affordances are always
+                visible without scrolling back to the header. */}
+            <div style={{ display: 'flex', gap: 10, marginBottom: 18, alignItems: 'stretch' }}>
+                <div style={{ position: 'relative', flex: 1 }}>
+                    <Search size={16} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'var(--enterprise-gray-400)' }} />
+                    <input
+                        type="text" value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder="Search by proforma #, shipment #, or customer…"
+                        style={{ width: '100%', padding: '12px 14px 12px 42px', fontSize: 13, border: '1px solid var(--enterprise-gray-200)', borderRadius: 10, outline: 'none', background: 'white', boxShadow: '0 1px 2px rgba(0,0,0,0.02)' }}
+                        onFocus={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-primary)'}
+                        onBlur={(e) => e.currentTarget.style.borderColor = 'var(--enterprise-gray-200)'}
+                    />
+                </div>
+                <button onClick={fetchData} disabled={loading} style={{ ...ghostBtnStyle, padding: '0 16px' }}>
+                    <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : undefined }} /> Refresh
+                </button>
+                {canReceive && (
+                    <button onClick={() => setReceiveCtx({ mode: 'fresh' })} style={{ ...primaryBtnStyle, padding: '0 18px' }}>
+                        <Truck size={13} /> Receive Shipment
+                    </button>
+                )}
             </div>
 
             {/* Error */}
@@ -229,23 +295,74 @@ export function RackViewGrid({ userRole, userPerms = {}, onGrConfirmed }: Props)
                 </Card>
             ) : shipments.length === 0 ? (
                 <EmptyState search={search} filter={filter} />
-            ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    {shipments.map(s => (
-                        <ShipmentCard key={s.id} shipment={s} onOpen={() => setSelectedShipment(s)} />
-                    ))}
-                </div>
-            )}
+            ) : (() => {
+                // FIFO sort — oldest dispatch first so the next-to-receive
+                // truck always sits at the top. Falls back to created_at when
+                // dispatched_at is missing. Stable: equal timestamps keep
+                // server order.
+                const sorted = [...shipments].sort((a, b) => {
+                    const at = a.dispatched_at ?? a.created_at ?? '';
+                    const bt = b.dispatched_at ?? b.created_at ?? '';
+                    return at.localeCompare(bt);
+                });
+                // Only the first card whose status still needs verification gets
+                // the inline "Receive Shipment" CTA — enforces FIFO at the UI
+                // level. Already-completed shipments at the top (e.g. when
+                // viewing the COMPLETE filter) don't get the button.
+                const firstReceivableId = sorted.find(s =>
+                    s.status === 'IN_TRANSIT' || s.status === 'PARTIAL'
+                )?.id;
+                return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        {sorted.map(s => (
+                            <ShipmentCard
+                                key={s.id}
+                                shipment={s}
+                                onOpen={() => setSelectedShipment(s)}
+                                draftActivity={overview?.active_drafts_by_pi[s.id]}
+                                showReceiveCta={canReceive && s.id === firstReceivableId}
+                                onReceive={() => setReceiveCtx({ mode: 'deep', proformaId: s.id })}
+                            />
+                        ))}
+                    </div>
+                );
+            })()}
 
-            {/* Receive Shipment modal */}
-            {showReceive && (
+            {/* Receive Shipment modal — fresh search, or deep-linked from a card / "Resume" */}
+            {receiveCtx && (
                 <ReceiveShipmentScreen
-                    onClose={() => setShowReceive(false)}
+                    onClose={() => setReceiveCtx(null)}
                     onCompleted={(grNumber) => {
-                        setShowReceive(false);
+                        setReceiveCtx(null);
                         fetchData();
                         if (grNumber) onGrConfirmed?.(grNumber);
                     }}
+                    initialProformaId={receiveCtx.mode === 'deep' ? receiveCtx.proformaId : undefined}
+                    initialMplId={receiveCtx.mode === 'deep' ? receiveCtx.mplId : undefined}
+                    quickPickShipments={
+                        // FIFO suggestions on the SEARCH step. Only relevant in fresh
+                        // mode (deep-link skips SEARCH). Top-2 oldest still-receivable
+                        // shipments — same sort logic the cards below use.
+                        receiveCtx.mode === 'fresh'
+                            ? [...shipments]
+                                .filter(s => s.status === 'IN_TRANSIT' || s.status === 'PARTIAL')
+                                .sort((a, b) => {
+                                    const at = a.dispatched_at ?? a.created_at ?? '';
+                                    const bt = b.dispatched_at ?? b.created_at ?? '';
+                                    return at.localeCompare(bt);
+                                })
+                                .slice(0, 2)
+                                .map(s => ({
+                                    id: s.id,
+                                    proforma_number: s.proforma_number,
+                                    shipment_number: s.shipment_number,
+                                    dispatched_at: s.dispatched_at,
+                                    status: s.status,
+                                    mpl_count: s.mpl_count,
+                                    pallets_expected: s.pallets_expected,
+                                }))
+                            : undefined
+                    }
                 />
             )}
         </div>
@@ -253,16 +370,29 @@ export function RackViewGrid({ userRole, userPerms = {}, onGrConfirmed }: Props)
 }
 
 // ============================================================================
-// KPI Card
+// Unified KPI Card — clickable filter card matching the BPA-list pattern.
+// Active card gets a colored border + soft glow ring; tapping clears filter.
 // ============================================================================
 
-function KPICard({ icon, iconBg, iconColor, label, value, sub }: {
+function UnifiedKPICard({ icon, iconBg, iconColor, label, value, sub, isActive, onClick, alert }: {
     icon: React.ReactNode; iconBg: string; iconColor: string;
     label: string; value: number; sub: string;
+    isActive?: boolean; onClick?: () => void; alert?: boolean;
 }) {
     return (
-        <div style={{ background: 'white', border: '1px solid var(--enterprise-gray-200)', borderRadius: 12, padding: '16px 18px', boxShadow: '0 1px 2px rgba(0,0,0,0.02)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div
+            onClick={onClick}
+            style={{
+                background: 'white',
+                border: isActive ? `2px solid ${iconColor}` : '1px solid var(--enterprise-gray-200)',
+                borderRadius: 12, padding: '16px 18px',
+                boxShadow: isActive ? `0 0 0 3px ${iconBg}` : '0 1px 2px rgba(0,0,0,0.02)',
+                transition: 'all 0.2s ease',
+                cursor: onClick ? 'pointer' : 'default',
+                display: 'flex', flexDirection: 'column',
+            }}
+        >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--enterprise-gray-500)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                     {label}
                 </div>
@@ -270,61 +400,12 @@ function KPICard({ icon, iconBg, iconColor, label, value, sub }: {
                     {icon}
                 </div>
             </div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--enterprise-gray-900)', lineHeight: 1.1 }}>{value}</div>
-            <div style={{ fontSize: 11, color: 'var(--enterprise-gray-500)', marginTop: 4 }}>{sub}</div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: alert ? '#dc2626' : 'var(--enterprise-gray-900)', lineHeight: 1.1, fontVariantNumeric: 'tabular-nums' }}>
+                {value}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--enterprise-gray-500)', marginTop: 4, fontWeight: 500 }}>{sub}</div>
         </div>
     );
-}
-
-// ============================================================================
-// Filter chips
-// ============================================================================
-
-function FilterChips({ filter, onChange, counts }: { filter: Filter; onChange: (f: Filter) => void; counts: Counts }) {
-    const chips: Array<{ key: Filter; label: string; count: number; color: string }> = [
-        { key: 'ALL',         label: 'All',          count: counts.total,       color: '#111827' },
-        { key: 'IN_TRANSIT',  label: 'In Transit',   count: counts.in_transit,  color: '#2563eb' },
-        { key: 'PARTIAL',     label: 'Partial',      count: counts.partial,     color: '#d97706' },
-        { key: 'COMPLETE',    label: 'Complete',     count: counts.complete,    color: '#16a34a' },
-        { key: 'DISCREPANCY', label: 'Discrepancy',  count: counts.discrepancy, color: '#dc2626' },
-    ];
-
-    return (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-            {chips.map(c => {
-                const active = filter === c.key;
-                return (
-                    <button key={c.key} onClick={() => onChange(c.key)}
-                        style={{
-                            padding: '7px 14px',
-                            border: active ? 'none' : '1px solid var(--enterprise-gray-200)',
-                            borderRadius: 999,
-                            background: active ? `linear-gradient(135deg, ${c.color} 0%, ${darken(c.color)} 100%)` : 'white',
-                            color: active ? '#fff' : 'var(--enterprise-gray-700)',
-                            fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                            transition: 'all 0.15s ease',
-                            boxShadow: active ? '0 2px 8px rgba(0,0,0,0.12)' : 'none',
-                            transform: active ? 'translateY(-1px)' : 'translateY(0)',
-                            display: 'flex', alignItems: 'center', gap: 6,
-                        }}
-                        onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = 'var(--enterprise-gray-50)'; }}
-                        onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = 'white'; }}
-                    >
-                        <span>{c.label}</span>
-                        <span style={{ background: active ? 'rgba(255,255,255,0.25)' : 'var(--enterprise-gray-100)', color: active ? '#fff' : 'var(--enterprise-gray-600)', padding: '1px 7px', borderRadius: 10, fontSize: 11, fontWeight: 700, minWidth: 18, textAlign: 'center' }}>{c.count}</span>
-                    </button>
-                );
-            })}
-        </div>
-    );
-}
-
-function darken(hex: string): string {
-    const map: Record<string, string> = {
-        '#2563eb': '#1e3a8a', '#d97706': '#78350f', '#16a34a': '#166534',
-        '#dc2626': '#991b1b', '#111827': '#000000',
-    };
-    return map[hex] ?? '#000';
 }
 
 // ============================================================================
@@ -368,11 +449,20 @@ async function fetchShipmentDetail(proformaId: string): Promise<ShipmentDetail> 
     return json;
 }
 
-function ShipmentCard({ shipment, onOpen }: { shipment: Shipment; onOpen: () => void }) {
+function ShipmentCard({ shipment, onOpen, draftActivity, showReceiveCta, onReceive }: {
+    shipment: Shipment;
+    onOpen: () => void;
+    draftActivity?: { total_drafts: number; my_drafts: number; other_users: number; latest_at: string };
+    /** Show the inline "Receive Shipment" CTA. Only the FIFO-first card sets this. */
+    showReceiveCta?: boolean;
+    onReceive?: () => void;
+}) {
     const accent = STATUS_COLOR[shipment.status];
     const total = shipment.pallets_expected;
     const received = shipment.pallets_received;
     const pct = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0;
+    const hasMyDraft    = (draftActivity?.my_drafts   ?? 0) > 0;
+    const hasOtherDraft = (draftActivity?.other_users ?? 0) > 0;
 
     return (
         <div
@@ -399,16 +489,29 @@ function ShipmentCard({ shipment, onOpen }: { shipment: Shipment; onOpen: () => 
             <div style={{ width: 4, background: accent, flexShrink: 0 }} />
 
             <div style={{ flex: 1, minWidth: 0, padding: '16px 20px' }}>
-                {/* Row 1: id + status + GR # · chevron */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, minWidth: 0 }}>
-                        <span style={{ fontFamily: 'monospace', fontSize: 17, fontWeight: 800, color: 'var(--enterprise-gray-900)' }}>
-                            {shipment.shipment_number ?? shipment.proforma_number}
-                        </span>
-                        {shipment.shipment_number && shipment.proforma_number && (
-                            <span style={{ fontSize: 11, color: 'var(--enterprise-gray-500)' }}>PI {shipment.proforma_number}</span>
+                {/* Row 1: shipment# + PI# (equal weight) + status + draft badges
+                    · GR# / Receive · chevron */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 24, minWidth: 0, flexWrap: 'wrap' }}>
+                        {shipment.shipment_number && (
+                            <span style={{ fontFamily: 'monospace', fontSize: 17, fontWeight: 800, color: 'var(--enterprise-gray-900)' }}>
+                                {shipment.shipment_number}
+                            </span>
                         )}
+                        <span style={{ fontFamily: 'monospace', fontSize: 17, fontWeight: 800, color: 'var(--enterprise-gray-900)' }}>
+                            {shipment.proforma_number}
+                        </span>
                         <StatusBadge status={shipment.status} />
+                        {hasMyDraft && (
+                            <span style={draftBadgeMine} title={`Resumable draft last saved ${new Date(draftActivity!.latest_at).toLocaleString()}`}>
+                                <PlayCircle size={11} /> My draft
+                            </span>
+                        )}
+                        {hasOtherDraft && !hasMyDraft && (
+                            <span style={draftBadgeOther} title={`${draftActivity!.other_users} draft(s) by other users`}>
+                                <Users size={11} /> In progress
+                            </span>
+                        )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         {shipment.gr_numbers.length > 0 && (
@@ -424,16 +527,29 @@ function ShipmentCard({ shipment, onOpen }: { shipment: Shipment; onOpen: () => 
                                 )}
                             </span>
                         )}
-                        <ChevronRight size={16} style={{ color: 'var(--enterprise-gray-400)' }} />
+                        {showReceiveCta ? (
+                            <button
+                                onClick={(e) => { e.stopPropagation(); onReceive?.(); }}
+                                style={{
+                                    background: 'var(--enterprise-primary)', color: 'white', border: 'none',
+                                    padding: '8px 14px', borderRadius: 8, fontSize: 12, fontWeight: 700,
+                                    cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+                                    whiteSpace: 'nowrap',
+                                    boxShadow: '0 1px 3px rgba(30,58,138,0.25)',
+                                }}
+                                title="Next in FIFO — receive this shipment"
+                            >
+                                <Truck size={13} /> Receive
+                            </button>
+                        ) : (
+                            <ChevronRight size={16} style={{ color: 'var(--enterprise-gray-400)' }} />
+                        )}
                     </div>
                 </div>
 
-                {/* Row 2: customer (no description / BPA / INV — those live at MPL level, not shipment level) */}
-                <div style={{ fontSize: 13, color: 'var(--enterprise-gray-700)', marginBottom: 14, fontWeight: 600 }}>
-                    {shipment.customer_name}
-                </div>
-
-                {/* Row 3: KPIs inline */}
+                {/* Row 2: KPIs inline. (Customer / part / BPA / INV deliberately
+                    omitted at the shipment level — a shipment can mix multiple
+                    parts and customers; that detail belongs on the detail page.) */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 16, marginBottom: 12 }}>
                     <Inline label="MPLs"     value={shipment.mpl_count.toString()}      icon={<Layers size={12} />} />
                     <Inline label="Expected" value={shipment.pallets_expected.toString()}                                />
@@ -1070,3 +1186,21 @@ const ghostBtnStyle: React.CSSProperties = {
     padding: '9px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600,
     cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
 };
+
+// Draft activity badges — shown on shipment cards. "My draft" is the
+// resumable affordance; "In progress" is purely informational (don't trample
+// another receiver's session — the version-conflict guard would catch it,
+// but the badge prevents the conflict in the first place).
+const draftBadgeMine: React.CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', gap: 4,
+    padding: '3px 8px', borderRadius: 999,
+    background: '#dcfce7', color: '#166534',
+    fontSize: 10, fontWeight: 700, letterSpacing: '0.3px', textTransform: 'uppercase',
+};
+const draftBadgeOther: React.CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', gap: 4,
+    padding: '3px 8px', borderRadius: 999,
+    background: '#fef3c7', color: '#92400e',
+    fontSize: 10, fontWeight: 700, letterSpacing: '0.3px', textTransform: 'uppercase',
+};
+
