@@ -31,6 +31,7 @@
             "@radix-ui/react-toggle-group": "^1.1.2",
             "@radix-ui/react-tooltip": "^1.1.8",
             "@supabase/supabase-js": "*",
+            "@zxing/browser": "^0.2.0",
             "class-variance-authority": "^0.7.1",
             "clsx": "*",
             "cmdk": "^1.1.1",
@@ -52,9 +53,9 @@
       },
       "devDependencies": {
             "@types/node": "^20.10.0",
+            "@types/qrcode": "^1.5.6",
             "@types/react": "^19.2.10",
             "@types/react-dom": "^19.2.3",
-            "@types/qrcode": "^1.5.6",
             "@vitejs/plugin-react-swc": "^3.10.2",
             "vite": "6.3.5"
       },
