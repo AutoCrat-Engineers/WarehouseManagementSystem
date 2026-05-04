@@ -77,6 +77,22 @@ function valLoc(loc: string): { valid: boolean; error?: string; rack?: string } 
     return { valid: true, rack: f };
 }
 
+// ── Mobile-compact KPI tile ────────────────────────────────────────────
+function MiniKpi({ label, value, color }: { label: string; value: string; color: string }) {
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minWidth: 0, padding: '2px 4px' }}>
+            <span style={{ fontSize: 16, fontWeight: 800, color, lineHeight: 1.1, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{value}</span>
+            <span style={{ fontSize: 10, color: 'var(--enterprise-gray-500)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3, marginTop: 2 }}>{label}</span>
+        </div>
+    );
+}
+function compactNumber(n: number): string {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+    if (n >= 10_000)    return `${(n / 1_000).toFixed(0)}k`;
+    if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}k`;
+    return n.toLocaleString();
+}
+
 // ── Pallet back-chain drawer helpers ────────────────────────────────────
 function BackChainSection({ title, color, children }: { title: string; color: string; children: React.ReactNode }) {
     return (
@@ -340,7 +356,16 @@ export function RackView({ userRole, userPerms = {}, grNumber, onGrPlacementDone
     };
 
     const { items: dashItems } = useAllItemsStockDashboard();
-    const ohMap = useMemo(() => { const m = new Map<string, number>(); for (const i of dashItems) { if (i.masterSerialNo) m.set(i.masterSerialNo, i.usTransitStock ?? 0); } return m; }, [dashItems]);
+    const ohMap = useMemo(() => {
+        const m = new Map<string, number>();
+        for (const i of dashItems) {
+            if (!i.masterSerialNo) continue;
+            // Prefer the dedicated US-3PL on-hand fields; fall back through totalOnHand → usTransitStock.
+            const oh = i.usTransitOnHand ?? i.totalOnHand ?? i.usTransitStock ?? 0;
+            m.set(i.masterSerialNo, oh);
+        }
+        return m;
+    }, [dashItems]);
     const allocMap = useMemo(() => { const m = new Map<string, number>(); for (const es of Object.values(rackData)) for (const e of es) m.set(e.msn, (m.get(e.msn) || 0) + e.qty); return m; }, [rackData]);
 
     useEffect(() => { (async () => { setMsnLoading(true); try { const sb = getSupabaseClient(); const { data } = await sb.from('items').select('id, master_serial_no, item_name, part_number, item_code:part_number').eq('is_active', true).not('master_serial_no', 'is', null).order('master_serial_no', { ascending: true }); setMsnItems((data || []).filter((i: any) => i.master_serial_no) as MsnItem[]); } catch { } finally { setMsnLoading(false); } })(); }, []);
@@ -545,22 +570,57 @@ export function RackView({ userRole, userPerms = {}, grNumber, onGrPlacementDone
                 </Card>
             )}
 
-            {/* SUMMARY */}
-            <SummaryCardsGrid columns={4}>
-                <SummaryCard label="Total Racks" value={stats.totalRacks} icon={<Layers size={22} style={{ color: 'var(--enterprise-primary)' }} />} color="var(--enterprise-primary)" bgColor="rgba(30,58,138,0.1)" />
-                <SummaryCard label="Total Locations" value={stats.totalLocs} icon={<MapPin size={22} style={{ color: 'var(--enterprise-success)' }} />} color="var(--enterprise-success)" bgColor="rgba(34,197,94,0.1)" />
-                <SummaryCard label="Unique Items" value={stats.totalItems} icon={<Package size={22} style={{ color: '#a855f7' }} />} color="#a855f7" bgColor="rgba(168,85,247,0.1)" />
-                <SummaryCard label="Total Quantity" value={stats.totalQty} icon={<Box size={22} style={{ color: '#ea580c' }} />} color="#ea580c" bgColor="rgba(234,88,12,0.1)" />
-            </SummaryCardsGrid>
+            {/* SUMMARY — compact 4-up KPI strip on mobile, full cards on desktop */}
+            {isMobile ? (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, background: 'white', border: '1px solid var(--enterprise-gray-200)', borderRadius: 8, padding: '10px 8px' }}>
+                    <MiniKpi label="Racks"     value={stats.totalRacks.toLocaleString()}  color="var(--enterprise-primary)" />
+                    <MiniKpi label="Locations" value={stats.totalLocs.toLocaleString()}   color="var(--enterprise-success)" />
+                    <MiniKpi label="Items"     value={stats.totalItems.toLocaleString()}  color="#a855f7" />
+                    <MiniKpi label="Qty"       value={compactNumber(stats.totalQty)}       color="#ea580c" />
+                </div>
+            ) : (
+                <SummaryCardsGrid columns={4}>
+                    <SummaryCard label="Total Racks" value={stats.totalRacks} icon={<Layers size={22} style={{ color: 'var(--enterprise-primary)' }} />} color="var(--enterprise-primary)" bgColor="rgba(30,58,138,0.1)" />
+                    <SummaryCard label="Total Locations" value={stats.totalLocs} icon={<MapPin size={22} style={{ color: 'var(--enterprise-success)' }} />} color="var(--enterprise-success)" bgColor="rgba(34,197,94,0.1)" />
+                    <SummaryCard label="Unique Items" value={stats.totalItems} icon={<Package size={22} style={{ color: '#a855f7' }} />} color="#a855f7" bgColor="rgba(168,85,247,0.1)" />
+                    <SummaryCard label="Total Quantity" value={stats.totalQty} icon={<Box size={22} style={{ color: '#ea580c' }} />} color="#ea580c" bgColor="rgba(234,88,12,0.1)" />
+                </SummaryCardsGrid>
+            )}
 
-            {/* FILTER BAR */}
-            <FilterBar>
-                <SearchBox value={globalSearch} onChange={setGlobalSearch} placeholder="Search by MSN, part number, location, item name…" />
-                <ActionBar>
-                    {canEdit && <ActionButton label="Move" icon={<ArrowRightLeft size={14} />} onClick={() => { setMoveErr(''); setMoveOk(''); setMoveSrc(null); setMoveDst(''); setMoveQty(''); setShowMoveModal(true); }} variant="secondary" />}
-                    {canCreate && <ActionButton label="Add Stock" icon={<Plus size={14} />} onClick={() => { resetAdd(); setShowAddModal(true); }} variant="primary" />}
-                </ActionBar>
-            </FilterBar>
+            {/* FILTER BAR — on mobile stack search above buttons, full width */}
+            {isMobile ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, background: 'white', padding: 10, borderRadius: 8, border: '1px solid var(--enterprise-gray-200)' }}>
+                    <SearchBox value={globalSearch} onChange={setGlobalSearch} placeholder="Search MSN, part, location…" minWidth="0" />
+                    {(canEdit || canCreate) && (
+                        <div style={{ display: 'flex', gap: 8 }}>
+                            {canEdit && (
+                                <button
+                                    onClick={() => { setMoveErr(''); setMoveOk(''); setMoveSrc(null); setMoveDst(''); setMoveQty(''); setShowMoveModal(true); }}
+                                    style={{ flex: 1, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 8, border: '1px solid var(--enterprise-gray-300)', background: 'white', color: 'var(--enterprise-gray-700)', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
+                                >
+                                    <ArrowRightLeft size={16} /> Move
+                                </button>
+                            )}
+                            {canCreate && (
+                                <button
+                                    onClick={() => { resetAdd(); setShowAddModal(true); }}
+                                    style={{ flex: 1, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 8, border: 'none', background: 'var(--enterprise-primary)', color: 'white', fontSize: 14, fontWeight: 700, cursor: 'pointer', boxShadow: '0 1px 2px rgba(30,58,138,0.18)' }}
+                                >
+                                    <Plus size={16} /> Add Stock
+                                </button>
+                            )}
+                        </div>
+                    )}
+                </div>
+            ) : (
+                <FilterBar>
+                    <SearchBox value={globalSearch} onChange={setGlobalSearch} placeholder="Search by MSN, part number, location, item name…" />
+                    <ActionBar>
+                        {canEdit && <ActionButton label="Move" icon={<ArrowRightLeft size={14} />} onClick={() => { setMoveErr(''); setMoveOk(''); setMoveSrc(null); setMoveDst(''); setMoveQty(''); setShowMoveModal(true); }} variant="secondary" />}
+                        {canCreate && <ActionButton label="Add Stock" icon={<Plus size={14} />} onClick={() => { resetAdd(); setShowAddModal(true); }} variant="primary" />}
+                    </ActionBar>
+                </FilterBar>
+            )}
 
             {/* SEARCH SUMMARY */}
             {searchDist && searchDist.length > 0 && (
@@ -589,13 +649,14 @@ export function RackView({ userRole, userPerms = {}, grNumber, onGrPlacementDone
             }}>
                 <div style={{ flex: 1, minWidth: 0, width: isMobile ? '100%' : undefined }}>
                     <Card style={{ padding: 0, overflow: 'hidden' }}>
-                        {/* TABS — tighter padding on mobile so more racks fit */}
-                        <div style={{ display: 'flex', borderBottom: '2px solid var(--enterprise-gray-200)', background: 'var(--enterprise-gray-50)', overflowX: 'auto' }}>
+                        {/* TABS — equal flex on mobile (no horizontal scroll); scroll-on-overflow on desktop */}
+                        <div className="rack-tabs-strip" style={{ display: 'flex', borderBottom: '2px solid var(--enterprise-gray-200)', background: 'var(--enterprise-gray-50)', overflowX: isMobile ? 'hidden' : 'auto' }}>
                             {rackKeys.map(r => {
                                 const act = activeRack === r; const cl = rc(r); const hasHits = searchDist ? searchDist.some(d => d.rack === r) : false; return (
                                     <button key={r} onClick={() => { setActiveRack(r); setSelectedLoc(null); }}
                                         style={{
-                                            padding: isMobile ? '10px 14px' : '14px 28px',
+                                            flex: isMobile ? 1 : undefined,
+                                            padding: isMobile ? '10px 6px' : '14px 28px',
                                             border: 'none',
                                             borderBottom: act ? `3px solid ${cl.border}` : '3px solid transparent',
                                             background: act ? cl.bg : 'transparent',
@@ -604,7 +665,7 @@ export function RackView({ userRole, userPerms = {}, grNumber, onGrPlacementDone
                                             fontWeight: act ? 700 : 500,
                                             fontSize: isMobile ? 12 : 14,
                                             transition: 'all 0.2s',
-                                            display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 10,
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: isMobile ? 4 : 10,
                                             whiteSpace: 'nowrap',
                                         }}
                                     >
@@ -630,9 +691,9 @@ export function RackView({ userRole, userPerms = {}, grNumber, onGrPlacementDone
                                 <h3 style={{ margin: 0, fontSize: isMobile ? 14 : 16, fontWeight: 700, color: c.text }}>Rack {activeRack}</h3>
                                 <span style={{ fontSize: isMobile ? 11 : 13, color: 'var(--enterprise-gray-500)' }}>{locCounts[activeRack] || 0} loc · {rs?.occ || 0} occ · {(rs?.qty || 0).toLocaleString()} pcs</span>
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                                {canEdit && <button onClick={() => { setScaleMode('add'); setScaleCount(''); setScaleError(''); setShowScaleModal(true); }} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: isMobile ? '6px 10px' : '5px 12px', borderRadius: 6, border: `1px solid ${c.fb}`, background: c.fill, color: c.text, cursor: 'pointer', fontSize: 12, fontWeight: 600, minHeight: isMobile ? 36 : undefined }}><Plus size={13} /> Add Locs</button>}
-                                {canEdit && <button onClick={() => { setScaleMode('reduce'); setScaleCount(''); setScaleError(''); setShowScaleModal(true); }} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: isMobile ? '6px 10px' : '5px 12px', borderRadius: 6, border: '1px solid var(--enterprise-gray-300)', background: 'white', color: 'var(--enterprise-gray-600)', cursor: 'pointer', fontSize: 12, fontWeight: 600, minHeight: isMobile ? 36 : undefined }}><Minus size={13} /> Reduce</button>}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', width: isMobile ? '100%' : undefined }}>
+                                {canEdit && <button onClick={() => { setScaleMode('add'); setScaleCount(''); setScaleError(''); setShowScaleModal(true); }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: isMobile ? '0 12px' : '5px 12px', borderRadius: 8, border: `1px solid ${c.fb}`, background: c.fill, color: c.text, cursor: 'pointer', fontSize: isMobile ? 13 : 12, fontWeight: 600, height: isMobile ? 40 : undefined, flex: isMobile ? 1 : undefined }}><Plus size={isMobile ? 15 : 13} /> Add Locs</button>}
+                                {canEdit && <button onClick={() => { setScaleMode('reduce'); setScaleCount(''); setScaleError(''); setShowScaleModal(true); }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: isMobile ? '0 12px' : '5px 12px', borderRadius: 8, border: '1px solid var(--enterprise-gray-300)', background: 'white', color: 'var(--enterprise-gray-600)', cursor: 'pointer', fontSize: isMobile ? 13 : 12, fontWeight: 600, height: isMobile ? 40 : undefined, flex: isMobile ? 1 : undefined }}><Minus size={isMobile ? 15 : 13} /> Reduce</button>}
                                 {/* Hide legend on mobile — saves a row */}
                                 {!isMobile && (
                                     <>
@@ -760,7 +821,7 @@ export function RackView({ userRole, userPerms = {}, grNumber, onGrPlacementDone
                                                     <p style={{ fontSize: '11px', color: 'var(--enterprise-gray-500)', margin: '0 0 4px' }}>{entry.msn}{entry.partNumber ? ` · PN: ${entry.partNumber}` : ''}</p>
                                                     <p style={{ fontSize: '12px', margin: 0 }}>
                                                         <span style={{ color: c.text, fontWeight: 600 }}>{entry.qty.toLocaleString()} pcs</span>
-                                                        {oh !== undefined && <span style={{ color: 'var(--enterprise-gray-400)', marginLeft: '8px' }}>OH: {oh.toLocaleString()}</span>}
+                                                        {oh !== undefined && <span title="On-Hand: total US warehouse stock for this MSN across all racks" style={{ color: 'var(--enterprise-gray-400)', marginLeft: '8px' }}>On-Hand: {oh.toLocaleString()}</span>}
                                                         {isPalletUuid && <span style={{ color: 'var(--enterprise-primary)', marginLeft: '8px', fontSize: '10px' }}>▸ details</span>}
                                                     </p>
                                                 </div>
@@ -821,7 +882,7 @@ export function RackView({ userRole, userPerms = {}, grNumber, onGrPlacementDone
                                         <BackChainRow label="State"         value={palletDetail.pallet?.state ?? '—'} />
                                         <BackChainRow label="Quantity"      value={`${(palletDetail.pallet?.current_qty ?? 0).toLocaleString()} pcs`} />
                                         <BackChainRow label="Containers"    value={palletDetail.pallet?.container_count ?? 0} />
-                                        <BackChainRow label="Shipment #"    value={palletDetail.pallet?.shipment_sequence ?? '—'} />
+                                        <BackChainRow label="Shipment #"    value={<strong style={{ fontFamily: 'monospace' }}>{palletDetail.shipment?.shipment_number ?? palletDetail.pallet?.shipment_sequence ?? '—'}</strong>} />
                                     </BackChainSection>
 
                                     {palletDetail.item && (
@@ -830,14 +891,6 @@ export function RackView({ userRole, userPerms = {}, grNumber, onGrPlacementDone
                                             <BackChainRow label="Part Number"  value={palletDetail.item.part_number ?? '—'} />
                                             <BackChainRow label="Description"  value={palletDetail.item.item_name ?? '—'} />
                                             <BackChainRow label="Revision"     value={palletDetail.item.revision ?? '—'} />
-                                        </BackChainSection>
-                                    )}
-
-                                    {palletDetail.packing_list && (
-                                        <BackChainSection title="Packing List" color="#7c3aed">
-                                            <BackChainRow label="PL Number"   value={<strong style={{ fontFamily: 'monospace' }}>{palletDetail.packing_list.packing_list_number ?? '—'}</strong>} />
-                                            <BackChainRow label="Status"      value={palletDetail.packing_list.status ?? '—'} />
-                                            <BackChainRow label="Confirmed"   value={palletDetail.packing_list.confirmed_at ? new Date(palletDetail.packing_list.confirmed_at).toLocaleString() : '—'} />
                                         </BackChainSection>
                                     )}
 
@@ -851,7 +904,7 @@ export function RackView({ userRole, userPerms = {}, grNumber, onGrPlacementDone
                                     {palletDetail.shipment && (
                                         <BackChainSection title="Shipment (Proforma)" color="#0891b2">
                                             <BackChainRow label="PI Number"     value={<strong style={{ fontFamily: 'monospace' }}>{palletDetail.shipment.proforma_number ?? '—'}</strong>} />
-                                            <BackChainRow label="Shipment #"    value={palletDetail.shipment.shipment_number ?? '—'} />
+                                            <BackChainRow label="Shipment #"    value={<strong style={{ fontFamily: 'monospace' }}>{palletDetail.shipment.shipment_number ?? '—'}</strong>} />
                                             <BackChainRow label="Customer"      value={palletDetail.shipment.customer_name ?? '—'} />
                                             <BackChainRow label="Status"        value={palletDetail.shipment.status ?? '—'} />
                                             <BackChainRow label="Dispatched"    value={palletDetail.shipment.stock_moved_at ? new Date(palletDetail.shipment.stock_moved_at).toLocaleString() : '—'} />
@@ -871,18 +924,41 @@ export function RackView({ userRole, userPerms = {}, grNumber, onGrPlacementDone
                                     )}
 
                                     {palletDetail.cartons && palletDetail.cartons.length > 0 && (
-                                        <BackChainSection title={`Inner Boxes (${palletDetail.cartons.length})`} color="#6366f1">
+                                        <BackChainSection title={`Inner Packing IDs (${palletDetail.cartons.length})`} color="#6366f1">
                                             <details>
-                                                <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--enterprise-primary)' }}>Show all</summary>
-                                                <ul style={{ fontSize: 12, marginTop: 6, paddingLeft: 18 }}>
-                                                    {palletDetail.cartons.map((c: any, i: number) => (
-                                                        <li key={i} style={{ marginBottom: 3 }}>
-                                                            <strong>{c.pack_containers?.container_number ?? '—'}</strong>
-                                                            {' · '}qty {c.pack_containers?.quantity ?? '—'}
-                                                            {c.pack_containers?.is_adjustment && <span style={{ color: '#d97706', marginLeft: 6 }}>(adj)</span>}
-                                                        </li>
-                                                    ))}
-                                                </ul>
+                                                <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--enterprise-primary)', marginBottom: 8 }}>Show all</summary>
+                                                <div style={{
+                                                    display: 'grid',
+                                                    gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)',
+                                                    gap: 6,
+                                                    maxHeight: 280,
+                                                    overflowY: 'auto',
+                                                    padding: '4px 2px',
+                                                }}>
+                                                    {palletDetail.cartons.map((c: any, i: number) => {
+                                                        const pc = c.pack_containers ?? {};
+                                                        const packingId = pc.packing_boxes?.packing_id ?? pc.packing_id ?? c.packing_id ?? '—';
+                                                        const qty = pc.quantity ?? c.quantity ?? '—';
+                                                        const isAdj = pc.is_adjustment ?? c.is_adjustment;
+                                                        return (
+                                                            <div key={i} style={{
+                                                                background: 'var(--enterprise-gray-50)',
+                                                                border: '1px solid var(--enterprise-gray-200)',
+                                                                borderRadius: 6,
+                                                                padding: '6px 8px',
+                                                                fontSize: 11,
+                                                                lineHeight: 1.3,
+                                                                minWidth: 0,
+                                                            }}>
+                                                                <div style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--enterprise-gray-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={String(packingId)}>{packingId}</div>
+                                                                <div style={{ color: 'var(--enterprise-gray-500)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                                                    <span>qty {qty}</span>
+                                                                    {isAdj && <span style={{ color: '#d97706', fontWeight: 600 }}>(adj)</span>}
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
                                             </details>
                                         </BackChainSection>
                                     )}
