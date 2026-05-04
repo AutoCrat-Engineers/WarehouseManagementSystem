@@ -71,8 +71,19 @@ export function CameraScanner({ onScan, onClose, cooldownMs = 1500 }: Props) {
         let cancelled = false;
 
         async function start() {
+            // Browsers block getUserMedia on insecure origins (HTTP, except
+            // localhost). When the page is served over plain HTTP, the
+            // navigator.mediaDevices object is undefined — and the resulting
+            // "Camera not supported" message misleads operators into thinking
+            // the device is at fault. Detect insecure context up-front and
+            // surface the actual cause: HTTPS is required.
+            if (typeof window !== 'undefined' && window.isSecureContext === false) {
+                setError('Camera needs a secure (HTTPS) connection. Ask IT to enable HTTPS on this server, then reload.');
+                setStatus('error');
+                return;
+            }
             if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-                setError('Camera not supported on this device.');
+                setError('Camera not available in this browser. If the URL starts with "http://", HTTPS is required.');
                 setStatus('error');
                 return;
             }
