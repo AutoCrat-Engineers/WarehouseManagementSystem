@@ -30,6 +30,7 @@ import { useWedgeScanner } from './useWedgeScanner';
 import { scanFeedback } from './scanFeedback';
 import { CameraScanner } from './CameraScanner';
 import { ExceptionSheet, type ExceptionDraft } from './ExceptionSheet';
+import { InlineRackPlacer, type InlineRackPlacerLine } from './InlineRackPlacer';
 import { useViewport, useOnline } from './useViewport';
 import {
     enqueueScan, listQueuedScans, replayQueuedScans, type QueuedScan,
@@ -352,16 +353,31 @@ export function ReceiveShipmentScreen({ onClose, onCompleted, initialProformaId,
 
     /**
      * Finalize the pending pallet: requires a status to be chosen first.
-     * Records place intent, clears pending, scanner ready for the next.
+     *
+     * Place LATER  → records intent, clears pending; auto-commit fires when
+     *                every pallet in the MPL is verified.
+     * Place NOW    → opens the inline rack placer overlay. The actual GR
+     *                line + placement is committed atomically by the picker
+     *                via `gr_commit_line_and_place_now`. On success we set
+     *                placeIntent='now', stamp the pallet as placed locally,
+     *                and return to the scan screen for the next pallet.
      */
     const verifyPendingPallet = useCallback((placeLater: boolean) => {
         if (!pendingPallet) return;
         const pid = pendingPallet.palletId;
         if (tick[pid] === undefined) return;   // no status chosen yet — guard
-        setPlaceIntent(prev => ({ ...prev, [pid]: placeLater ? 'later' : 'now' }));
-        setPendingPallet(null);
-        setLastScan(null);
-        scanFeedback.success();
+
+        if (placeLater) {
+            setPlaceIntent(prev => ({ ...prev, [pid]: 'later' }));
+            setPendingPallet(null);
+            setLastScan(null);
+            scanFeedback.success();
+            return;
+        }
+
+        // Place NOW — open the inline placer; placeIntent will be set after
+        // a successful commit-and-place transaction.
+        setPlaceNowSession({ palletId: pid, mplId: pendingPallet.mplId });
     }, [pendingPallet, tick]);
 
     // Debounced search
@@ -411,9 +427,32 @@ export function ReceiveShipmentScreen({ onClose, onCompleted, initialProformaId,
     }, [initialProformaId, loadShipmentDetail]);
 
     // ── Per-pallet placement intent (place-now vs place-later) ─────────
-    // Captured per pallet at verify time. Used at the shipment-DONE step to
-    // route to the legacy putaway flow only if any pallet was tagged "now".
+    // Captured per pallet at verify time. "now" pallets are committed +
+    // placed inline via InlineRackPlacer; "later" pallets ride the per-MPL
+    // auto-commit and are placed in batch from the dashboard later.
     const [placeIntent, setPlaceIntent] = useState<Record<string, 'now' | 'later'>>({});
+
+    // Active inline place-now session (overlay visible while non-null).
+    const [placeNowSession, setPlaceNowSession] = useState<{ palletId: string; mplId: string } | null>(null);
+
+    // Warehouse id, resolved lazily and cached for the lifetime of this screen.
+    const warehouseIdRef = useRef<string | null>(null);
+    const [warehouseIdReady, setWarehouseIdReady] = useState<string | null>(null);
+    useEffect(() => {
+        if (!placeNowSession || warehouseIdRef.current) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const wid = await resolveWarehouseId();
+                if (cancelled) return;
+                warehouseIdRef.current = wid;
+                setWarehouseIdReady(wid);
+            } catch (e: any) {
+                if (!cancelled) setError(e?.message ?? 'Failed to resolve warehouse');
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [placeNowSession]);
 
     // MPLs whose GR has been auto-committed in the background. Set when the
     // last pallet of an MPL gets a status. Prevents double-commit.
@@ -502,19 +541,87 @@ export function ReceiveShipmentScreen({ onClose, onCompleted, initialProformaId,
     }, [step, mpls, committedMpls]);
 
     /**
-     * Called from the DONE screen's continue button. If any pallet was tagged
-     * "place now", hand off to the parent so legacy rack-view enters putaway
-     * mode for that GR. Otherwise just close.
+     * Called from the DONE screen's continue button. With the inline
+     * place-now flow each "now" pallet is already placed at the moment of
+     * verification, and "later" pallets are placed via the dashboard's
+     * pending-placement list. So this just closes the wizard.
      */
     const finishDone = useCallback(() => {
-        const anyPlaceNow = Object.values(placeIntent).includes('now');
-        const firstGr = Object.values(committedMpls)[0]?.gr_number;
-        if (anyPlaceNow && firstGr) {
-            onCompleted(firstGr);
-        } else {
-            onCompleted();
-        }
-    }, [placeIntent, committedMpls, onCompleted]);
+        onCompleted();
+    }, [onCompleted]);
+
+    /**
+     * Called by InlineRackPlacer after a successful atomic commit + place.
+     * Stamps placeIntent='now' and updates the placed pallet's rack info
+     * locally so the UI reflects the new state. Returns control to the
+     * scan screen for the next pallet.
+     *
+     * NOTE: we deliberately do NOT mark the MPL as committed here, nor set
+     * `mpl.gr` — doing so would (a) trip the "all MPLs committed → DONE"
+     * effect when this is the only MPL, prematurely advancing the wizard,
+     * and (b) make commitMplInBackground skip the auto-commit, leaving any
+     * place-later pallets in this MPL unflushed. The additive
+     * confirm_goods_receipt RPC will append the remaining lines to the
+     * existing GR when every pallet has been verified.
+     */
+    const handlePlaceNowSuccess = useCallback((res: { gr_id: string; gr_number: string; rack_location_code: string }) => {
+        if (!placeNowSession) return;
+        const { palletId, mplId } = placeNowSession;
+
+        setPlaceIntent(prev => ({ ...prev, [palletId]: 'now' }));
+
+        // Stamp just the placed pallet locally so the UI shows it as placed.
+        setMpls(prev => prev.map(m => m.mpl_id !== mplId ? m : ({
+            ...m,
+            pallets: m.pallets.map(p => p.pallet_id !== palletId ? p : ({
+                ...p,
+                rack_location_code: res.rack_location_code,
+                rack_placed_at:     new Date().toISOString(),
+            })),
+        })));
+
+        setPlaceNowSession(null);
+        setPendingPallet(null);
+        setLastScan(null);
+        scanFeedback.success();
+    }, [placeNowSession]);
+
+    const handlePlaceNowCancel = useCallback(() => {
+        // User backed out before placing. Leave tick + pendingPallet intact
+        // so they can pick "Place Later" or retry — placeIntent stays unset.
+        setPlaceNowSession(null);
+    }, []);
+
+    /**
+     * Build the single-line payload the InlineRackPlacer hands to the edge
+     * function. Mirrors the per-line shape used by gr_confirm_receipt so the
+     * server-side persistence logic is identical.
+     */
+    const placeNowLine = useMemo<InlineRackPlacerLine | null>(() => {
+        if (!placeNowSession) return null;
+        const found = findPalletAndMpl(placeNowSession.palletId);
+        if (!found) return null;
+        const { mpl, pallet } = found;
+        const status = tick[pallet.pallet_id];
+        // Place-now requires a non-MISSING status (you can't place a
+        // pallet that didn't arrive). Guard rendering.
+        if (!status || status === 'MISSING') return null;
+        const ex = exceptions[pallet.pallet_id];
+        return {
+            pallet_id:        pallet.pallet_id,
+            pallet_number:    pallet.pallet_number,
+            part_number:      pallet.part_number,
+            msn_code:         pallet.msn_code,
+            invoice_number:   mpl.invoice_number,
+            bpa_number:       mpl.bpa_number,
+            expected_qty:     pallet.quantity,
+            received_qty:     pallet.quantity,
+            line_status:      status,
+            discrepancy_note: (status === 'DAMAGED' ? ex?.note : null) ?? notes[pallet.pallet_id] ?? null,
+            reason_code:      status === 'DAMAGED' ? (ex?.reason_code ?? null) : null,
+            photo_paths:      status === 'DAMAGED' ? (ex?.photo_paths ?? []) : [],
+        };
+    }, [placeNowSession, findPalletAndMpl, tick, exceptions, notes]);
 
     // On mobile, render full-screen with no backdrop to avoid the "tap-to-dismiss"
     // trap during long verification sessions and to surrender every pixel for
@@ -597,6 +704,18 @@ export function ReceiveShipmentScreen({ onClose, onCompleted, initialProformaId,
                         />
                     )}
 
+                    {/* Inline rack placer — for "Verify Place Now" */}
+                    {placeNowSession && placeNowLine && shipment && warehouseIdReady && (
+                        <InlineRackPlacer
+                            proformaInvoiceId={shipment.id}
+                            warehouseId={warehouseIdReady}
+                            mplId={placeNowSession.mplId}
+                            line={placeNowLine}
+                            onPlaced={handlePlaceNowSuccess}
+                            onCancel={handlePlaceNowCancel}
+                        />
+                    )}
+
                     {/* Exception capture sheet — for DAMAGED pallets */}
                     {exceptionTarget && shipment && (() => {
                         const found = findPalletAndMpl(exceptionTarget);
@@ -617,8 +736,11 @@ export function ReceiveShipmentScreen({ onClose, onCompleted, initialProformaId,
                                     if (draft.note) {
                                         setNotes(prev => ({ ...prev, [pallet.pallet_id]: draft.note }));
                                     }
-                                    // Verify with the user's last-known place intent (default to "now")
-                                    setPlaceIntent(prev => ({ ...prev, [pallet.pallet_id]: prev[pallet.pallet_id] ?? 'now' }));
+                                    // DAMAGED pallets default to "place later" — they go to the
+                                    // pending-placement queue instead of opening the inline placer
+                                    // (the receiver still has the option to manually trigger a
+                                    // place-now from the dashboard later if needed).
+                                    setPlaceIntent(prev => ({ ...prev, [pallet.pallet_id]: prev[pallet.pallet_id] ?? 'later' }));
                                     setPendingPallet(null);
                                     setLastScan(null);
                                     setExceptionTarget(null);

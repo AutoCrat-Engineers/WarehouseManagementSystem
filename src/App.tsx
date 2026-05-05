@@ -783,7 +783,7 @@ export default function App() {
         // New DB-backed rack view — hydrates from mv_rack_view, shows back-chain,
         // and hosts the Receive Shipment / GR wizard. On GR confirm, auto-jumps
         // to the legacy rack view (which handles physical placement).
-        if (!canAccessViewLocal('rack-view')) return renderAccessDenied('Rack View');
+        if (!canAccessViewLocal('rack-view-v2')) return renderAccessDenied('Inbound Receiving');
         return (
           <RackViewGrid
             userRole={userRole}
@@ -797,14 +797,17 @@ export default function App() {
       case 'bpa':
         // Customer Agreement (BPA) management — blanket qty, MIN/MAX, REL MULT,
         // revision tracking. Feeds into Blanket Orders via "Activate BO".
+        if (!canAccessViewLocal('bpa')) return renderAccessDenied('Customer Agreements');
         return <BPAList userRole={userRole} userPerms={userPerms} onNavigate={(v) => setCurrentView(v as View)} />;
       case 'releases-v2':
         // New release flow: paste customer PO → FIFO pallet picker →
         // atomic sub-invoice + tariff creation via RPC.
+        if (!canAccessViewLocal('releases-v2')) return renderAccessDenied('Blanket Releases');
         return <ReleaseList userRole={userRole} userPerms={userPerms} />;
       case 'tariff-queue':
         // Finance queue for US tariff invoices: compute rates,
         // advance status DRAFT → SUBMITTED → CLAIMED → PAID.
+        if (!canAccessViewLocal('tariff-queue')) return renderAccessDenied('Tariff Queue');
         return <TariffInvoiceQueue userRole={userRole} userPerms={userPerms} />;
       case 'packing':
       case 'packing-sticker':
