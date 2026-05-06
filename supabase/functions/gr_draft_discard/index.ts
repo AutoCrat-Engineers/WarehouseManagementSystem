@@ -10,15 +10,12 @@
  * INPUT:  { proforma_invoice_id: uuid, mpl_id: uuid }
  * OUTPUT: 200 { discarded: bool }
  */
-import { authenticateRequest } from '../_shared/auth.ts';
-import { jsonResponse, errorResponse, unauthorized, withErrorHandler } from '../_shared/errors.ts';
+import { withMutationGuard } from '../_shared/session.ts';
+import { jsonResponse, errorResponse, withErrorHandler } from '../_shared/errors.ts';
 import { parseBody, validate } from '../_shared/schemas.ts';
 
-export const handler = withErrorHandler(async (req) => {
+export const handler = withErrorHandler((req) => withMutationGuard(req, { label: 'Discarding GR Draft' }, async (ctx) => {
     const origin = req.headers.get('origin') ?? undefined;
-    const ctx = await authenticateRequest(req);
-    if (!ctx) return unauthorized(origin);
-
     const body = await parseBody(req);
     const v = validate(body, {
         proforma_invoice_id: 'uuid',
@@ -38,6 +35,6 @@ export const handler = withErrorHandler(async (req) => {
     if (error) return errorResponse('INTERNAL_ERROR', error.message, { origin });
 
     return jsonResponse({ discarded: (data?.length ?? 0) > 0 }, { origin });
-});
+}));
 
 if (import.meta.main) Deno.serve(handler);

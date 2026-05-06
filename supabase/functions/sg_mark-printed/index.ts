@@ -19,6 +19,7 @@
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.47.10';
 import { corsHeaders } from '../_shared/cors.ts';
+import { requireActiveSession, withTransactionLock } from '../_shared/session.ts';
 import { generatePackingId } from '../_shared/packingUtils.ts';
 
 interface MarkPrintedBody {
@@ -31,25 +32,22 @@ export async function handler(req: Request): Promise<Response> {
 
   try {
     // ── AUTH ──────────────────────────────────────────────────────────
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) return json({ error: 'Missing authorization header' }, 401);
+    const session = await requireActiveSession(req);
+    if (!session.ok) return session.response;
+    const ctx = session.ctx;
+    const supabaseClient = ctx.db;
+    const user = { id: ctx.userId };
+    const userId = ctx.userId;
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-
-    const userClient = createClient(supabaseUrl, Deno.env.get('PUBLISHABLE_KEY')!, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const { data: { user }, error: authError } = await userClient.auth.getUser(
-      authHeader.replace('Bearer ', ''),
-    );
-    if (authError || !user) return json({ error: 'Unauthorized' }, 401);
-    const userId = user.id;
-
-    const db = createClient(supabaseUrl, serviceRoleKey);
+    const db = ctx.db;
 
     // ── BODY ──────────────────────────────────────────────────────────
     const body: MarkPrintedBody = await req.json().catch(() => ({} as any));
+
+    return await withTransactionLock(ctx, {
+      key:   `marking_sticker_printed:${ctx.sessionId}`,
+      label: 'Marking Sticker Printed',
+    }, async () => {
     const { packing_request_id: requestId, box_id: boxId } = body;
     if (!requestId) return json({ error: 'packing_request_id is required' }, 400);
     if (!boxId) return json({ error: 'box_id is required' }, 400);
@@ -91,6 +89,7 @@ export async function handler(req: Request): Promise<Response> {
     if (auditErr) throw auditErr;
 
     return json({ success: true, packing_id: packingId });
+    });
   } catch (err: any) {
     console.error('[sg_mark-printed] Error:', err);
     return json({ error: err.message || 'Internal server error' }, 500);

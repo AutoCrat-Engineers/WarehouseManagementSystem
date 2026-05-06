@@ -28,7 +28,7 @@
  *     { success, agreement_id, revision_from, revision_to, revision_id,
  *       parts_changed, cascaded_to_line_configs }
  */
-import { authenticateRequest } from '../_shared/auth.ts';
+import { requireActiveSession, withTransactionLock } from '../_shared/session.ts';
 import { jsonResponse, errorResponse, unauthorized, forbidden, withErrorHandler, mapPgError } from '../_shared/errors.ts';
 import { parseBody, validate } from '../_shared/schemas.ts';
 
@@ -36,10 +36,11 @@ export const handler = withErrorHandler(async (req) => {
     const origin = req.headers.get('origin') ?? undefined;
 
     // Only L3 / ADMIN / FINANCE can amend a BPA
-    const ctx = await authenticateRequest(req, {
+    const session = await requireActiveSession(req, {
         requireRoles: ['L3', 'ADMIN', 'FINANCE'],
     });
-    if (!ctx) return forbidden(origin, 'Amending a BPA requires L3, ADMIN, or FINANCE role.');
+    if (!session.ok) return session.response;
+    const ctx = session.ctx;
 
     const body = await parseBody(req);
     const v = validate(body, {
@@ -54,22 +55,24 @@ export const handler = withErrorHandler(async (req) => {
         return errorResponse('VALIDATION_FAILED', "Field 'changes' must be an object", { origin });
     }
 
-    // ── Call the amend_bpa RPC ───────────────────────────────────────
-    const { data, error } = await ctx.db.rpc('amend_bpa', {
-        p_agreement_id:          body.agreement_id,
-        p_changes:               changes,
-        p_revision_reason:       body.revision_reason,
-        p_expected_row_version:  body.expected_row_version,
-        p_user_id:               ctx.userId,
-        p_idempotency_key:       body.idempotency_key ?? null,
+    return await withTransactionLock(ctx, {
+        key:   `bpa_amend:${body.agreement_id}`,
+        label: 'Amending Customer Agreement (BPA)',
+    }, async () => {
+        const { data, error } = await ctx.db.rpc('amend_bpa', {
+            p_agreement_id:          body.agreement_id,
+            p_changes:               changes,
+            p_revision_reason:       body.revision_reason,
+            p_expected_row_version:  body.expected_row_version,
+            p_user_id:               ctx.userId,
+            p_idempotency_key:       body.idempotency_key ?? null,
+        });
+        if (error) {
+            const m = mapPgError(error);
+            return errorResponse(m.code, m.message, { origin, details: { pg_code: error.code } });
+        }
+        return jsonResponse(data, { origin });
     });
-
-    if (error) {
-        const m = mapPgError(error);
-        return errorResponse(m.code, m.message, { origin, details: { pg_code: error.code } });
-    }
-
-    return jsonResponse(data, { origin });
 });
 
 if (import.meta.main) Deno.serve(handler);

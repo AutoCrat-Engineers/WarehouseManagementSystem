@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { getSupabaseClient } from './utils/supabase/client';
-import { fetchWithAuth, clearLocalAuthSession } from './utils/supabase/auth';
+import { fetchWithAuth, clearLocalAuthSession, setActiveSessionId } from './utils/supabase/auth';
+import { SessionGuard, type DisconnectReason } from './auth/sessionGuard';
 import { getEdgeFunctionUrl, FUNCTIONS_BASE } from './utils/supabase/info';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LoginPage } from './auth/login/LoginPage';
@@ -23,7 +24,7 @@ import { PalletDashboard, ContractConfigManager, DispatchSelection, Traceability
 import { LoadingPage } from './components/LoadingPage';
 import { UserManagement } from './auth/users/UserManagement';
 import { NotificationBell } from './components/notifications/NotificationBell';
-import { getUserPermissions } from './auth/services/permissionService';
+import { getUserPermissions, invalidateUserPermCache } from './auth/services/permissionService';
 import type { PermissionMap } from './auth/components/GrantAccessModal';
 import { canAccessView as _canAccessView, canAccessAnyPackingModule, canAccessAnyDispatchModule } from './auth/utils/permissionUtils';
 import {
@@ -42,6 +43,7 @@ import {
   AlertCircle,
   Users,
   Shield,
+  Info,
   Boxes,
   Printer,
   ClipboardList,
@@ -93,7 +95,6 @@ const CONCURRENT_TAB_LOGOUT_MESSAGE = 'Your session was ended because your accou
 
 // Edge Function base URL — shared across the app and configurable via VITE_FUNCTIONS_URL
 const EDGE_FN_URL = FUNCTIONS_BASE;
-const SESSION_VALIDATION_INTERVAL_MS = 15000;
 
 function getStoredTabSessionId(): string | null {
   try {
@@ -265,10 +266,97 @@ export default function App() {
   const explicitLogoutRef = useRef(false);
   const globalSessionIdRef = useRef<string | null>(globalSessionId);
   const currentTabIdRef = useRef(getOrCreateTabId());
+  const sessionGuardRef = useRef<SessionGuard | null>(null);
+  const accessTokenRef = useRef<string | null>(null);
 
   useEffect(() => {
     globalSessionIdRef.current = globalSessionId;
+    setActiveSessionId(globalSessionId);
   }, [globalSessionId]);
+
+  useEffect(() => {
+    accessTokenRef.current = accessToken;
+  }, [accessToken]);
+
+  // ============================================================================
+  // SESSION GUARD: single-tab + idle timeout + heartbeat
+  // The guard owns broadcast-channel claims, activity listeners, and the
+  // 60-second auth-validate-session ping.  On disconnect it tears itself down
+  // and reports back here so we can clear UI state with the right message.
+  // ============================================================================
+  useEffect(() => {
+    if (!isAuthenticated || !globalSessionId || !accessToken) return;
+
+    const onDisconnect = (reason: DisconnectReason, message?: string) => {
+      let banner: string;
+      switch (reason) {
+        case 'IDLE_TIMEOUT':       banner = message ?? 'You were signed out due to inactivity.'; break;
+        case 'TAB_TAKEOVER':       banner = message ?? CONCURRENT_TAB_LOGOUT_MESSAGE; break;
+        case 'CONCURRENT_LOGIN':   banner = message ?? 'Your session was ended because your account signed in elsewhere.'; break;
+        case 'ACCOUNT_LOCKED':     banner = message ?? 'Account is locked. Please contact your administrator.'; break;
+        case 'SESSION_ENDED':      banner = message ?? 'Your session has been logged out.'; break;
+        case 'SESSION_NOT_FOUND':  banner = message ?? 'Session not found. Please sign in again.'; break;
+        case 'SESSION_KILLED':
+        default:                   banner = message ?? 'Your session is no longer valid. Please sign in again.';
+      }
+      const sharedAuth = reason !== 'TAB_TAKEOVER';
+      clearClientAuthState(banner, { clearSharedAuth: sharedAuth, clearOwner: sharedAuth });
+    };
+
+    const guard = new SessionGuard({
+      globalSessionId,
+      accessToken: () => accessTokenRef.current,
+      idleTimeoutMs: 10 * 60 * 1000,
+      heartbeatIntervalMs: 60 * 1000,
+      onDisconnect,
+    });
+    sessionGuardRef.current = guard;
+    guard.start();
+
+    return () => {
+      guard.stop();
+      if (sessionGuardRef.current === guard) sessionGuardRef.current = null;
+    };
+  }, [isAuthenticated, globalSessionId]);
+
+  // ============================================================================
+  // PERMISSIONS REALTIME: refresh menu when L3 grants/revokes
+  // The user_permissions table is in the supabase_realtime publication
+  // (migration 068).  RLS allows the user to SELECT their own rows, so
+  // changes for THIS user stream to us via WebSocket.  On any event we
+  // bust the cache + re-fetch the effective permissions so the sidebar
+  // and route guards reflect the change within ~1 second.
+  // ============================================================================
+  useEffect(() => {
+    if (!isAuthenticated || !user?.id) return;
+
+    const myId: string = user.id;
+    const channel = supabase
+      .channel(`perms-${myId}`)
+      .on(
+        'postgres_changes',
+        {
+          event:  '*',                       // INSERT, UPDATE, DELETE
+          schema: 'public',
+          table:  'user_permissions',
+          filter: `user_id=eq.${myId}`,
+        },
+        async () => {
+          invalidateUserPermCache(myId);
+          try {
+            const fresh = await getUserPermissions(myId);
+            setUserPerms(fresh);
+          } catch (err) {
+            console.warn('[Perms] live refresh failed:', err);
+          }
+        },
+      )
+      .subscribe();
+
+    return () => {
+      try { supabase.removeChannel(channel); } catch { /* ignore */ }
+    };
+  }, [isAuthenticated, user?.id]);
 
   const isAuthOwnedByDifferentTab = (): boolean => {
     const owner = readAuthOwner();
@@ -299,14 +387,21 @@ export default function App() {
     const clearSharedAuth = options?.clearSharedAuth ?? true;
     const clearOwner = options?.clearOwner ?? false;
 
+    if (sessionGuardRef.current) {
+      try { sessionGuardRef.current.stop(); } catch { /* ignore */ }
+      sessionGuardRef.current = null;
+    }
+
     if (clearSharedAuth) {
       clearLocalAuthSession();
     }
     setAccessToken(null);
+    accessTokenRef.current = null;
     setUser(null);
     setUserRole(null);
     setGlobalSessionId(null);
     globalSessionIdRef.current = null;
+    setActiveSessionId(null);
     setStoredTabSessionId(null);
     if (clearOwner) {
       clearAuthOwnerIfOwnedBy(currentTabIdRef.current);
@@ -314,68 +409,6 @@ export default function App() {
     setIsAuthenticated(false);
     setCurrentView('dashboard');
     setError(message ?? null);
-  };
-
-  const forceClientLogout = async (message?: string) => {
-    explicitLogoutRef.current = true;
-    try {
-      await supabase.auth.signOut();
-    } catch (err) {
-      console.warn('Supabase client signOut failed during forced logout:', err);
-    } finally {
-      explicitLogoutRef.current = false;
-    }
-    clearClientAuthState(message, { clearSharedAuth: true, clearOwner: true });
-  };
-
-  const validateCurrentGlobalSession = async (): Promise<boolean> => {
-    if (isAuthOwnedByDifferentTab()) {
-      clearClientAuthState(CONCURRENT_TAB_LOGOUT_MESSAGE, {
-        clearSharedAuth: false,
-        clearOwner: false,
-      });
-      return false;
-    }
-
-    if (!isAuthenticated || !globalSessionId || !accessToken) {
-      return true;
-    }
-
-    try {
-      const response = await fetch(`${EDGE_FN_URL}/auth-validate-session`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({ global_session_id: globalSessionId }),
-      });
-
-      let result: any = {};
-      try {
-        result = await response.json();
-      } catch (_) {
-        result = {};
-      }
-
-      if (!response.ok || !result.valid || result.status !== 'active') {
-        if (isOwnedByAnotherTab()) {
-          clearClientAuthState(CONCURRENT_TAB_LOGOUT_MESSAGE, {
-            clearSharedAuth: false,
-            clearOwner: false,
-          });
-          return false;
-        }
-
-        await forceClientLogout('Your session was ended because your account signed in from another browser.');
-        return false;
-      }
-
-      return true;
-    } catch (err) {
-      console.warn('Global session validation threw:', err);
-      return true;
-    }
   };
 
   // ============================================================================
@@ -473,32 +506,9 @@ export default function App() {
     return () => window.removeEventListener('storage', handleStorage);
   }, [isAuthenticated]);
 
-  useEffect(() => {
-    if (!isAuthenticated || !globalSessionId) {
-      return;
-    }
-
-    const intervalId = window.setInterval(() => {
-      void validateCurrentGlobalSession();
-    }, SESSION_VALIDATION_INTERVAL_MS);
-
-    const handleVisibilityOrFocus = () => {
-      if (document.visibilityState === 'visible') {
-        void validateCurrentGlobalSession();
-      }
-    };
-
-    window.addEventListener('focus', handleVisibilityOrFocus);
-    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
-
-    void validateCurrentGlobalSession();
-
-    return () => {
-      window.clearInterval(intervalId);
-      window.removeEventListener('focus', handleVisibilityOrFocus);
-      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
-    };
-  }, [isAuthenticated, globalSessionId, accessToken]);
+  // Old 15s polling loop removed — SessionGuard (above) now owns heartbeats,
+  // idle detection, and cross-tab takeover.  validateCurrentGlobalSession is
+  // retained only for the cross-tab same-browser storage event below.
 
   const initializeAuth = async () => {
     try {
@@ -546,7 +556,17 @@ export default function App() {
   // AUTH HANDLERS
   // ============================================================================
 
-  const handleLogin = async (email: string, password: string) => {
+  type LoginResult =
+    | { ok: true }
+    | { ok: false; code?: string; error: string;
+        sessionBusy?: { in_flight: Array<{ op_label: string; age_seconds: number }> };
+        attemptsRemaining?: number };
+
+  const handleLogin = async (
+    email: string,
+    password: string,
+    opts?: { forceTakeover?: boolean },
+  ): Promise<LoginResult> => {
     try {
       setError(null);
       setIsLoading(true);
@@ -554,53 +574,81 @@ export default function App() {
       const response = await fetch(`${EDGE_FN_URL}/auth-login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, force_takeover: opts?.forceTakeover === true }),
       });
 
-      const result = await response.json();
+      const result = await response.json().catch(() => ({}));
 
-      if (!response.ok) {
-        setError(result.error || 'Login failed');
-        return false;
+      // 409 SESSION_BUSY — surface as structured result for force-takeover prompt.
+      if (response.status === 409 && result?.code === 'SESSION_BUSY') {
+        return {
+          ok: false,
+          code: 'SESSION_BUSY',
+          error: result.error ?? 'This account has an unfinished operation in another session.',
+          sessionBusy: { in_flight: result.in_flight ?? [] },
+        };
       }
 
-      if (result.access_token) {
-        if (result.global_session_id) {
-          setGlobalSessionId(result.global_session_id);
-          globalSessionIdRef.current = result.global_session_id;
-          setStoredTabSessionId(result.global_session_id);
-          writeAuthOwner(currentTabIdRef.current, result.global_session_id);
-        }
-
-        // Set Supabase client session with the tokens from edge function
-        await supabase.auth.setSession({
-          access_token: result.access_token,
-          refresh_token: result.refresh_token,
-        });
-
-        setAccessToken(result.access_token);
-        setUser(result.user_profile);
-        setUserRole(result.user_profile.role as UserRole);
-        setIsAuthenticated(true);
-
-        // Show concurrent kill warning if applicable
-        if (result.concurrent_kill) {
-          const killedCount = result.transactions_killed?.length || 0;
-          if (killedCount > 0) {
-            setError(`Your previous session was terminated. ${killedCount} pending transaction(s) were cancelled.`);
-          }
-        }
-
-        return true;
+      // 423 ACCOUNT_LOCKED / ACCOUNT_LOCKED_NOW.
+      if (response.status === 423) {
+        const msg = result.error ?? 'Account locked. Contact your administrator.';
+        setError(msg);
+        return { ok: false, code: result.code ?? 'ACCOUNT_LOCKED', error: msg };
       }
 
-      setError('Login failed: No session received');
-      return false;
+      // 401 INVALID_CREDENTIALS — show attempts remaining if present.
+      if (response.status === 401) {
+        const remaining = typeof result.attempts_remaining === 'number' ? result.attempts_remaining : undefined;
+        const msg = remaining !== undefined && remaining > 0
+          ? `Invalid credentials. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining before account lock.`
+          : (result.error ?? 'Invalid credentials');
+        setError(msg);
+        return { ok: false, code: 'INVALID_CREDENTIALS', error: msg, attemptsRemaining: remaining };
+      }
+
+      if (!response.ok || !result?.access_token) {
+        const msg = result.error ?? 'Login failed';
+        setError(msg);
+        return { ok: false, error: msg, code: result.code };
+      }
+
+      // Success.
+      if (result.global_session_id) {
+        setGlobalSessionId(result.global_session_id);
+        globalSessionIdRef.current = result.global_session_id;
+        setStoredTabSessionId(result.global_session_id);
+        writeAuthOwner(currentTabIdRef.current, result.global_session_id);
+        setActiveSessionId(result.global_session_id);
+      }
+
+      await supabase.auth.setSession({
+        access_token: result.access_token,
+        refresh_token: result.refresh_token,
+      });
+
+      setAccessToken(result.access_token);
+      accessTokenRef.current = result.access_token;
+      setUser(result.user_profile);
+      setUserRole(result.user_profile.role as UserRole);
+      setIsAuthenticated(true);
+
+      if (result.concurrent_kill && result.killed_count > 0) {
+        const msg = `Your previous session on another device was signed out.`;
+        setError(msg);
+        // Auto-dismiss this informational notice after 3s; real errors
+        // (set elsewhere) are not affected because we only clear if the
+        // current error is still this exact message.
+        window.setTimeout(() => {
+          setError((prev) => (prev === msg ? null : prev));
+        }, 3000);
+      }
+
+      return { ok: true };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Login failed';
       console.error('Login error:', err);
       setError(errorMsg);
-      return false;
+      return { ok: false, error: errorMsg };
     } finally {
       setIsLoading(false);
     }
@@ -629,7 +677,12 @@ export default function App() {
       if (!data) {
         console.error('❌ Could not fetch user role:',
           profileResult.status === 'rejected' ? profileResult.reason : 'no data');
-        setUserRole('L1');
+        // Fail closed: do NOT fall back to a real role.  Force logout so the
+        // user retries rather than running with phantom L1 permissions.
+        await supabase.auth.signOut();
+        clearClientAuthState('Could not load your profile. Please sign in again.', {
+          clearSharedAuth: true, clearOwner: true,
+        });
         return;
       }
 
@@ -652,7 +705,10 @@ export default function App() {
       }
     } catch (err) {
       console.error('💥 Error fetching user role:', err);
-      setUserRole('L1');
+      try { await supabase.auth.signOut(); } catch { /* ignore */ }
+      clearClientAuthState('Could not load your profile. Please sign in again.', {
+        clearSharedAuth: true, clearOwner: true,
+      });
     }
   };
 
@@ -757,6 +813,12 @@ export default function App() {
           </div>
         </div>
       );
+    }
+
+    // L1 / L2 with zero granted modules — render the "Contact your
+    // manager" empty state instead of any dashboard or module.
+    if (hasNoAccessibleModules()) {
+      return renderNoModulesScreen();
     }
 
     switch (currentView) {
@@ -864,6 +926,52 @@ export default function App() {
     }
   };
 
+  // Empty state for L1/L2 users who have no granted modules yet.
+  // Replaces the dashboard so they can't accidentally land on a module
+  // they don't have access to.
+  const renderNoModulesScreen = () => (
+    <div style={{
+      minHeight: 'calc(100vh - 80px)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      padding: '48px 24px',
+    }}>
+      <div style={{
+        maxWidth: '480px', width: '100%',
+        background: 'white', borderRadius: '16px',
+        padding: '40px 32px', textAlign: 'center',
+        boxShadow: '0 4px 24px rgba(0,0,0,0.06)',
+        border: '1px solid var(--border-color, #e5e7eb)',
+      }}>
+        <div style={{
+          width: '72px', height: '72px', borderRadius: '20px',
+          background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          margin: '0 auto 20px',
+          boxShadow: '0 4px 12px rgba(245, 158, 11, 0.2)',
+        }}>
+          <Shield size={36} style={{ color: '#d97706' }} />
+        </div>
+        <h2 style={{ fontSize: '20px', fontWeight: 700, color: '#0f172a', margin: '0 0 10px' }}>
+          No modules assigned yet
+        </h2>
+        <p style={{ fontSize: '14px', color: '#64748b', lineHeight: 1.6, margin: '0 0 24px' }}>
+          Your account is active, but the manager hasn't granted you access to any module yet. Please contact your L3 manager to be assigned the modules you need.
+        </p>
+        <div style={{
+          padding: '12px 14px', borderRadius: '10px',
+          background: '#f8fafc', border: '1px solid #e2e8f0',
+          fontSize: '12.5px', color: '#475569', textAlign: 'left',
+          display: 'flex', gap: '10px', alignItems: 'flex-start',
+        }}>
+          <Info size={16} style={{ flexShrink: 0, marginTop: '1px', color: '#3b82f6' }} />
+          <span>
+            New modules will appear in the sidebar automatically as soon as your manager grants access — no need to log out and back in.
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+
   // Access denied component
   const renderAccessDenied = (moduleName: string) => (
     <div style={{
@@ -894,36 +1002,35 @@ export default function App() {
     </div>
   );
 
-  // Build menu items dynamically based on user role + granular permissions
+  // Build menu items dynamically based on user role + granular permissions.
+  //
+  // Strict deny-by-default:
+  //   - L3 sees the full menu + User Management.
+  //   - L1 / L2 see ONLY items whose view permission is explicitly granted.
+  //     No fallback to "show all if perms not loaded yet" — the loading
+  //     branch is handled by the caller via the `isLoading` gate.
   const getMenuItems = () => {
-    let items = [...menuItems];
-
-    // Add User Management for L3 users
     if (userRole === 'L3') {
-
-      items.push({ id: 'users' as View, label: 'User Management', icon: Users, description: 'Manage Users & Roles' });
+      return [
+        ...menuItems,
+        { id: 'users' as View, label: 'User Management', icon: Users, description: 'Manage Users & Roles' },
+      ];
     }
 
-    // For L1/L2 users with loaded permissions, filter menu items
-    // Only skip filtering if NO permissions have been loaded at all (empty object)
-    if (userRole !== 'L3') {
-      // For L1/L2 users with loaded permissions, filter menu items
-      const permKeys = Object.keys(userPerms);
-      if (permKeys.length > 0) {
-        items = items.filter(item => {
-          // Packing parent: show if ANY packing submodule has view permission
-          if (item.id === 'packing') {
-            return canAccessAnyPackingModule(userRole, userPerms);
-          }
-          if (item.id === 'dispatch') {
-            return canAccessAnyDispatchModule(userRole, userPerms);
-          }
-          return canAccessViewLocal(item.id);
-        });
-      }
-    }
+    // L1 / L2 — filter to granted modules only.  If no permissions are
+    // loaded, the empty array drives the empty-state screen rendered below.
+    return menuItems.filter(item => {
+      if (item.id === 'packing')   return canAccessAnyPackingModule(userRole, userPerms);
+      if (item.id === 'dispatch')  return canAccessAnyDispatchModule(userRole, userPerms);
+      return canAccessViewLocal(item.id);
+    });
+  };
 
-    return items;
+  // True when an L1/L2 user has zero accessible modules.  Drives the
+  // "Contact your manager" empty-state.
+  const hasNoAccessibleModules = (): boolean => {
+    if (userRole === 'L3') return false;
+    return getMenuItems().length === 0;
   };
 
 

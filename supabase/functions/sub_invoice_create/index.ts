@@ -25,15 +25,12 @@
  *     tariff_invoice_id, tariff_invoice_number,
  *     pallet_count, quantity, total_amount, parent_invoice_count }
  */
-import { authenticateRequest } from '../_shared/auth.ts';
-import { jsonResponse, errorResponse, unauthorized, withErrorHandler, mapPgError } from '../_shared/errors.ts';
+import { withMutationGuard } from '../_shared/session.ts';
+import { jsonResponse, errorResponse, withErrorHandler, mapPgError } from '../_shared/errors.ts';
 import { parseBody, validate } from '../_shared/schemas.ts';
 
-export const handler = withErrorHandler(async (req) => {
+export const handler = withErrorHandler((req) => withMutationGuard(req, { label: 'Creating Sub-Invoice' }, async (ctx) => {
     const origin = req.headers.get('origin') ?? undefined;
-    const ctx = await authenticateRequest(req);
-    if (!ctx) return unauthorized(origin);
-
     const body = await parseBody(req);
     const v = validate(body, {
         customer_po_number: 'string',
@@ -70,6 +67,6 @@ export const handler = withErrorHandler(async (req) => {
     }
 
     return jsonResponse(data, { origin });
-});
+}));
 
 if (import.meta.main) Deno.serve(handler);

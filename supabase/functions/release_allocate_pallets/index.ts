@@ -14,15 +14,12 @@
  * OUTPUT:
  *   { success, release_id, allocated, reserved }
  */
-import { authenticateRequest } from '../_shared/auth.ts';
-import { jsonResponse, errorResponse, unauthorized, withErrorHandler, mapPgError } from '../_shared/errors.ts';
+import { withMutationGuard } from '../_shared/session.ts';
+import { jsonResponse, errorResponse, withErrorHandler, mapPgError } from '../_shared/errors.ts';
 import { parseBody, validate } from '../_shared/schemas.ts';
 
-export const handler = withErrorHandler(async (req) => {
+export const handler = withErrorHandler((req) => withMutationGuard(req, { label: 'Allocating Release Pallets' }, async (ctx) => {
     const origin = req.headers.get('origin') ?? undefined;
-    const ctx = await authenticateRequest(req);
-    if (!ctx) return unauthorized(origin);
-
     const body = await parseBody(req);
     const v = validate(body, { release_id: 'uuid' });
     if (!v.ok) return errorResponse('VALIDATION_FAILED', v.error, { origin });
@@ -42,6 +39,6 @@ export const handler = withErrorHandler(async (req) => {
         return errorResponse(m.code, m.message, { origin, details: { pg_code: error.code } });
     }
     return jsonResponse(data, { origin });
-});
+}));
 
 if (import.meta.main) Deno.serve(handler);

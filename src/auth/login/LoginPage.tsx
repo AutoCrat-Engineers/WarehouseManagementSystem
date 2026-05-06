@@ -8,11 +8,19 @@
  */
 
 import React, { useState } from 'react';
-import { Mail, Lock, Eye, EyeOff, AlertCircle, Loader2, LogIn } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, AlertCircle, Loader2, LogIn, ShieldAlert } from 'lucide-react';
 import { RotatingQuote } from '../../components/ui/RotatingQuote';
 
+export interface LoginResult {
+    ok: boolean;
+    code?: string;
+    error?: string;
+    sessionBusy?: { in_flight: Array<{ op_label: string; age_seconds: number }> };
+    attemptsRemaining?: number;
+}
+
 interface LoginPageProps {
-    onLogin: (email: string, password: string) => Promise<boolean>;
+    onLogin: (email: string, password: string, opts?: { forceTakeover?: boolean }) => Promise<LoginResult>;
     isLoading?: boolean;
     error?: string | null;
 }
@@ -22,30 +30,64 @@ export function LoginPage({ onLogin, isLoading = false, error: propError }: Logi
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
     const [localError, setLocalError] = useState<string | null>(null);
+    const [busyPrompt, setBusyPrompt] = useState<LoginResult['sessionBusy'] | null>(null);
+    const [waiting, setWaiting] = useState<{ secondsLeft: number; opLabel: string } | null>(null);
 
     const displayError = propError || localError;
+
+    const AUTO_WAIT_SECONDS = 60;
+    const AUTO_WAIT_POLL_MS = 2000;
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setLocalError(null);
+        setBusyPrompt(null);
+        setWaiting(null);
 
-        // Validation
-        if (!email.trim()) {
-            setLocalError('Please enter your email address');
-            return;
+        if (!email.trim()) { setLocalError('Please enter your email address'); return; }
+        if (!password)     { setLocalError('Please enter your password'); return; }
+        if (password.length < 6) { setLocalError('Password must be at least 6 characters'); return; }
+
+        await attemptLoginWithWait();
+    };
+
+    /**
+     * Login with auto-wait on 409 SESSION_BUSY.  Polls every 2s for up to
+     * 60s while the previous session finishes its in-flight transaction,
+     * then either succeeds quietly or surfaces the force-takeover modal.
+     */
+    const attemptLoginWithWait = async () => {
+        const startedAt = Date.now();
+        const deadline  = startedAt + AUTO_WAIT_SECONDS * 1000;
+
+        // First attempt.
+        let result = await onLogin(email, password);
+
+        while (!result.ok && result.code === 'SESSION_BUSY' && result.sessionBusy && Date.now() < deadline) {
+            const op = result.sessionBusy.in_flight?.[0]?.op_label ?? 'an operation';
+            setWaiting({
+                secondsLeft: Math.max(0, Math.ceil((deadline - Date.now()) / 1000)),
+                opLabel:     op,
+            });
+            await new Promise((r) => setTimeout(r, AUTO_WAIT_POLL_MS));
+            result = await onLogin(email, password);
         }
 
-        if (!password) {
-            setLocalError('Please enter your password');
-            return;
-        }
+        setWaiting(null);
 
-        if (password.length < 6) {
-            setLocalError('Password must be at least 6 characters');
-            return;
+        if (!result.ok && result.code === 'SESSION_BUSY' && result.sessionBusy) {
+            // Still busy after the wait window → fall back to the manual modal.
+            setBusyPrompt(result.sessionBusy);
         }
+    };
 
-        await onLogin(email, password);
+    const handleForceTakeover = async () => {
+        setLocalError(null);
+        setBusyPrompt(null);
+        const result = await onLogin(email, password, { forceTakeover: true });
+        if (!result.ok && result.code === 'SESSION_BUSY' && result.sessionBusy) {
+            setBusyPrompt(result.sessionBusy);
+        }
     };
 
     return (
@@ -236,7 +278,7 @@ export function LoginPage({ onLogin, isLoading = false, error: propError }: Logi
                     </p>
 
                     {/* Error Message */}
-                    {displayError && (
+                    {displayError && !waiting && (
                         <div style={{
                             padding: '12px 14px',
                             marginBottom: '20px',
@@ -251,6 +293,32 @@ export function LoginPage({ onLogin, isLoading = false, error: propError }: Logi
                         }}>
                             <AlertCircle size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
                             <div style={{ fontWeight: '500' }}>{displayError}</div>
+                        </div>
+                    )}
+
+                    {/* Auto-wait banner: shown while polling for the previous session to finish */}
+                    {waiting && (
+                        <div style={{
+                            padding: '14px 16px',
+                            marginBottom: '20px',
+                            background: '#fffbeb',
+                            border: '1px solid #fde68a',
+                            borderRadius: '8px',
+                            color: '#92400e',
+                            display: 'flex',
+                            gap: '12px',
+                            alignItems: 'center',
+                            fontSize: '13px',
+                        }}>
+                            <Loader2 size={18} style={{ flexShrink: 0, animation: 'spin 1s linear infinite' }} />
+                            <div style={{ lineHeight: 1.4 }}>
+                                <div style={{ fontWeight: 600, marginBottom: '2px' }}>
+                                    Waiting for previous session to finish…
+                                </div>
+                                <div style={{ fontSize: '12px', color: '#b45309' }}>
+                                    {waiting.opLabel} — will sign in automatically when complete ({waiting.secondsLeft}s remaining).
+                                </div>
+                            </div>
                         </div>
                     )}
 
@@ -434,6 +502,92 @@ export function LoginPage({ onLogin, isLoading = false, error: propError }: Logi
                     © 2025 Autocrat Engineers. All rights reserved.
                 </div>
             </div>
+
+            {/* Force-takeover modal: shown when server returns 409 SESSION_BUSY */}
+            {busyPrompt && (
+                <div style={{
+                    position: 'fixed', inset: 0, zIndex: 1000,
+                    background: 'rgba(15, 23, 42, 0.65)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    padding: '24px',
+                }}>
+                    <div style={{
+                        background: 'white', borderRadius: '16px', maxWidth: '480px', width: '100%',
+                        padding: '32px', boxShadow: '0 24px 64px rgba(0, 0, 0, 0.4)',
+                    }}>
+                        <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start', marginBottom: '16px' }}>
+                            <div style={{
+                                width: '44px', height: '44px', borderRadius: '12px',
+                                background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                flexShrink: 0,
+                            }}>
+                                <ShieldAlert size={22} style={{ color: '#d97706' }} />
+                            </div>
+                            <div>
+                                <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 700, color: '#0f172a' }}>
+                                    Account is busy in another session
+                                </h3>
+                                <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#475569', lineHeight: 1.5 }}>
+                                    A previous sign-in is currently mid-operation. Wait a few seconds for it to finish, or force takeover to abandon it (the takeover will be audit-logged).
+                                </p>
+                            </div>
+                        </div>
+
+                        <div style={{
+                            background: '#f8fafc', border: '1px solid #e2e8f0',
+                            borderRadius: '10px', padding: '12px 14px', marginBottom: '20px',
+                        }}>
+                            {busyPrompt.in_flight.length === 0 ? (
+                                <div style={{ fontSize: '13px', color: '#64748b' }}>
+                                    A live operation lock exists, but no details were reported.
+                                </div>
+                            ) : busyPrompt.in_flight.map((op, i) => (
+                                <div key={i} style={{
+                                    display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+                                    fontSize: '13px', color: '#1e293b',
+                                    padding: i === 0 ? '0' : '6px 0 0',
+                                }}>
+                                    <span style={{ fontWeight: 600 }}>{op.op_label}</span>
+                                    <span style={{ fontSize: '12px', color: '#94a3b8' }}>
+                                        running {op.age_seconds}s
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                            <button
+                                type="button"
+                                onClick={() => setBusyPrompt(null)}
+                                disabled={isLoading}
+                                style={{
+                                    padding: '10px 16px', border: '1px solid #cbd5e1',
+                                    borderRadius: '8px', background: 'white', color: '#1e293b',
+                                    fontSize: '13px', fontWeight: 600, cursor: isLoading ? 'not-allowed' : 'pointer',
+                                }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleForceTakeover}
+                                disabled={isLoading}
+                                style={{
+                                    padding: '10px 16px', border: 'none',
+                                    borderRadius: '8px',
+                                    background: isLoading ? '#94a3b8' : 'linear-gradient(135deg, #b91c1c 0%, #dc2626 100%)',
+                                    color: 'white', fontSize: '13px', fontWeight: 600,
+                                    cursor: isLoading ? 'not-allowed' : 'pointer',
+                                    display: 'flex', alignItems: 'center', gap: '8px',
+                                }}
+                            >
+                                {isLoading ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <ShieldAlert size={14} />}
+                                Force takeover
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Keyframe animation */}
             <style>{`

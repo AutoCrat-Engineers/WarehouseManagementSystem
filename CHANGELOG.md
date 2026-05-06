@@ -7,6 +7,133 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.0] — 2026-05-06
+
+### Release Type: Minor — Auth & RBAC hardening
+
+This release re-architects authentication, session lifecycle, and role-based
+access control. Behavior for existing L3 admins is unchanged; L1/L2 users
+now operate under strict deny-by-default and require explicit grants.
+
+### Added
+
+- **Single-active-session enforcement** (migration `066_session_hardening.sql`).
+  - `transaction_locks` table prevents concurrent logins from killing
+    in-flight critical operations; new logins are held with `409 SESSION_BUSY`
+    until the prior op finishes (or the admin clicks "Force takeover").
+  - `enforce_active_session` atomic check + activity touch.
+  - `kill_session` / `kill_user_sessions` clean replacements for the
+    legacy `kill_other_sessions(EMPTY_UUID)` hack.
+  - Account lockout after 3 failed passwords; admin-only unlock via
+    User Management toggle.
+- **Realtime concurrent-login kill** (migration `067_global_sessions_realtime.sql`).
+  Open tabs receive a WebSocket push within ~1 s when their session is
+  killed elsewhere — no more 60 s heartbeat wait.
+- **Strict RBAC** (migration `068_rbac_strict.sql`).
+  - Partial unique index enforces exactly one active L3 (Manager).
+  - `user_permissions` added to the `supabase_realtime` publication
+    with an owner-select RLS policy → L1/L2 menus update within ~1 s
+    when L3 grants/revokes modules.
+- **New edge functions** (replace legacy RPC paths for client-facing ops):
+  - `auth-login` (rewritten with lockout, in-flight check, JTI binding,
+    explicit `force_takeover`).
+  - `auth-logout`, `auth-validate-session` rewrites.
+  - `admin_user_action` — L3 deactivate/delete with session-kill cascade.
+  - `admin_reset_password` — L3 direct password override (Bcrypt via
+    Supabase admin SDK; 10 production safeguards including weak-list
+    rejection, no-leak audit, session kill).
+  - `perm_get_my_permissions`, `perm_get_user_permissions`,
+    `perm_save_user_permissions` — replace the
+    `get_effective_permissions` RPC; deny-by-default, audit-logged.
+  - `admin_set_user_role` — single-L3 enforcement at the application
+    layer, demoting from L3 wipes stale `user_permissions` rows and
+    kills active sessions.
+- **Transaction-lock wrap on 33 mutation edge functions** so concurrent
+  logins always wait for in-flight writes to finish before proceeding.
+- **Client `SessionGuard`** (`src/auth/sessionGuard.ts`):
+  - BroadcastChannel single-tab claim.
+  - 10 min idle timeout (server-enforced + client-detected).
+  - 60 s heartbeat fallback.
+  - Realtime subscription on the user's `global_sessions` row for
+    instant cross-browser kill.
+- **Force-takeover modal** + **auto-wait spinner** in the login screen
+  (`LoginPage.tsx`) for the `409 SESSION_BUSY` response.
+- **L1/L2 empty-state landing screen** when no modules are granted.
+
+### Changed
+
+- `App.tsx` — fail-closed on profile-fetch failure (no more silent L1
+  fallback). Session-guard owns heartbeats, idle detection, and tab
+  takeover. Auto-dismisses the "previous session signed out" info banner
+  after 3 s.
+- `permissionService.ts` — `dbGetUserPermissions`, `dbGetEffectiveDetailed`,
+  `dbSaveUserPermissions` all route through edge functions. The
+  `get_effective_permissions` RPC is no longer called from the client.
+- `permissionUtils.canAccessView` — strict deny-by-default. Removed the
+  Dashboard-always-allowed carve-out for L1/L2 and the dead
+  `getRoleDefault` helper.
+- `userService.updateUserStatus` — when activating, also clears
+  `locked_at`/`lock_reason`/`failed_login_count` so admins can recover
+  locked accounts in a single click.
+- `userService.deleteUser` — routed through `admin_user_action`.
+- `userService.updateUserRole` — routed through `admin_set_user_role`
+  with structured `L3_ALREADY_EXISTS` response for the UI.
+- `_shared/session.ts` — `requireActiveSession` falls back to
+  user-id-based session lookup when `X-Session-Id` header is absent
+  (legacy raw-fetch components keep working).
+- `fetchWithAuth` — automatically attaches `X-Session-Id`; surfaces
+  structured `SessionInvalidError` on `SESSION_KILLED`,
+  `SESSION_IDLE_EXPIRED`, `SESSION_ENDED`, `SESSION_NOT_FOUND`.
+- `_shared/cors.ts` — `x-session-id` allowed in preflight responses.
+
+### Removed
+
+- `validateCurrentGlobalSession` polling loop (15 s) in `App.tsx`.
+- `forceClientLogout` helper in `App.tsx` (unused after SessionGuard).
+- `SESSION_VALIDATION_INTERVAL_MS` constant.
+- Silent `setUserRole('L1')` fallback on profile-fetch failure
+  (replaced with a clean fail-closed logout).
+- `getRoleDefault` dead helper in `permissionUtils.ts`.
+- Permissions trigger `prevent_self_escalation` (made redundant by the
+  new edge function which enforces every prior check + more, and was
+  blocking service-role writes on `auth.uid() = NULL`).
+
+### Security
+
+- Every mutation edge function now validates the session row in
+  `global_sessions` (not just the JWT) — killed-but-not-yet-expired
+  JWTs cannot mutate data.
+- Critical mutations (GR confirm, PI approve, BPA amend, etc.) acquire a
+  per-entity transaction lock, so concurrent logins block on the lock
+  rather than silently abandoning pending work.
+- Account-lockout, idle timeout, and admin-driven session kill all
+  surface a clear banner on the affected client.
+- Admin-driven password reset never persists or logs the plaintext;
+  Bcrypt hashing is delegated to Supabase's admin SDK.
+- Strict RBAC: no role defaults, no implicit Dashboard access for
+  L1/L2 — only L3-granted permissions count.
+
+### Migration / Operator Notes
+
+1. Run migrations in order: `066_session_hardening.sql`,
+   `067_global_sessions_realtime.sql`, `068_rbac_strict.sql`.
+2. Migration 068 fails on the unique-L3 index if more than one active
+   L3 exists. Demote extras manually first:
+   ```sql
+   UPDATE public.profiles SET role = 'L2', updated_at = now()
+   WHERE role = 'L3' AND deleted_at IS NULL AND id <> '<keep-id>';
+   ```
+3. Drop the legacy `prevent_self_escalation` trigger (now blocks the
+   new edge function's writes; the edge function enforces all checks):
+   ```sql
+   DROP TRIGGER IF EXISTS trigger_prevent_escalation ON public.user_permissions;
+   DROP FUNCTION IF EXISTS public.prevent_self_escalation() CASCADE;
+   ```
+4. Deploy all edge functions: `supabase functions deploy`.
+5. Hard-reload the client.
+
+---
+
 ## [0.5.8] — 2026-05-04
 
 ### Release Type: Patch — Mobile polish, Pallet Back-Chain & Release Review fixes

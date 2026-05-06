@@ -19,6 +19,8 @@
  */
 
 import { getSupabaseClient } from '../../utils/supabase/client';
+import { fetchWithAuth } from '../../utils/supabase/auth';
+import { getEdgeFunctionUrl } from '../../utils/supabase/info';
 import type { PermissionMap } from '../components/GrantAccessModal';
 
 const supabase = getSupabaseClient();
@@ -170,17 +172,28 @@ function rowsToPermissionMap(rows: EffectivePermRow[]): PermissionMap {
     return map;
 }
 
-async function dbGetUserPermissions(userId: string): Promise<PermissionMap> {
-    const { data, error } = await supabase.rpc('get_effective_permissions', {
-        p_user_id: userId,
+/**
+ * Fetch the calling user's effective permissions via the
+ * `perm_get_my_permissions` edge function (replaces the old
+ * `get_effective_permissions` RPC).
+ *
+ * The userId argument is kept for API compatibility but ignored — the
+ * server resolves the calling user from the JWT.  Passing a different
+ * id would never have been authorized anyway under deny-by-default RBAC.
+ */
+async function dbGetUserPermissions(_userId: string): Promise<PermissionMap> {
+    const res = await fetchWithAuth(getEdgeFunctionUrl('perm_get_my_permissions'), {
+        method: 'POST',
+        body: JSON.stringify({}),
     });
-
-    if (error) {
-        console.error('❌ get_effective_permissions RPC failed:', error.message);
-        throw error;
+    const result = await res.json().catch(() => ({} as any));
+    if (!res.ok) {
+        const msg = result?.error ?? 'Failed to load permissions';
+        console.error('❌ perm_get_my_permissions failed:', msg);
+        throw new Error(msg);
     }
-
-    return rowsToPermissionMap((data || []) as EffectivePermRow[]);
+    const rows: EffectivePermRow[] = Array.isArray(result?.permissions) ? result.permissions : [];
+    return rowsToPermissionMap(rows);
 }
 
 /**
@@ -195,39 +208,42 @@ export interface DetailedPermissions {
     fullControlModules: Set<string>;
 }
 
+/**
+ * Fetch a target user's permissions for the Grant Access modal via
+ * `perm_get_user_permissions` (L3-only edge function).
+ *
+ * In strict deny-by-default RBAC, role defaults no longer exist — the
+ * `roleDefaultKeys` set is always empty.  Modules absent from the
+ * response are unchecked in the modal (denied).
+ */
 async function dbGetEffectiveDetailed(userId: string): Promise<DetailedPermissions> {
-    const { data, error } = await supabase.rpc('get_effective_permissions', {
-        p_user_id: userId,
+    const res = await fetchWithAuth(getEdgeFunctionUrl('perm_get_user_permissions'), {
+        method: 'POST',
+        body: JSON.stringify({ user_id: userId }),
     });
+    const result = await res.json().catch(() => ({} as any));
+    if (!res.ok) {
+        throw new Error(result?.error ?? 'Failed to load user permissions');
+    }
 
-    if (error) throw error;
+    const overrides: Array<{
+        module_name: string;
+        can_view: boolean; can_create: boolean; can_edit: boolean; can_delete: boolean;
+        override_mode: 'grant' | 'full_control';
+    }> = Array.isArray(result?.permissions) ? result.permissions : [];
 
-    const rows = (data || []) as EffectivePermRow[];
     const permissions: PermissionMap = {};
-    const roleDefaultKeys = new Set<string>();
     const fullControlModules = new Set<string>();
+    // Strict deny-by-default — role defaults table is no longer consulted.
+    const roleDefaultKeys = new Set<string>();
 
-    for (const row of rows) {
+    for (const row of overrides) {
         const mod = row.module_name;
-        const isDefault = row.source === 'role_default';
-        const isFullControl = row.source === 'full_control';
-
-        if (isFullControl) {
-            fullControlModules.add(mod);
-        }
-
-        // Write ALL values (true and false) so the frontend knows the resolved state
-        permissions[`${mod}.view`] = !!row.can_view;
+        if (row.override_mode === 'full_control') fullControlModules.add(mod);
+        permissions[`${mod}.view`]   = !!row.can_view;
         permissions[`${mod}.create`] = !!row.can_create;
-        permissions[`${mod}.edit`] = !!row.can_edit;
+        permissions[`${mod}.edit`]   = !!row.can_edit;
         permissions[`${mod}.delete`] = !!row.can_delete;
-
-        if (isDefault) {
-            if (row.can_view) roleDefaultKeys.add(`${mod}.view`);
-            if (row.can_create) roleDefaultKeys.add(`${mod}.create`);
-            if (row.can_edit) roleDefaultKeys.add(`${mod}.edit`);
-            if (row.can_delete) roleDefaultKeys.add(`${mod}.delete`);
-        }
     }
 
     return { permissions, roleDefaultKeys, fullControlModules };
@@ -256,56 +272,16 @@ export async function getEffectivePermissionsDetailed(
     }
 }
 
-/**
- * Convert a flat PermissionMap back into per-module rows for upserting
- * into user_permissions table.
- */
-function permissionMapToRows(
-    userId: string,
-    permissions: PermissionMap,
-    overrideModes: Record<string, OverrideMode> = {}
-): Array<{
-    user_id: string;
-    module_name: string;
-    can_view: boolean;
-    can_create: boolean;
-    can_edit: boolean;
-    can_delete: boolean;
-    override_mode: OverrideMode;
-}> {
-    // Group by module
-    const moduleMap: Record<string, { can_view: boolean; can_create: boolean; can_edit: boolean; can_delete: boolean }> = {};
-
-    Object.entries(permissions).forEach(([key, granted]) => {
-        // key format: "module.action" OR "parent.submodule.action"
-        const parts = key.split('.');
-        const action = parts.pop()!;  // last part is the action
-        const moduleName = parts.join('.'); // everything before is the module
-
-        if (!moduleName || !['view', 'create', 'edit', 'delete'].includes(action)) return;
-
-        if (!moduleMap[moduleName]) {
-            moduleMap[moduleName] = { can_view: false, can_create: false, can_edit: false, can_delete: false };
-        }
-
-        const actionKey = `can_${action}` as keyof typeof moduleMap[string];
-        moduleMap[moduleName][actionKey] = !!granted;
-    });
-
-    return Object.entries(moduleMap).map(([moduleName, perms]) => ({
-        user_id: userId,
-        module_name: moduleName,
-        ...perms,
-        override_mode: overrideModes[moduleName] || 'grant',
-    }));
-}
+// `permissionMapToRows` was the helper for the old direct-upsert path.
+// Removed in v0.6.0 — `dbSaveUserPermissions` now reshapes the map
+// inline before posting to the `perm_save_user_permissions` edge fn.
 
 /**
- * Save user permission overrides to the database.
+ * Save user permission overrides via the `perm_save_user_permissions`
+ * edge function (L3-only, server-side validation, audit-logged).
  *
- * @param overrideModes - per-module override mode map.
- *   'grant' (default) = additive, only adds on top of role defaults.
- *   'full_control'    = replaces role defaults entirely for that module.
+ * Replaces the previous direct supabase-js upsert.  The edge function
+ * is the single authority for writing user_permissions.
  */
 async function dbSaveUserPermissions(
     userId: string,
@@ -313,54 +289,57 @@ async function dbSaveUserPermissions(
     overrideModes: Record<string, OverrideMode> = {}
 ): Promise<{ success: boolean; error?: string; grantedCount?: number }> {
     try {
-        const rows = permissionMapToRows(userId, permissions, overrideModes);
+        // Reshape the flat PermissionMap into the per-module rows the
+        // edge function expects.
+        const moduleMap = new Map<string, {
+            module_name: string;
+            can_view:    boolean;
+            can_create:  boolean;
+            can_edit:    boolean;
+            can_delete:  boolean;
+            override_mode: OverrideMode;
+        }>();
 
-        // In 'full_control' mode, ALL-false rows are INTENTIONAL (denying access)
-        // so they must be saved. In 'grant' mode, all-false rows should be deleted.
-        const rowsToSave = rows.filter(r => {
-            if (r.override_mode === 'full_control') return true; // always save in full_control
-            return r.can_view || r.can_create || r.can_edit || r.can_delete;
+        for (const [key, value] of Object.entries(permissions)) {
+            const lastDot = key.lastIndexOf('.');
+            if (lastDot < 0) continue;
+            const moduleName = key.slice(0, lastDot);
+            const action     = key.slice(lastDot + 1);
+            if (!['view', 'create', 'edit', 'delete'].includes(action)) continue;
+
+            const row = moduleMap.get(moduleName) ?? {
+                module_name:  moduleName,
+                can_view:     false,
+                can_create:   false,
+                can_edit:     false,
+                can_delete:   false,
+                override_mode: overrideModes[moduleName] ?? 'grant',
+            };
+            (row as any)[`can_${action}`] = !!value;
+            moduleMap.set(moduleName, row);
+        }
+
+        const payload = {
+            user_id:     userId,
+            permissions: Array.from(moduleMap.values()),
+        };
+
+        const res = await fetchWithAuth(getEdgeFunctionUrl('perm_save_user_permissions'), {
+            method: 'POST',
+            body:   JSON.stringify(payload),
         });
+        const result = await res.json().catch(() => ({} as any));
 
-        const modulesToDelete = rows
-            .filter(r => {
-                if (r.override_mode === 'full_control') return false; // never auto-delete full_control
-                return !r.can_view && !r.can_create && !r.can_edit && !r.can_delete;
-            })
-            .map(r => r.module_name);
-
-        // Delete overrides for 'grant' mode modules with no grants → let role defaults take over
-        if (modulesToDelete.length > 0) {
-            await supabase
-                .from('user_permissions')
-                .delete()
-                .eq('user_id', userId)
-                .in('module_name', modulesToDelete);
-        }
-
-        if (rowsToSave.length === 0 && modulesToDelete.length === 0) {
-            // No saves and no deletes — clean up everything
-            await supabase
-                .from('user_permissions')
-                .delete()
-                .eq('user_id', userId);
-            return { success: true, grantedCount: 0 };
-        }
-
-        if (rowsToSave.length > 0) {
-            const { error } = await supabase
-                .from('user_permissions')
-                .upsert(rowsToSave, { onConflict: 'user_id,module_name' });
-
-            if (error) throw error;
+        if (!res.ok || !result?.success) {
+            return { success: false, error: result?.error ?? 'Failed to save permissions' };
         }
 
         const grantedCount = Object.values(permissions).filter(Boolean).length;
-        console.log(`✓ DB permissions saved for user ${userId}: ${grantedCount} granted`);
+        console.log(`✓ DB permissions saved via edge fn for user ${userId}: ${grantedCount} granted, ${result.revoked ?? 0} revoked`);
         return { success: true, grantedCount };
     } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-        console.error('💥 DB save permissions error:', err);
+        console.error('💥 perm_save_user_permissions failed:', err);
         return { success: false, error: errorMsg };
     }
 }

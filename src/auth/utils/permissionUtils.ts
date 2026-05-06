@@ -73,10 +73,13 @@ export const VIEW_PERMISSION_MAP: Record<string, string> = {
 /**
  * Check if the current user can access a specific view.
  *
- * Rules:
- *   - L3 always has full access
- *   - If no permissions are loaded yet (empty map), DENY access (safe default)
- *   - Otherwise check the specific permission key
+ * Strict deny-by-default RBAC:
+ *   - L3 always has full access (Manager).
+ *   - User Management is L3-only, period.
+ *   - L1 / L2 see ONLY what's explicitly granted in user_permissions.
+ *     No automatic Dashboard access, no default views, nothing.
+ *   - Unmapped views (no entry in VIEW_PERMISSION_MAP) are denied to
+ *     prevent silent leakage of new modules.
  *
  * @param view - The view ID (e.g., 'items', 'pe-dispatch')
  * @param userRole - The user's role (L1/L2/L3)
@@ -87,23 +90,13 @@ export function canAccessView(
     userRole: UserRole,
     userPerms: PermissionMap
 ): boolean {
-    // L3 always has full access
     if (userRole === 'L3') return true;
 
-    // User Management is L3-only, period
+    // User Management is L3-only, period.
     if (view === 'users') return false;
 
-    // Dashboard is always accessible to all authenticated users
-    if (view === 'dashboard') return true;
-
-    const permKeys = Object.keys(userPerms);
-
-    // If no permissions have been loaded at all — DENY
-    // This prevents silently granting full access on DB failures
-    if (permKeys.length === 0) return false;
-
     const permKey = VIEW_PERMISSION_MAP[view];
-    if (!permKey) return true; // Unknown view → allow (don't block on unmapped views)
+    if (!permKey) return false; // Unknown view → DENY (no silent leaks)
 
     return userPerms[permKey] === true;
 }
@@ -207,25 +200,5 @@ export function canAccessAnyDispatchModule(userRole: UserRole, userPerms: Permis
     return dispatchModules.some(mod => userPerms[`${mod}.view`] === true);
 }
 
-// ============================================================================
-// ROLE DEFAULTS (used when no DB permissions are loaded)
-// ============================================================================
-
-/**
- * Get the default permission for a role + action combination.
- * This is only used as a fallback when permissions haven't loaded yet.
- */
-function getRoleDefault(userRole: UserRole, action: string): boolean {
-    switch (action) {
-        case 'view':
-            return true; // All roles can view by default
-        case 'create':
-            return userRole === 'L2'; // L2+ can create
-        case 'edit':
-            return userRole === 'L2'; // L2+ can edit
-        case 'delete':
-            return false; // Only explicit grants
-        default:
-            return false;
-    }
-}
+// Role defaults removed in strict RBAC — every L1/L2 permission is now an
+// explicit row in user_permissions.  Nothing to fall back to.

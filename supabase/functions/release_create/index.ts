@@ -20,15 +20,12 @@
  * OUTPUT:
  *   { success, release_id, release_number, release_sequence, po_base }
  */
-import { authenticateRequest } from '../_shared/auth.ts';
-import { jsonResponse, errorResponse, unauthorized, withErrorHandler, mapPgError } from '../_shared/errors.ts';
+import { withMutationGuard } from '../_shared/session.ts';
+import { jsonResponse, errorResponse, withErrorHandler, mapPgError } from '../_shared/errors.ts';
 import { parseBody, validate } from '../_shared/schemas.ts';
 
-export const handler = withErrorHandler(async (req) => {
+export const handler = withErrorHandler((req) => withMutationGuard(req, { label: 'Creating Blanket Release' }, async (ctx) => {
     const origin = req.headers.get('origin') ?? undefined;
-    const ctx = await authenticateRequest(req);
-    if (!ctx) return unauthorized(origin);
-
     const body = await parseBody(req);
     const v = validate(body, {
         customer_po_number: 'string',
@@ -157,6 +154,6 @@ export const handler = withErrorHandler(async (req) => {
         release_sequence: rel.release_sequence,
         po_base:          rel.customer_po_base,
     }, { origin });
-});
+}));
 
 if (import.meta.main) Deno.serve(handler);

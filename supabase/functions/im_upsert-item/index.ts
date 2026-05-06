@@ -18,8 +18,8 @@
  *
  * No RPC is used — pure direct table operations via the service-role client.
  */
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.47.10';
 import { getCorsHeaders } from '../_shared/cors.ts';
+import { requireActiveSession, withTransactionLock } from '../_shared/session.ts';
 
 // Mirrors ItemFormData in utils/api/itemsSupabase.ts.  All fields are
 // forwarded verbatim to the DB without transformation.
@@ -48,24 +48,11 @@ export async function handler(req: Request): Promise<Response> {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
-    // ── AUTH ─────────────────────────────────────────────────────────
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) return json(corsHeaders, { error: 'Missing authorization header' }, 401);
+    const session = await requireActiveSession(req);
+    if (!session.ok) return session.response;
+    const ctx = session.ctx;
+    const db = ctx.db;
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-
-    const userClient = createClient(supabaseUrl, Deno.env.get('PUBLISHABLE_KEY')!, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const { data: { user }, error: authError } = await userClient.auth.getUser(
-      authHeader.replace('Bearer ', ''),
-    );
-    if (authError || !user) return json(corsHeaders, { error: 'Unauthorized' }, 401);
-
-    const db = createClient(supabaseUrl, serviceRoleKey);
-
-    // ── BODY ─────────────────────────────────────────────────────────
     const body: UpsertItemBody = await req.json().catch(() => ({} as any));
     const { item_id: itemId, form_data: formData } = body;
 
@@ -73,27 +60,29 @@ export async function handler(req: Request): Promise<Response> {
       return json(corsHeaders, { error: 'form_data is required' }, 400);
     }
 
-    // ── UPDATE MODE ──────────────────────────────────────────────────
-    if (itemId) {
+    return await withTransactionLock(ctx, {
+      key:   `upserting_item:${itemId ?? 'new'}`,
+      label: 'Upserting Item',
+    }, async () => {
+      if (itemId) {
+        const { data, error } = await db
+          .from('items')
+          .update({ ...formData, updated_at: new Date().toISOString() })
+          .eq('id', itemId)
+          .select()
+          .single();
+        if (error) return json(corsHeaders, { error: error.message }, 400);
+        return json(corsHeaders, { success: true, mode: 'update', item: data });
+      }
+
       const { data, error } = await db
         .from('items')
-        .update({ ...formData, updated_at: new Date().toISOString() })
-        .eq('id', itemId)
+        .insert(formData)
         .select()
         .single();
       if (error) return json(corsHeaders, { error: error.message }, 400);
-      return json(corsHeaders, { success: true, mode: 'update', item: data });
-    }
-
-    // ── CREATE MODE ──────────────────────────────────────────────────
-    const { data, error } = await db
-      .from('items')
-      .insert(formData)
-      .select()
-      .single();
-    if (error) return json(corsHeaders, { error: error.message }, 400);
-
-    return json(corsHeaders, { success: true, mode: 'create', item: data });
+      return json(corsHeaders, { success: true, mode: 'create', item: data });
+    });
   } catch (err: any) {
     console.error('[im_upsert-item] Error:', err?.message || err);
     return json(corsHeaders, { error: err?.message || 'Internal server error' }, 500);

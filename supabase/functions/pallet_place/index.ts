@@ -16,15 +16,12 @@
  * OUTPUT (from RPC):
  *   { success, rack_location_id, location_code, pallet_id }
  */
-import { authenticateRequest } from '../_shared/auth.ts';
-import { jsonResponse, errorResponse, unauthorized, withErrorHandler, mapPgError } from '../_shared/errors.ts';
+import { withMutationGuard } from '../_shared/session.ts';
+import { jsonResponse, errorResponse, withErrorHandler, mapPgError } from '../_shared/errors.ts';
 import { parseBody, validate } from '../_shared/schemas.ts';
 
-export const handler = withErrorHandler(async (req) => {
+export const handler = withErrorHandler((req) => withMutationGuard(req, { label: 'Placing Pallet on Rack' }, async (ctx) => {
     const origin = req.headers.get('origin') ?? undefined;
-    const ctx = await authenticateRequest(req);
-    if (!ctx) return unauthorized(origin);
-
     const body = await parseBody(req);
     const v = validate(body, {
         pallet_id: 'uuid',
@@ -49,6 +46,6 @@ export const handler = withErrorHandler(async (req) => {
     }
 
     return jsonResponse(data, { origin });
-});
+}));
 
 if (import.meta.main) Deno.serve(handler);

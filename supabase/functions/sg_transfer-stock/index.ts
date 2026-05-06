@@ -49,6 +49,7 @@
 import { Pool } from 'https://deno.land/x/postgres@v0.19.3/mod.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.47.10';
 import { corsHeaders } from '../_shared/cors.ts';
+import { requireActiveSession, withTransactionLock } from '../_shared/session.ts';
 
 // ────────────────────────────────────────────────────────────────────────
 // Pool (module-level so warm invocations reuse connections)
@@ -89,22 +90,20 @@ export async function handler(req: Request): Promise<Response> {
 
   try {
     // ── AUTH ─────────────────────────────────────────────────────────
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) return json({ error: 'Missing authorization header' }, 401);
-
-    const userClient = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('PUBLISHABLE_KEY')!,
-      { auth: { persistSession: false, autoRefreshToken: false } },
-    );
-    const { data: { user }, error: authError } = await userClient.auth.getUser(
-      authHeader.replace('Bearer ', ''),
-    );
-    if (authError || !user) return json({ error: 'Unauthorized' }, 401);
-    const userId = user.id;
+    const session = await requireActiveSession(req);
+    if (!session.ok) return session.response;
+    const ctx = session.ctx;
+    const supabaseClient = ctx.db;
+    const user = { id: ctx.userId };
+    const userId = ctx.userId;
 
     // ── BODY ─────────────────────────────────────────────────────────
     const body: TransferBody = await req.json().catch(() => ({} as any));
+
+    return await withTransactionLock(ctx, {
+      key:   `transferring_stock:${ctx.sessionId}`,
+      label: 'Transferring Stock',
+    }, async () => {
     const requestId = body.request_id;
     const idempotencyKey = body.idempotency_key;
     const boxIds =
@@ -116,6 +115,7 @@ export async function handler(req: Request): Promise<Response> {
     // ── EXECUTE (with auto-retry on transient failures) ──────────────
     const result = await runTransferWithRetry(requestId, boxIds, userId, idempotencyKey);
     return json(result);
+    });
   } catch (err: any) {
     console.error('[sg_transfer-stock] Error:', err?.message || err);
     return json({ error: err?.message || 'Internal server error' }, 500);

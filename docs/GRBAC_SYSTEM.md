@@ -1,23 +1,47 @@
 # Granular Role-Based Access Control (GRBAC)
 
+> **Updated in v0.6.0** — Strict deny-by-default model. Role defaults are
+> no longer merged into the effective set; the `permissions` (role-defaults)
+> table is intentionally ignored by the new code path. All client-facing
+> permission resolution now happens in edge functions, not in RPCs.
+
 ## Architecture Overview
 
-The WMS-AE system uses a **3-tier permission model**:
-
 ```
-Role Defaults (permissions table)
-        ↕ merged via GREATEST() or full_control
-User Overrides (user_permissions table)
-        ↓
-Effective Permissions (get_effective_permissions RPC)
+                ┌────────────────────────────┐
+                │   user_permissions table   │ ← only source of truth for L1/L2
+                └────────────┬───────────────┘
+                             │
+                             ▼
+        ┌─────────────────────────────────────────────┐
+        │  perm_get_my_permissions  (edge function)   │
+        │  perm_get_user_permissions (edge function)  │
+        │  perm_save_user_permissions (edge function) │
+        │  admin_set_user_role        (edge function) │
+        └────────────┬────────────────────────────────┘
+                     │
+                     ▼
+              Effective PermissionMap
+              (flat keys: "items.view", "items.create", …)
 ```
 
 ### Role Hierarchy
-| Role | Level | Description |
-|------|-------|-------------|
-| L1   | Operator   | Day-to-day operations, can view + create by default |
-| L2   | Supervisor | Operations oversight, can view + create + edit by default |
-| L3   | Manager    | Full access always, manages users and permissions |
+
+| Role | Display    | Multiplicity | Default permissions | Notes |
+|------|------------|--------------|---------------------|-------|
+| L3   | Manager    | **Exactly one** in the system (enforced by partial unique index `uq_profiles_one_l3` from migration 068) | Full access on every active module + User Management | Cannot have their permissions scoped down. |
+| L2   | Supervisor | Many | **None** | Sees only modules L3 explicitly grants. |
+| L1   | Operator   | Many | **None** | Sees only modules L3 explicitly grants. |
+
+**Important behaviour change in v0.6.0**:
+- L1/L2 used to inherit defaults via the `permissions` table and the
+  legacy `get_effective_permissions` RPC's `GREATEST(override, role_default)`
+  merge. That table is now ignored. L1/L2 see ONLY rows present in
+  `user_permissions` for their user_id.
+- A fresh L1/L2 with zero grants lands on a "No modules assigned —
+  contact your manager" screen instead of the dashboard.
+- The instant L3 grants a module via Grant Access, the affected user's
+  open tabs receive a Realtime push and refresh the menu within ~1s.
 
 ---
 
