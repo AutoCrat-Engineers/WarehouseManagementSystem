@@ -18,15 +18,12 @@
  * OUTPUT:
  *   { success, rows_checked, rows_corrected, diffs: [{part_number, field, old, new}] }
  */
-import { authenticateRequest } from '../_shared/auth.ts';
-import { jsonResponse, errorResponse, forbidden, withErrorHandler } from '../_shared/errors.ts';
+import { withMutationGuard } from '../_shared/session.ts';
+import { jsonResponse, errorResponse, withErrorHandler } from '../_shared/errors.ts';
 import { parseBody } from '../_shared/schemas.ts';
 
-export const handler = withErrorHandler(async (req) => {
+export const handler = withErrorHandler((req) => withMutationGuard(req, { label: 'Recalculating Blanket Order Totals', requireRoles: ['L3', 'ADMIN', 'SERVICE'] }, async (ctx) => {
     const origin = req.headers.get('origin') ?? undefined;
-    const ctx = await authenticateRequest(req, { requireRoles: ['L3', 'ADMIN', 'SERVICE'] });
-    if (!ctx) return forbidden(origin, 'bo_recalc_totals requires L3/ADMIN role.');
-
     const body = await parseBody(req);
     const agreementId = body.agreement_id as string | undefined;
     const dryRun = Boolean(body.dry_run);
@@ -101,6 +98,6 @@ export const handler = withErrorHandler(async (req) => {
         rows_corrected:  corrected,
         diffs,
     }, { origin });
-});
+}));
 
 if (import.meta.main) Deno.serve(handler);

@@ -24,7 +24,10 @@ import {
     ChevronDown,
     AlertTriangle,
     CheckCircle2,
-    Info
+    Info,
+    KeyRound,
+    Eye,
+    EyeOff,
 } from 'lucide-react';
 import {
     getAllUsers,
@@ -32,6 +35,7 @@ import {
     updateUser,
     updateUserStatus,
     deleteUser,
+    resetUserPassword,
     type UserListItem,
     type CreateUserRequest,
     type UpdateUserRequest,
@@ -75,6 +79,13 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
     const [showEditModal, setShowEditModal] = useState(false);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [showStatusConfirm, setShowStatusConfirm] = useState(false);
+    const [showResetPwd, setShowResetPwd] = useState(false);
+    const [resetPwdTarget, setResetPwdTarget] = useState<UserListItem | null>(null);
+    const [newPwd1, setNewPwd1] = useState('');
+    const [newPwd2, setNewPwd2] = useState('');
+    const [showNewPwd, setShowNewPwd] = useState(false);
+    const [resetPwdSubmitting, setResetPwdSubmitting] = useState(false);
+    const [resetPwdError, setResetPwdError] = useState<string | null>(null);
     const [showGrantAccess, setShowGrantAccess] = useState(false);
     const [grantAccessUser, setGrantAccessUser] = useState<UserListItem | null>(null);
     const [userPermissions, setUserPermissions] = useState<Record<string, PermissionMap>>({});
@@ -248,6 +259,79 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
         setSelectedUser(user);
         setShowDeleteConfirm(true);
         setActiveDropdown(null);
+    };
+
+    const openResetPwdModal = (user: UserListItem) => {
+        if (user.id === currentUserId) return;
+        setResetPwdTarget(user);
+        setNewPwd1('');
+        setNewPwd2('');
+        setShowNewPwd(false);
+        setResetPwdError(null);
+        setResetPwdSubmitting(false);
+        setShowResetPwd(true);
+        setActiveDropdown(null);
+    };
+
+    const closeResetPwdModal = () => {
+        setShowResetPwd(false);
+        setResetPwdTarget(null);
+        setNewPwd1('');
+        setNewPwd2('');
+        setResetPwdError(null);
+        setResetPwdSubmitting(false);
+    };
+
+    /**
+     * Client-side password policy mirror — must match the server check
+     * in admin_reset_password.  Server enforces too, this is for UX only.
+     */
+    const validatePassword = (pw: string): string | null => {
+        if (pw.length < 8) return 'Password must be at least 8 characters.';
+        if (pw.length > 72) return 'Password must be at most 72 characters.';
+        if (!/[a-z]/.test(pw)) return 'Password must contain at least one lowercase letter.';
+        if (!/[A-Z]/.test(pw)) return 'Password must contain at least one uppercase letter.';
+        if (!/[0-9]/.test(pw)) return 'Password must contain at least one digit.';
+        if (!/[^A-Za-z0-9]/.test(pw)) return 'Password must contain at least one symbol.';
+        if (/\s/.test(pw)) return 'Password must not contain whitespace.';
+        return null;
+    };
+
+    const handleResetPwdSubmit = async () => {
+        if (!resetPwdTarget) return;
+        setResetPwdError(null);
+
+        if (newPwd1 !== newPwd2) {
+            setResetPwdError('Passwords do not match.');
+            return;
+        }
+        const policyErr = validatePassword(newPwd1);
+        if (policyErr) {
+            setResetPwdError(policyErr);
+            return;
+        }
+
+        setResetPwdSubmitting(true);
+        try {
+            const result = await resetUserPassword(resetPwdTarget.id, newPwd1);
+            if (!result.success) {
+                setResetPwdError(result.error ?? 'Failed to reset password.');
+                return;
+            }
+            const killed = result.killedSessions ?? 0;
+            showToast('success', 'Password Reset',
+                killed > 0
+                  ? `Password updated for ${resetPwdTarget.full_name}. ${killed} active session${killed === 1 ? '' : 's'} terminated.`
+                  : `Password updated for ${resetPwdTarget.full_name}.`);
+            closeResetPwdModal();
+        } catch (err) {
+            setResetPwdError(err instanceof Error ? err.message : 'Failed to reset password.');
+        } finally {
+            // Always wipe the in-memory password — minimum exposure.
+            setNewPwd1('');
+            setNewPwd2('');
+            setResetPwdSubmitting(false);
+        }
     };
 
     const handleDeleteUser = async () => {
@@ -705,6 +789,17 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                                                                 </button>
                                                                 <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
                                                                 <button
+                                                                    onClick={() => openResetPwdModal(user)}
+                                                                    disabled={user.id === currentUserId}
+                                                                    title={user.id === currentUserId ? 'Use the change-password flow for your own account' : 'Reset this user’s password'}
+                                                                    style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: user.id === currentUserId ? 'not-allowed' : 'pointer', fontSize: '14px', textAlign: 'left', color: user.id === currentUserId ? '#9ca3af' : '#2563eb', opacity: user.id === currentUserId ? 0.6 : 1 }}
+                                                                    onMouseEnter={(e) => { if (user.id !== currentUserId) e.currentTarget.style.backgroundColor = '#eff6ff'; }}
+                                                                    onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                                                                >
+                                                                    <KeyRound size={16} /> Reset Password
+                                                                </button>
+                                                                <div style={{ borderTop: '1px solid #f3f4f6' }}></div>
+                                                                <button
                                                                     onClick={() => openDeleteConfirm(user)}
                                                                     style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer', fontSize: '14px', textAlign: 'left', color: '#ef4444' }}
                                                                 >
@@ -1144,6 +1239,162 @@ export function UserManagement({ currentUserId }: UserManagementProps) {
                             >
                                 <Power size={16} />
                                 Yes, {statusConfirmAction.newStatus ? 'Activate' : 'Deactivate'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ═══════════════ RESET PASSWORD MODAL (L3 → User) ═══════════════ */}
+            {showResetPwd && resetPwdTarget && (
+                <div
+                    style={{
+                        position: 'fixed', inset: 0, zIndex: 9000,
+                        background: 'rgba(15, 23, 42, 0.6)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        padding: '24px',
+                    }}
+                    onClick={(e) => { if (e.target === e.currentTarget && !resetPwdSubmitting) closeResetPwdModal(); }}
+                >
+                    <div style={{
+                        background: 'white', borderRadius: '16px', maxWidth: '480px', width: '100%',
+                        padding: '28px', boxShadow: '0 24px 64px rgba(0, 0, 0, 0.4)',
+                    }}>
+                        <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start', marginBottom: '20px' }}>
+                            <div style={{
+                                width: '44px', height: '44px', borderRadius: '12px', flexShrink: 0,
+                                background: '#dbeafe', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            }}>
+                                <KeyRound size={22} style={{ color: '#2563eb' }} />
+                            </div>
+                            <div style={{ flex: 1 }}>
+                                <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 700, color: '#0f172a' }}>
+                                    Reset Password
+                                </h3>
+                                <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#64748b', lineHeight: 1.5 }}>
+                                    Set a new password for <strong>{resetPwdTarget.full_name}</strong> ({resetPwdTarget.email}). Their active sessions will be signed out.
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* New password */}
+                        <div style={{ marginBottom: '14px' }}>
+                            <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#1e293b', marginBottom: '6px' }}>
+                                New Password
+                            </label>
+                            <div style={{ position: 'relative' }}>
+                                <input
+                                    type={showNewPwd ? 'text' : 'password'}
+                                    value={newPwd1}
+                                    onChange={(e) => { setNewPwd1(e.target.value); setResetPwdError(null); }}
+                                    autoComplete="new-password"
+                                    disabled={resetPwdSubmitting}
+                                    placeholder="At least 8 chars, mixed case, digit, symbol"
+                                    style={{
+                                        width: '100%', padding: '11px 40px 11px 14px',
+                                        border: '2px solid #e2e8f0', borderRadius: '10px',
+                                        fontSize: '14px', boxSizing: 'border-box',
+                                        backgroundColor: resetPwdSubmitting ? '#f9fafb' : 'white',
+                                    }}
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowNewPwd((v) => !v)}
+                                    tabIndex={-1}
+                                    style={{
+                                        position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)',
+                                        border: 'none', background: 'transparent', cursor: 'pointer',
+                                        color: '#64748b', padding: '4px',
+                                    }}
+                                >
+                                    {showNewPwd ? <EyeOff size={18} /> : <Eye size={18} />}
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Confirm password */}
+                        <div style={{ marginBottom: '16px' }}>
+                            <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, color: '#1e293b', marginBottom: '6px' }}>
+                                Confirm New Password
+                            </label>
+                            <input
+                                type={showNewPwd ? 'text' : 'password'}
+                                value={newPwd2}
+                                onChange={(e) => { setNewPwd2(e.target.value); setResetPwdError(null); }}
+                                autoComplete="new-password"
+                                disabled={resetPwdSubmitting}
+                                placeholder="Re-enter the new password"
+                                style={{
+                                    width: '100%', padding: '11px 14px',
+                                    border: '2px solid #e2e8f0', borderRadius: '10px',
+                                    fontSize: '14px', boxSizing: 'border-box',
+                                    backgroundColor: resetPwdSubmitting ? '#f9fafb' : 'white',
+                                }}
+                            />
+                        </div>
+
+                        {/* Error */}
+                        {resetPwdError && (
+                            <div style={{
+                                padding: '10px 12px', marginBottom: '14px',
+                                background: '#fef2f2', border: '1px solid #fecaca',
+                                borderRadius: '8px', color: '#dc2626',
+                                display: 'flex', alignItems: 'flex-start', gap: '8px',
+                                fontSize: '12.5px', lineHeight: 1.4,
+                            }}>
+                                <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '1px' }} />
+                                <span>{resetPwdError}</span>
+                            </div>
+                        )}
+
+                        {/* Note */}
+                        <div style={{
+                            padding: '10px 12px', marginBottom: '16px',
+                            background: '#fffbeb', border: '1px solid #fde68a',
+                            borderRadius: '8px', color: '#92400e',
+                            fontSize: '12.5px', lineHeight: 1.45,
+                            display: 'flex', alignItems: 'flex-start', gap: '8px',
+                        }}>
+                            <Info size={15} style={{ flexShrink: 0, marginTop: '1px' }} />
+                            <span>
+                                Share the new password with the user securely.
+                                This action is logged and the user will be signed out everywhere.
+                            </span>
+                        </div>
+
+                        {/* Buttons */}
+                        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                            <button
+                                type="button"
+                                onClick={closeResetPwdModal}
+                                disabled={resetPwdSubmitting}
+                                style={{
+                                    padding: '10px 18px', border: '1px solid #cbd5e1', borderRadius: '8px',
+                                    background: 'white', color: '#1e293b',
+                                    fontSize: '13px', fontWeight: 600,
+                                    cursor: resetPwdSubmitting ? 'not-allowed' : 'pointer',
+                                }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleResetPwdSubmit}
+                                disabled={resetPwdSubmitting || !newPwd1 || !newPwd2}
+                                style={{
+                                    padding: '10px 18px', border: 'none', borderRadius: '8px',
+                                    background: resetPwdSubmitting || !newPwd1 || !newPwd2
+                                        ? '#94a3b8'
+                                        : 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+                                    color: 'white', fontSize: '13px', fontWeight: 600,
+                                    cursor: resetPwdSubmitting || !newPwd1 || !newPwd2 ? 'not-allowed' : 'pointer',
+                                    display: 'flex', alignItems: 'center', gap: '8px',
+                                }}
+                            >
+                                {resetPwdSubmitting
+                                    ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                                    : <KeyRound size={14} />}
+                                {resetPwdSubmitting ? 'Resetting…' : 'Reset Password'}
                             </button>
                         </div>
                     </div>

@@ -15,6 +15,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
+import { requireActiveSession, withTransactionLock } from '../_shared/session.ts';
 
 // Movement types where stock is only deducted (OUT only) — mirrors OUT_ONLY_MOVEMENT_TYPES
 const OUT_ONLY_MOVEMENT_TYPES = ['REJECTION_DISPOSAL'];
@@ -34,31 +35,22 @@ export async function handler(req: Request): Promise<Response> {
 
   try {
     // ── AUTH ──────────────────────────────────────────────────────────────────
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-      return new Response(JSON.stringify({ error: 'Missing authorization header' }), {
-        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+    const session = await requireActiveSession(req);
+    if (!session.ok) return session.response;
+    const ctx = session.ctx;
+    const supabaseClient = ctx.db;
+    const user = { id: ctx.userId };
+    const userId = ctx.userId;
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-
-    const userClient = createClient(supabaseUrl, Deno.env.get('PUBLISHABLE_KEY')!, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const { data: { user }, error: authError } = await userClient.auth.getUser(authHeader.replace('Bearer ', ''));
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-    const userId = user.id;
-
-    const db = createClient(supabaseUrl, serviceRoleKey);
+    const db = ctx.db;
 
     // ── PARSE & VALIDATE BODY ─────────────────────────────────────────────────
     const body: ApproveBody = await req.json();
+
+    return await withTransactionLock(ctx, {
+      key:   `approving_stock_movement:${(body as any)?.movement_id ?? 'unknown'}`,
+      label: 'Approving Stock Movement',
+    }, async () => {
     const { movementId, action, approvedQty, supervisorNote } = body;
 
     if (!movementId || !action || !supervisorNote?.trim()) {
@@ -322,6 +314,7 @@ export async function handler(req: Request): Promise<Response> {
       JSON.stringify({ success: true, action, approvedQty: finalApproved }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
+    });
   } catch (err: any) {
     console.error('[approve-movement] Error:', err);
     return new Response(JSON.stringify({ error: err.message || 'Internal server error' }), {

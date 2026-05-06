@@ -13,6 +13,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
+import { requireActiveSession, withTransactionLock } from '../_shared/session.ts';
 import { calculatePalletImpactInternal } from '../_shared/palletImpact.ts';
 
 // ── Warehouse code → LocationCode mapping (mirrors DB_CODE_MAP in StockMovement.tsx) ──
@@ -50,33 +51,23 @@ export async function handler(req: Request): Promise<Response> {
 
   try {
     // ── AUTH ──────────────────────────────────────────────────────────────────
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-      return new Response(JSON.stringify({ error: 'Missing authorization header' }), {
-        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+    const session = await requireActiveSession(req);
+    if (!session.ok) return session.response;
+    const ctx = session.ctx;
+    const supabaseClient = ctx.db;
+    const user = { id: ctx.userId };
+    const userId = ctx.userId;
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-
-    // User client — used only to validate the JWT and extract userId
-    const userClient = createClient(supabaseUrl, Deno.env.get('PUBLISHABLE_KEY')!, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const { data: { user }, error: authError } = await userClient.auth.getUser(authHeader.replace('Bearer ', ''));
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-    const userId = user.id;
-
-    // Service role client — bypasses RLS for all DB writes
-    const db = createClient(supabaseUrl, serviceRoleKey);
+    // Service role client — bypasses RLS for all DB writes (already provided by ctx).
+    const db = ctx.db;
 
     // ── PARSE & VALIDATE BODY ─────────────────────────────────────────────────
     const body: SubmitRequestBody = await req.json();
+
+    return await withTransactionLock(ctx, {
+      key:   `submitting_stock_movement:${ctx.sessionId}`,
+      label: 'Submitting Stock Movement',
+    }, async () => {
     const {
       itemCode, movementType, fromLocation, toLocation,
       stockType, reasonCode, note, routeLabel, innerBoxQty,
@@ -236,6 +227,7 @@ export async function handler(req: Request): Promise<Response> {
       JSON.stringify({ movementNumber: movNum, headerId: header.id }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
+    });
   } catch (err: any) {
     console.error('[submit-movement-request] Error:', err);
     return new Response(JSON.stringify({ error: err.message || 'Internal server error' }), {

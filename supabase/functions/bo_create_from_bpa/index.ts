@@ -13,15 +13,12 @@
  * OUTPUT:
  *   { success, blanket_order_id, line_configs_created, line_configs_existing }
  */
-import { authenticateRequest } from '../_shared/auth.ts';
-import { jsonResponse, errorResponse, unauthorized, withErrorHandler } from '../_shared/errors.ts';
+import { withMutationGuard } from '../_shared/session.ts';
+import { jsonResponse, errorResponse, withErrorHandler } from '../_shared/errors.ts';
 import { parseBody, validate } from '../_shared/schemas.ts';
 
-export const handler = withErrorHandler(async (req) => {
+export const handler = withErrorHandler((req) => withMutationGuard(req, { label: 'Creating Blanket Order from BPA' }, async (ctx) => {
     const origin = req.headers.get('origin') ?? undefined;
-    const ctx = await authenticateRequest(req);
-    if (!ctx) return unauthorized(origin);
-
     const body = await parseBody(req);
     const v = validate(body, { agreement_id: 'uuid' });
     if (!v.ok) return errorResponse('VALIDATION_FAILED', v.error, { origin });
@@ -122,6 +119,6 @@ export const handler = withErrorHandler(async (req) => {
         line_configs_created:    inserted,
         line_configs_existing:   existingPns.size,
     }, { origin });
-});
+}));
 
 if (import.meta.main) Deno.serve(handler);

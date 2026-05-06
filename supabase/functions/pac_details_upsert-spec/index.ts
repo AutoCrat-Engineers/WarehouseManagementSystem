@@ -23,8 +23,8 @@
  *
  * No RPC is used — pure direct table operations via the service-role client.
  */
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.47.10';
 import { corsHeaders } from '../_shared/cors.ts';
+import { requireActiveSession, withTransactionLock } from '../_shared/session.ts';
 
 // Fields the client submits (all numeric; stored server-side verbatim).
 interface SpecFormData {
@@ -54,24 +54,11 @@ export async function handler(req: Request): Promise<Response> {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
-    // ── AUTH ─────────────────────────────────────────────────────────
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) return json({ error: 'Missing authorization header' }, 401);
+    const session = await requireActiveSession(req);
+    if (!session.ok) return session.response;
+    const ctx = session.ctx;
+    const db = ctx.db;
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-
-    const userClient = createClient(supabaseUrl, Deno.env.get('PUBLISHABLE_KEY')!, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const { data: { user }, error: authError } = await userClient.auth.getUser(
-      authHeader.replace('Bearer ', ''),
-    );
-    if (authError || !user) return json({ error: 'Unauthorized' }, 401);
-
-    const db = createClient(supabaseUrl, serviceRoleKey);
-
-    // ── BODY ─────────────────────────────────────────────────────────
     const body: UpsertSpecBody = await req.json().catch(() => ({} as any));
     const { spec_id, item_id, item_code, form_data } = body;
 
@@ -79,50 +66,48 @@ export async function handler(req: Request): Promise<Response> {
       return json({ error: 'form_data is required' }, 400);
     }
 
-    // ── UPDATE MODE ──────────────────────────────────────────────────
-    if (spec_id) {
-      const { error: updErr } = await db
-        .from('packing_specifications')
-        .update({ ...form_data, updated_at: new Date().toISOString() })
-        .eq('id', spec_id);
-      if (updErr) throw updErr;
-      return json({ success: true, mode: 'update', spec_id });
-    }
-
-    // ── CREATE MODE ──────────────────────────────────────────────────
-    if (!item_id) return json({ error: 'item_id is required for create' }, 400);
-    if (!item_code) return json({ error: 'item_code is required for create' }, 400);
-
-    // Resolve the item's `is_active` server-side so the client can't
-    // spoof it. Mirrors the prior client pattern (`selectedItem.is_active`)
-    // but read straight from the DB.
-    const { data: itemRow, error: itemErr } = await db
-      .from('items')
-      .select('is_active')
-      .eq('id', item_id)
-      .single();
-    if (itemErr || !itemRow) return json({ error: 'Item not found' }, 404);
-
-    const { error: insErr } = await db
-      .from('packing_specifications')
-      .insert({
-        item_id,
-        item_code,
-        is_active: (itemRow as any).is_active,
-        ...form_data,
-      });
-
-    if (insErr) {
-      // Surface the duplicate case with a stable code so the UI can keep
-      // its existing friendly toast without string-sniffing server errors.
-      const msg = insErr.message || '';
-      if (msg.includes('uq_packing_spec_item') || msg.toLowerCase().includes('duplicate')) {
-        return json({ error: 'A packing specification already exists for this item.', code: 'DUPLICATE_SPEC' }, 409);
+    return await withTransactionLock(ctx, {
+      key:   `upserting_packing_spec:${spec_id ?? item_id ?? 'new'}`,
+      label: 'Upserting Packing Specification',
+    }, async () => {
+      if (spec_id) {
+        const { error: updErr } = await db
+          .from('packing_specifications')
+          .update({ ...form_data, updated_at: new Date().toISOString() })
+          .eq('id', spec_id);
+        if (updErr) throw updErr;
+        return json({ success: true, mode: 'update', spec_id });
       }
-      throw insErr;
-    }
 
-    return json({ success: true, mode: 'create', item_id, item_code });
+      if (!item_id) return json({ error: 'item_id is required for create' }, 400);
+      if (!item_code) return json({ error: 'item_code is required for create' }, 400);
+
+      const { data: itemRow, error: itemErr } = await db
+        .from('items')
+        .select('is_active')
+        .eq('id', item_id)
+        .single();
+      if (itemErr || !itemRow) return json({ error: 'Item not found' }, 404);
+
+      const { error: insErr } = await db
+        .from('packing_specifications')
+        .insert({
+          item_id,
+          item_code,
+          is_active: (itemRow as any).is_active,
+          ...form_data,
+        });
+
+      if (insErr) {
+        const msg = insErr.message || '';
+        if (msg.includes('uq_packing_spec_item') || msg.toLowerCase().includes('duplicate')) {
+          return json({ error: 'A packing specification already exists for this item.', code: 'DUPLICATE_SPEC' }, 409);
+        }
+        throw insErr;
+      }
+
+      return json({ success: true, mode: 'create', item_id, item_code });
+    });
   } catch (err: any) {
     console.error('[pac_details_upsert-spec] Error:', err?.message || err);
     return json({ error: err?.message || 'Internal server error' }, 500);

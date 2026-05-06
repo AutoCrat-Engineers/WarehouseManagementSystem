@@ -35,6 +35,7 @@
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.47.10';
 import { corsHeaders } from '../_shared/cors.ts';
+import { requireActiveSession, withTransactionLock } from '../_shared/session.ts';
 
 interface DeleteSpecBody {
   spec_id: string;
@@ -45,25 +46,22 @@ export async function handler(req: Request): Promise<Response> {
 
   try {
     // ── AUTH ─────────────────────────────────────────────────────────
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) return json({ error: 'Missing authorization header' }, 401);
+    const session = await requireActiveSession(req);
+    if (!session.ok) return session.response;
+    const ctx = session.ctx;
+    const supabaseClient = ctx.db;
+    const user = { id: ctx.userId };
+    const userId = ctx.userId;
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-
-    const userClient = createClient(supabaseUrl, Deno.env.get('PUBLISHABLE_KEY')!, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const { data: { user }, error: authError } = await userClient.auth.getUser(
-      authHeader.replace('Bearer ', ''),
-    );
-    if (authError || !user) return json({ error: 'Unauthorized' }, 401);
-    const userId = user.id;
-
-    const db = createClient(supabaseUrl, serviceRoleKey);
+    const db = ctx.db;
 
     // ── BODY ─────────────────────────────────────────────────────────
     const body: DeleteSpecBody = await req.json().catch(() => ({} as any));
+
+    return await withTransactionLock(ctx, {
+      key:   `deleting_packing_spec:${ctx.sessionId}`,
+      label: 'Deleting Packing Spec',
+    }, async () => {
     const { spec_id: specId } = body;
     if (!specId) return json({ error: 'spec_id is required' }, 400);
 
@@ -103,6 +101,7 @@ export async function handler(req: Request): Promise<Response> {
       success: true,
       deleted_spec_id: specId,
       item_code: (specRow as any).item_code,
+    });
     });
   } catch (err: any) {
     console.error('[pac_details_delete-spec] Error:', err?.message || err);

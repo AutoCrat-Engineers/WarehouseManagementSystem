@@ -32,6 +32,7 @@
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.47.10';
 import { getCorsHeaders } from '../_shared/cors.ts';
+import { requireActiveSession, withTransactionLock } from '../_shared/session.ts';
 
 interface DeleteItemBody {
   item_id: string;
@@ -44,27 +45,23 @@ export async function handler(req: Request): Promise<Response> {
 
   try {
     // ── AUTH ─────────────────────────────────────────────────────────
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) return json(corsHeaders, { error: 'Missing authorization header' }, 401);
-
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-
-    const userClient = createClient(supabaseUrl, Deno.env.get('PUBLISHABLE_KEY')!, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const { data: { user }, error: authError } = await userClient.auth.getUser(
-      authHeader.replace('Bearer ', ''),
-    );
-    if (authError || !user) return json(corsHeaders, { error: 'Unauthorized' }, 401);
-
-    const userId = user.id;
+    const session = await requireActiveSession(req);
+    if (!session.ok) return session.response;
+    const ctx = session.ctx;
+    const supabaseClient = ctx.db;
+    const user = { id: ctx.userId };
+    const userId = ctx.userId;
     const userEmail = user.email || null;
 
-    const db = createClient(supabaseUrl, serviceRoleKey);
+    const db = ctx.db;
 
     // ── BODY ─────────────────────────────────────────────────────────
     const body: DeleteItemBody = await req.json().catch(() => ({} as any));
+
+    return await withTransactionLock(ctx, {
+      key:   `deactivating_item:${(body as any)?.item_id ?? 'unknown'}`,
+      label: 'Deactivating Item',
+    }, async () => {
     const { item_id: itemId, deletion_reason: deletionReason } = body;
     if (!itemId) return json(corsHeaders, { error: 'item_id is required' }, 400);
     if (!deletionReason || !String(deletionReason).trim()) {
@@ -140,6 +137,7 @@ export async function handler(req: Request): Promise<Response> {
       already_inactive: false,
       item_id: itemId,
       part_number: partNumber,
+    });
     });
   } catch (err: any) {
     console.error('[im_delete-item] Error:', err?.message || err);

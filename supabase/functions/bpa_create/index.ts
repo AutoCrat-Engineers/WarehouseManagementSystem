@@ -33,15 +33,12 @@
  * OUTPUT:
  *   { success: true, agreement_id, agreement_number, revision: 0, parts_created }
  */
-import { authenticateRequest } from '../_shared/auth.ts';
-import { jsonResponse, errorResponse, unauthorized, withErrorHandler, mapPgError } from '../_shared/errors.ts';
+import { withMutationGuard } from '../_shared/session.ts';
+import { jsonResponse, errorResponse, withErrorHandler, mapPgError } from '../_shared/errors.ts';
 import { parseBody, validate } from '../_shared/schemas.ts';
 
-export const handler = withErrorHandler(async (req) => {
+export const handler = withErrorHandler((req) => withMutationGuard(req, { label: 'Creating Customer Agreement (BPA)' }, async (ctx) => {
     const origin = req.headers.get('origin') ?? undefined;
-    const ctx = await authenticateRequest(req);
-    if (!ctx) return unauthorized(origin);
-
     const body = await parseBody(req);
 
     // ── Header validation ─────────────────────────────────────────────
@@ -190,6 +187,6 @@ export const handler = withErrorHandler(async (req) => {
         parts_created:    insertedParts?.length ?? 0,
         total_blanket_value: totalValue,
     }, { origin });
-});
+}));
 
 if (import.meta.main) Deno.serve(handler);

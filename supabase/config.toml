@@ -166,6 +166,8 @@ verify_jwt = false
 verify_jwt = false
 [functions.gr_mark_placed]
 verify_jwt = false
+[functions.gr_commit_line_and_place_now]
+verify_jwt = false
 [functions.pallet_get_back_chain]
 verify_jwt = false
 [functions.rack_load_storage]

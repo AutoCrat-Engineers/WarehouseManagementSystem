@@ -16,17 +16,15 @@
  *   bpa-documents/{agreement_id}/{timestamp}_{filename}
  *   bpa-documents/{agreement_id}/revisions/{revision_id}_{timestamp}_{filename}
  */
-import { authenticateRequest } from '../_shared/auth.ts';
-import { jsonResponse, errorResponse, unauthorized, withErrorHandler } from '../_shared/errors.ts';
+import { withMutationGuard } from '../_shared/session.ts';
+import { jsonResponse, errorResponse, withErrorHandler } from '../_shared/errors.ts';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 const ALLOWED_TYPES = ['application/pdf', 'image/png', 'image/jpeg'];
 const BUCKET = 'bpa-documents';
 
-export const handler = withErrorHandler(async (req) => {
+export const handler = withErrorHandler((req) => withMutationGuard(req, { label: 'Uploading BPA Document' }, async (ctx) => {
     const origin = req.headers.get('origin') ?? undefined;
-    const ctx = await authenticateRequest(req);
-    if (!ctx) return unauthorized(origin);
 
     const contentType = req.headers.get('content-type') ?? '';
     if (!contentType.startsWith('multipart/form-data')) {
@@ -110,6 +108,6 @@ export const handler = withErrorHandler(async (req) => {
         size_bytes:   file.size,
         content_type: file.type,
     }, { origin });
-});
+}));
 
 if (import.meta.main) Deno.serve(handler);

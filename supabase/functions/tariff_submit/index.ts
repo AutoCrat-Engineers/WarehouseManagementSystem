@@ -19,17 +19,14 @@
  *
  * Role gate: L3 / FINANCE / ADMIN only (finance signs off on tariff claims).
  */
-import { authenticateRequest } from '../_shared/auth.ts';
-import { jsonResponse, errorResponse, forbidden, withErrorHandler, mapPgError } from '../_shared/errors.ts';
+import { withMutationGuard } from '../_shared/session.ts';
+import { jsonResponse, errorResponse, withErrorHandler, mapPgError } from '../_shared/errors.ts';
 import { parseBody, validate } from '../_shared/schemas.ts';
 
 const ALLOWED_TARGETS = ['SUBMITTED', 'CLAIMED', 'PAID', 'CANCELLED'];
 
-export const handler = withErrorHandler(async (req) => {
+export const handler = withErrorHandler((req) => withMutationGuard(req, { label: 'Advancing Tariff Invoice', requireRoles: ['L3', 'FINANCE', 'ADMIN'] }, async (ctx) => {
     const origin = req.headers.get('origin') ?? undefined;
-    const ctx = await authenticateRequest(req, { requireRoles: ['L3', 'FINANCE', 'ADMIN'] });
-    if (!ctx) return forbidden(origin, 'Advancing a tariff invoice requires L3, FINANCE, or ADMIN role.');
-
     const body = await parseBody(req);
     const v = validate(body, {
         tariff_invoice_id:    'uuid',
@@ -91,6 +88,6 @@ export const handler = withErrorHandler(async (req) => {
         tariff:   data,
         prev_status: cur.status,
     }, { origin });
-});
+}));
 
 if (import.meta.main) Deno.serve(handler);

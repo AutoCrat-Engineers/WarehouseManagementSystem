@@ -12,6 +12,8 @@
  */
 
 import { getSupabaseClient } from '../../utils/supabase/client';
+import { fetchWithAuth } from '../../utils/supabase/auth';
+import { getEdgeFunctionUrl } from '../../utils/supabase/info';
 import type { UserRole, UserProfile } from './authService';
 
 const supabase = getSupabaseClient();
@@ -322,51 +324,39 @@ export async function updateUser(
 }
 
 /**
- * Update user role (L3 only)
+ * Update user role (L3 only) — routed through `admin_set_user_role`.
+ *
+ * Server-side enforces:
+ *   - Caller is L3 (JWT-bound).
+ *   - Cannot change your own role.
+ *   - Single-L3 invariant (cannot promote a 2nd user to L3 unless the
+ *     current L3 is demoted first).
+ *   - Demotion from L3 wipes any stale user_permissions rows.
+ *   - Active sessions for the target user are killed so the new role
+ *     takes effect cleanly on next login.
+ *
+ * On an `L3_ALREADY_EXISTS` 409 the modal can prompt the admin to demote
+ * the current L3 first.
  */
 export async function updateUserRole(
     userId: string,
     newRole: UserRole
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; code?: string; existing_l3?: { id: string; full_name: string; email: string } }> {
     try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-            return { success: false, error: 'Not authenticated' };
-        }
-
-        // Prevent self-demotion
-        if (userId === user.id && newRole !== 'L3') {
-            return { success: false, error: 'Cannot change your own role' };
-        }
-
-        // Get old value for audit
-        const { data: oldProfile } = await supabase
-            .from('profiles')
-            .select('role')
-            .eq('id', userId)
-            .single();
-
-        // Update role
-        const { error } = await supabase
-            .from('profiles')
-            .update({ role: newRole, updated_at: new Date().toISOString() })
-            .eq('id', userId);
-
-        if (error) {
-            console.error('Update role error:', error);
-            return { success: false, error: 'Failed to update role' };
-        }
-
-        // Log audit event
-        await supabase.from('audit_log').insert({
-            user_id: user.id,
-            action: 'UPDATE_ROLE',
-            target_type: 'user',
-            target_id: userId,
-            old_value: { role: oldProfile?.role },
-            new_value: { role: newRole },
+        const res = await fetchWithAuth(getEdgeFunctionUrl('admin_set_user_role'), {
+            method: 'POST',
+            body: JSON.stringify({ user_id: userId, new_role: newRole }),
         });
+        const result = await res.json().catch(() => ({} as any));
 
+        if (!res.ok || !result?.success) {
+            return {
+                success:     false,
+                error:       result?.error ?? 'Failed to update role',
+                code:        result?.code,
+                existing_l3: result?.existing_l3,
+            };
+        }
         return { success: true };
     } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';
@@ -377,6 +367,13 @@ export async function updateUserRole(
 
 /**
  * Update user status (activate/deactivate) (L3 only)
+ *
+ * Activation: simple direct update — clears lockout state so the user can
+ *             log in again.
+ * Deactivation: routed through the `admin_user_action` edge function so
+ *               that any active sessions are terminated server-side and
+ *               the victim's open tabs receive a Realtime kill event with
+ *               the "Account locked, contact admin" banner.
  */
 export async function updateUserStatus(
     userId: string,
@@ -388,26 +385,45 @@ export async function updateUserStatus(
             return { success: false, error: 'Not authenticated' };
         }
 
-        // Prevent self-deactivation
+        // Prevent self-deactivation.
         if (userId === user.id && !isActive) {
             return { success: false, error: 'Cannot deactivate your own account' };
         }
 
-        // Update status
+        if (!isActive) {
+            // ── DEACTIVATE ─ via admin_user_action edge function ───────
+            // This locks the profile, kills active sessions, and writes audit log.
+            const res = await fetchWithAuth(getEdgeFunctionUrl('admin_user_action'), {
+                method: 'POST',
+                body: JSON.stringify({ user_id: userId, action: 'deactivate' }),
+            });
+            const result = await res.json().catch(() => ({}));
+            if (!res.ok || !result?.success) {
+                return { success: false, error: result?.error ?? 'Failed to deactivate user' };
+            }
+            return { success: true };
+        }
+
+        // ── ACTIVATE ─ direct update; clears lockout so user can log in ──
         const { error } = await supabase
             .from('profiles')
-            .update({ is_active: isActive, updated_at: new Date().toISOString() })
+            .update({
+                is_active:          true,
+                locked_at:          null,
+                lock_reason:        null,
+                failed_login_count: 0,
+                updated_at:         new Date().toISOString(),
+            })
             .eq('id', userId);
 
         if (error) {
-            console.error('Update status error:', error);
-            return { success: false, error: 'Failed to update status' };
+            console.error('Activate user error:', error);
+            return { success: false, error: 'Failed to activate user' };
         }
 
-        // Log audit event
         await supabase.from('audit_log').insert({
             user_id: user.id,
-            action: isActive ? 'ACTIVATE_USER' : 'DEACTIVATE_USER',
+            action: 'ACTIVATE_USER',
             target_type: 'user',
             target_id: userId,
         });
@@ -458,34 +474,21 @@ export async function deleteUser(
             .eq('id', userId)
             .single();
 
-        // Soft delete: Mark as inactive and add deleted flag
-        const { error } = await supabase
-            .from('profiles')
-            .update({
-                is_active: false,
-                deleted_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
-            })
-            .eq('id', userId);
-
-        if (error) {
-            console.error('Delete user error:', error);
-            return { success: false, error: 'Failed to delete user' };
+        // Soft-delete via admin_user_action — locks the profile, kills any
+        // live sessions (so open tabs are kicked out via Realtime with the
+        // "Account locked, contact admin" banner), and writes audit log.
+        const res = await fetchWithAuth(getEdgeFunctionUrl('admin_user_action'), {
+            method: 'POST',
+            body: JSON.stringify({
+                user_id: userId,
+                action:  'delete',
+                reason:  targetUser ? `email=${targetUser.email}` : null,
+            }),
+        });
+        const result = await res.json().catch(() => ({}));
+        if (!res.ok || !result?.success) {
+            return { success: false, error: result?.error ?? 'Failed to delete user' };
         }
-
-        // Log audit event
-        try {
-            await supabase.from('audit_log').insert({
-                user_id: user.id,
-                action: 'DELETE_USER',
-                target_type: 'user',
-                target_id: userId,
-                old_value: { email: targetUser?.email, full_name: targetUser?.full_name },
-            });
-        } catch {
-            // Don't fail if audit fails
-        }
-
         return { success: true };
     } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';
@@ -495,69 +498,45 @@ export async function deleteUser(
 }
 
 /**
- * Reset user password (L3 only)
- * 
- * NOTE: Supabase doesn't allow resetting another user's password from client-side.
- * This would require a Supabase Edge Function with service_role key.
- * For now, we'll send a password reset email to the user.
+ * Reset user password (L3 only) — direct override.
+ *
+ * The L3 admin enters the new password in User Management.  This routes to
+ * the `admin_reset_password` edge function which:
+ *   - Verifies caller is L3 (server-side, JWT-bound).
+ *   - Validates password strength.
+ *   - Updates auth.users.encrypted_password via the admin SDK.
+ *   - Resets failed_login_count, clears any lockout, kills active sessions.
+ *   - Writes audit log (without password content).
+ *
+ * The new password is sent over HTTPS (TLS) to the edge function and never
+ * stored on the client.  Caller is responsible for clearing the form state
+ * after the response.
  */
 export async function resetUserPassword(
     userId: string,
-    _newPassword: string // Not used - keeping for API compatibility
-): Promise<{ success: boolean; error?: string }> {
+    newPassword: string,
+): Promise<{ success: boolean; error?: string; killedSessions?: number }> {
     try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) {
-            return { success: false, error: 'Not authenticated' };
+        if (!newPassword || typeof newPassword !== 'string') {
+            return { success: false, error: 'New password is required.' };
         }
 
-        // Verify caller is L3
-        const { data: callerProfile } = await supabase
-            .from('profiles')
-            .select('role')
-            .eq('id', session.user.id)
-            .single();
-
-        if (callerProfile?.role !== 'L3') {
-            return { success: false, error: 'Only L3 managers can reset passwords' };
-        }
-
-        // Get user's email
-        const { data: targetUser } = await supabase
-            .from('profiles')
-            .select('email')
-            .eq('id', userId)
-            .single();
-
-        if (!targetUser?.email) {
-            return { success: false, error: 'User not found' };
-        }
-
-        // Send password reset email
-        const { error } = await supabase.auth.resetPasswordForEmail(targetUser.email, {
-            redirectTo: `${window.location.origin}/reset-password`,
+        const res = await fetchWithAuth(getEdgeFunctionUrl('admin_reset_password'), {
+            method: 'POST',
+            body: JSON.stringify({ user_id: userId, new_password: newPassword }),
         });
 
-        if (error) {
-            console.error('Password reset error:', error);
-            return { success: false, error: error.message };
-        }
-
-        // Log audit event
-        try {
-            await supabase.from('audit_log').insert({
-                user_id: session.user.id,
-                action: 'PASSWORD_RESET_EMAIL_SENT',
-                target_type: 'user',
-                target_id: userId,
-            });
-        } catch {
-            // Don't fail if audit fails
+        const result = await res.json().catch(() => ({} as any));
+        if (!res.ok || !result?.success) {
+            return {
+                success: false,
+                error: result?.error ?? 'Failed to reset password.',
+            };
         }
 
         return {
             success: true,
-            error: `Password reset email sent to ${targetUser.email}. The user will receive an email with instructions.`
+            killedSessions: result.killed_sessions ?? 0,
         };
     } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';

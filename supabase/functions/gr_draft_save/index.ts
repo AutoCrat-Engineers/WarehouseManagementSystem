@@ -17,15 +17,12 @@
  * OUTPUT: 200 { draft: { id, version, updated_at } }
  *         409 CONCURRENT_MODIFICATION — another save raced this one
  */
-import { authenticateRequest } from '../_shared/auth.ts';
-import { jsonResponse, errorResponse, unauthorized, withErrorHandler } from '../_shared/errors.ts';
+import { withMutationGuard } from '../_shared/session.ts';
+import { jsonResponse, errorResponse, withErrorHandler } from '../_shared/errors.ts';
 import { parseBody, validate } from '../_shared/schemas.ts';
 
-export const handler = withErrorHandler(async (req) => {
+export const handler = withErrorHandler((req) => withMutationGuard(req, { label: 'Saving GR Draft' }, async (ctx) => {
     const origin = req.headers.get('origin') ?? undefined;
-    const ctx = await authenticateRequest(req);
-    if (!ctx) return unauthorized(origin);
-
     const body = await parseBody(req);
     const v = validate(body, {
         proforma_invoice_id: 'uuid',
@@ -104,6 +101,6 @@ export const handler = withErrorHandler(async (req) => {
     }
 
     return jsonResponse({ draft: updated }, { origin });
-});
+}));
 
 if (import.meta.main) Deno.serve(handler);

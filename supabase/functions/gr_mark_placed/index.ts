@@ -8,15 +8,12 @@
  * INPUT:  { gr_id: uuid, pallet_id: uuid, rack_location_code: string }
  * OUTPUT: { success: true, remaining: integer }
  */
-import { authenticateRequest } from '../_shared/auth.ts';
-import { jsonResponse, errorResponse, unauthorized, withErrorHandler, mapPgError } from '../_shared/errors.ts';
+import { withMutationGuard } from '../_shared/session.ts';
+import { jsonResponse, errorResponse, withErrorHandler, mapPgError } from '../_shared/errors.ts';
 import { parseBody, validate } from '../_shared/schemas.ts';
 
-export const handler = withErrorHandler(async (req) => {
+export const handler = withErrorHandler((req) => withMutationGuard(req, { label: 'Marking GR Pallet Placed' }, async (ctx) => {
     const origin = req.headers.get('origin') ?? undefined;
-    const ctx = await authenticateRequest(req);
-    if (!ctx) return unauthorized(origin);
-
     const body = await parseBody(req);
     const v = validate(body, {
         gr_id:              'uuid',
@@ -37,6 +34,6 @@ export const handler = withErrorHandler(async (req) => {
         return errorResponse(m.code, m.message, { origin });
     }
     return jsonResponse(data, { origin });
-});
+}));
 
 if (import.meta.main) Deno.serve(handler);
